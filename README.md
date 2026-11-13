@@ -39,7 +39,22 @@ Run a scenario by hand: `python3 tools/fake_run4.py sim tests/scenarios/02_conne
 app/build/host/run4ctl_host /tmp/s.txt /tmp/out` (screenshots land in `/tmp/out`). Frames as hex:
 `python3 tools/fake_run4.py hex`.
 
-The device build (`python3 base/tools/build.py app`) needs fm1-base's Docker/JieLi toolchain and has not been tried.
+## Device build (Apple silicon Mac with Docker) — not tried yet
+
+The JieLi toolchain is Linux x86-64 only; on macOS fm1-base's `tools/build.py` runs each tool in a
+`linux/amd64` container (`debian:bookworm-slim`).
+
+1. Docker Desktop → Settings → General → enable **"Use Rosetta for x86_64/amd64 emulation"**, and start Docker.
+2. Once, fetch the toolchain and the SDK (outside this repository; neither is committed):
+
+       sh base/tools/get_toolchain.sh             # → ~/.jieli/toolchain
+       sh base/bsp/tools/get_sdk.sh               # → ~/.jieli/ac79-sdk, checks file hashes
+       export JIELI_TOOLCHAIN=~/.jieli/toolchain AC79_SDK=~/.jieli/ac79-sdk
+
+   `get_sdk.sh` calls `sha256sum`; if the Mac lacks it, `brew install coreutils`.
+3. Build: `python3 base/tools/build.py app --no-ble` → `app/build/<name>-usb.fwsc` (phase 1 is USB only).
+4. Install over USB: the web installer, or `base/tools/fm1_install.py app/build/<name>-usb.fwsc`
+   (needs `pip install mido python-rtmidi` in a venv). The stock V15 can be restored; back up presets first.
 
 ## Licence
 
