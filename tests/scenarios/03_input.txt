@@ -1,0 +1,74 @@
+# Buttons, encoders, MASTER and the two local rules (SEL = SHIFT, OCT-/OCT+).
+@ACK@
+wait 100
+sysex_out
+press FX
+wait 40
+release FX
+wait 40
+expect_sysex @BTN0_1@
+expect_sysex @BTN0_0@
+sysex_out
+tap SAVE
+wait 40
+expect_sysex @BTN7_1@
+expect_sysex @BTN7_0@
+sysex_out
+# SHIFT held: OCT+ does not move the keyboard, but is still sent
+press SEL
+wait 40
+expect shift 1
+shot shift.png
+press OCT+
+wait 40
+release OCT+
+wait 40
+expect octave 0
+expect_sysex @BTN13_1@
+release SEL
+wait 40
+expect shift 0
+sysex_out
+# without SHIFT it does
+tap OCT+
+wait 40
+tap OCT+
+wait 40
+expect octave 2
+expect_sysex @BTN13_1@
+key 3 down
+wait 40
+tap OCT-
+wait 40
+key 3 up
+wait 40
+expect_out USB 90 50 64
+expect_out USB 80 50 00
+out
+# encoders: three separate detents (3 frames), then 5 at once (1 frame), then an overflow (63, then the rest)
+sysex_out
+turn K1 3
+wait 400
+expect_sysex @ENC3_+1@
+spin K2 5
+wait 100
+expect_sysex @ENC4_+5@
+spin PRESET -100
+wait 100
+expect_sysex @ENC2_-63@
+expect_sysex @ENC2_-37@
+sysex_out
+spin SELECT 1
+wait 50
+expect_sysex @ENC0_+1@
+# MASTER (the ACK already sent its first position)
+sysex_out
+master 1000
+wait 100
+master 2048
+wait 100
+expect_sysex @POT_8192@
+master 4096
+wait 100
+expect_sysex @POT_MAX@
+sysex_out

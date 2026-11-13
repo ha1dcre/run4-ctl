@@ -1,0 +1,33 @@
+# Other people's frames and damaged ones, and a cable replug.
+wait 200
+@ACK@
+wait 50
+expect frames_in 1
+@SR_FRAME@
+wait 50
+expect frames_in 1
+expect frames_bad 0
+@BAD_PAGE@
+wait 50
+expect frames_bad 1
+expect connected 1
+sysex F0 7D 52 34 42 F7
+wait 50
+expect frames_bad 2
+# a host that sends our own device->host commands is ignored
+@HELLO@
+wait 50
+expect connected 1
+# replug: back to "not connected", HELLO again
+usb unplug
+wait 100
+usb plug
+wait 1200
+expect connected 0
+sysex_out
+wait 1200
+expect_sysex @HELLO@
+shot replug.png
+@ACK@
+wait 100
+expect connected 1

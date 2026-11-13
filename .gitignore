@@ -1,0 +1,6 @@
+build/
+app/build/
+app/web/
+firmware.json
+.venv/
+__pycache__/

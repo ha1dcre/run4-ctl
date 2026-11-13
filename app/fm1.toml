@@ -1,0 +1,19 @@
+# RUN4 CTL build settings (base/tools/build.py)
+name = "RUN4CTL"
+id_prefix = "FM-1_74"            # package identity (own prefix, not fm1-base's template)
+usb_manufacturer = "RUN4 CTL"
+usb_product = "RUN4 CTL FM-1"
+include = ["../src"]             # the shared protocol codec (src/r4p.[ch]) and the UI
+words = "words.tsv"
+font_full = ["M"]                # lower case in the value font: the host formats the text (dB, ms, x)
+# no radio in phase 0: USB-MIDI only
+# firmware.json (docs/FIRMWARE-JSON.md in fm1-base)
+tagline = "a terminal controller for RUN4"
+repo = "https://github.com/ha1dcre/run4-ctl"
+licence = "GPL-3.0"
+credits = "Built on fm1-base and felucca-bsp (MPL-2.0). Not affiliated with M-VAVE."
+author = "ha1dcre"
+description = "Turns the M-VAVE FM-1 into a thin hardware controller for the iOS app RUN4: keys, buttons, encoders and MASTER go to the app over USB-MIDI, the app draws the pages and lights on the FM-1."
+tags = ["utility"]
+install = "https://github.com/ha1dcre/run4-ctl"
+site = "https://github.com/ha1dcre/run4-ctl"

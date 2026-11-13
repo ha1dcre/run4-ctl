@@ -1,0 +1,32 @@
+# Boot without a host: the "not connected" screen, HELLO every second, keys still play (channel 1).
+wait 300
+shot nc_boot.png
+expect connected 0
+expect_sysex F0 7D 52 34 01 01 00 01 00 F7
+sysex_out
+wait 2100
+shot nc_later.png
+expect frames_sent >2
+sysex_out
+out
+key 0 down
+wait 40
+key 0 up
+wait 40
+expect_out USB 90 35 64
+expect_out USB 80 35 00
+out
+tap OCT+
+wait 40
+expect octave 1
+key 0 down
+wait 40
+key 0 up
+wait 40
+expect_out USB 90 41 64
+out
+tap OCT-
+tap OCT-
+wait 40
+expect octave -1
+shot nc_oct.png

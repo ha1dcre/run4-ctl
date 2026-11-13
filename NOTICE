@@ -1,0 +1,19 @@
+RUN4 CTL
+Copyright (C) 2026 ha1dcre. Licensed under GPL-3.0 (see LICENSE).
+
+This project is not affiliated with, endorsed by or sponsored by M-VAVE. "FM-1" is the name of M-VAVE's product.
+
+It is built on, and links at build time with:
+
+  fm1-base  https://github.com/charlesvestal/fm1-base  (git submodule in base/)
+            Copyright (C) 2026 Charles Vestal and contributors; MPL-2.0 (see base/LICENSE, base/LICENSING.md,
+            base/CREDITS.md)
+  felucca-bsp  https://github.com/hugelton/felucca-bsp  (git submodule in base/bsp/, pulled in by fm1-base)
+            Copyright (C) Leo Kuroshita (Hugelton Instruments) and contributors; MPL-2.0
+
+Files from fm1-base and felucca-bsp stay under the Mozilla Public License 2.0, file by file; the source of those
+files is the submodules at the commits recorded in this repository. MPL-2.0 is compatible with the GPL (its section
+3.3). The shape of app/ follows fm1-base's template (base/template/) and the way charlesvestal/fm1-ctl is built on it.
+Fonts (Barlow, Terminus) are SIL OFL 1.1, from fm1-base's assets.
+
+RUN4 is the name of an iOS app by the same author; this repository contains no code from it.

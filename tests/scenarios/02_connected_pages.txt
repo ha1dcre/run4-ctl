@@ -1,0 +1,34 @@
+# A host answers: ACK, then pages, LEDs, status, values, toasts.
+wait 300
+expect connected 0
+@ACK@
+wait 100
+expect connected 1
+expect frames_in 1
+expect_sysex @SYNC@
+sysex_out
+shot connected_empty.png
+@TAPE@
+@LEDS@
+@STATUS@
+wait 100
+expect page_idx 1
+shot page_tape.png
+leds
+@VALUE@
+wait 100
+shot page_tape_value.png
+@TOAST@
+wait 100
+expect toast 1
+shot toast.png
+wait 1400
+expect toast 0
+shot toast_gone.png
+@TOLF@
+@STATUS2@
+wait 100
+expect page_idx 2
+shot page_tolf.png
+expect frames_in 8
+expect frames_bad 0
