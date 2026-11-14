@@ -747,11 +747,13 @@ static int32_t fx_drive(int32_t x)           /* a cubic soft clip; the amount is
     c = (v * v >> 23) * v >> 23;
     return (int32_t)((v - c / 3) * 3 / 2);       /* the rails land at 1.0 again */
 }
-/* one frame: mono in -> stereo out (Q23-ish); the wet parts are mixed here */
-static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
+/* one frame: mono in -> stereo out (Q23-ish); the wet parts are mixed here; *dry: the voices after the drive (the
+ * stems' dry part: out - dry is what the chorus, the delay and the reverb add) */
+static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
 {
     int32_t l, r, x = in, wl = 0, wr = 0;
     x = fx_drive(x);
+    *dry = x;
     l = r = x;
     if (fxv.chorus) {                          /* two taps, opposite LFO phase: a triangle sweeping 8..20 ms */
         uint32_t ph = fx_st.cph += 3u * 7000u;    /* ~0.8 Hz */
@@ -949,6 +951,9 @@ static uint32_t syn_midi_frame(uint32_t t24, uint32_t prev, uint32_t span, uint3
         return n - 1u;
     return (uint32_t)((uint64_t)(uint32_t)since * n / span);
 }
+/* USB stems (an app built with usb_audio_channels: app-stems/): each sub-block's dry voices (mono) and what the
+ * effects add (stereo), at the master's gain, before the limiter; frame: its first frame in the render; 0 = none */
+static void (*syn_stem_out)(uint32_t frame, const int32_t *dry, const int32_t *fxl, const int32_t *fxr, uint32_t n);
 /* the scope's tap (synth_ui.c draws it, after Felucca's HOME scope): every other output frame, mono, 16 bit, into a ring
  * the main loop copies; the render only stores (16 stores a 32-frame block) */
 #define SYN_SCOPE_N 512u
@@ -1020,12 +1025,20 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             syn_voices_peak = live;
         {
             int32_t gain = (int32_t)(master_q12 * (uint32_t)syn_clamp(syn_lkv(LK_LEVEL, syn.level), 0, 100) / 100u);
+            int32_t sd[FM6_N], sl[FM6_N], sr[FM6_N];
             for (i = 0; i < FM6_N; i++) {
-                int32_t l, r;
-                fx_run(mix[i], &l, &r);
+                int32_t l, r, x;
+                fx_run(mix[i], &l, &r, &x);
                 lr[2 * (b + i)] = syn_limit((int32_t)((int64_t)l * gain >> 12));
                 lr[2 * (b + i) + 1] = syn_limit((int32_t)((int64_t)r * gain >> 12));
+                if (syn_stem_out) {
+                    sd[i] = (int32_t)((int64_t)x * gain >> 12);
+                    sl[i] = (int32_t)((int64_t)(l - x) * gain >> 12);
+                    sr[i] = (int32_t)((int64_t)(r - x) * gain >> 12);
+                }
             }
+            if (syn_stem_out)
+                syn_stem_out(b, sd, sl, sr, FM6_N);
             {
                 uint32_t w = syn_scope_w;
                 for (i = 0; i < FM6_N; i += 2u)

@@ -1,0 +1,32 @@
+# The app-stems build (usb_audio_channels = 6): the USB audio input carries 1-2 the mix (fm1-base's tap), 3-4 the dry
+# voices, 5-6 the effects' return. SETUP > AUDIO says 6 STEMS.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+expect usb_ch 6
+# REVERB 60 (FX page K4)
+tap FX
+turn K4 40
+wait 50
+usbwav stems.wav
+key 12 down
+wait 400
+key 12 up
+wait 600
+usbwavstop
+expect stem_peak >300
+expect stem_fx_peak >30
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 60
+turn SELECT 2
+wait 60
+shot stems_audio.png
+tap HOME

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Host-simulator tests: builds the firmware app natively (base/tools/build.py --host) and runs tests/scenarios/*.txt.
+# Host-simulator tests: builds the firmware app natively (base/tools/build.py --host) and runs tests/scenarios/*.txt;
+# then the app-stems build (six USB audio channels) and tests/scenarios_stems/*.txt.
 # Each scenario is expanded by tools/fake_run4.py (@NAME@ -> sysex HEX), run by the simulator ("expect" lines fail the run),
 # and its screenshots are copied to tests/screens/.
 set -e
@@ -16,6 +17,15 @@ for s in tests/scenarios/*.txt; do
   python3 -I tools/fake_run4.py sim "$s" > build/sim/$n.script
   echo "== $n"
   if "$H" build/sim/$n.script build/sim > build/sim/$n.log 2>&1; then rc=0; else rc=$?; fi
+  cat build/sim/$n.log
+  if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
+done
+"$PY" base/tools/build.py app-stems --host >build/host_stems.log 2>&1 || { cat build/host_stems.log; exit 1; }
+for s in tests/scenarios_stems/*.txt; do
+  n=stems_$(basename "$s" .txt)
+  python3 -I tools/fake_run4.py sim "$s" > build/sim/$n.script
+  echo "== $n (app-stems)"
+  if app-stems/build/host/run4ctl-stems_host build/sim/$n.script build/sim > build/sim/$n.log 2>&1; then rc=0; else rc=$?; fi
   cat build/sim/$n.log
   if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
 done

@@ -74,6 +74,7 @@ static struct {
     uint32_t rend_ticks, rend_frames;    /* the render's time (host simulator: expect render_permille) */
     uint32_t overloads;                  /* app_overload calls (late renders) */
     uint32_t redraws;                    /* app_redraw calls (the mirror) */
+    int32_t stem_peak, stem_fx_peak;     /* the USB stems' (app-stems): the largest dry and effects sample sent */
     uint8_t shed_told, shed_shown;       /* the overload guard's toast said; the step the AUDIO page shows */
 } ctl;
 #define bk_hold sy_hold_store            /* a USB backup streams: nothing is saved meanwhile (synth_ui.c, app_backup_hold) */
@@ -1596,6 +1597,29 @@ static void local_out_apply(void)
     }
 }
 static uint32_t shed_level(void) { return syn_shed; }
+#if PLAT_USB_CH >= 4
+/* USB stems (the app-stems build: usb_audio_channels = 6): 1-2 the mix as ever (fm1-base's tap), 3-4 the dry voices
+ * (mono on both), 5-6 the effects' return (chorus, delay, reverb: the mix minus the dry), at the master's level,
+ * before the limiter. Written into fm1-base's ring while the render runs (plat_usb_ch); nothing when no computer
+ * records. Audio context */
+static int16_t stem16(int32_t v) { v = (v + 128) >> 8; return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
+static void stem_out(uint32_t frame, const int32_t *dry, const int32_t *fxl, const int32_t *fxr, uint32_t n)
+{
+    uint32_t i = 0, run;
+    while (i < n) {
+        int16_t *p = plat_usb_ch(frame + i, &run);
+        if (!p || !run)
+            return;
+        for (; run && i < n; run--, i++, p += PLAT_USB_CH_STRIDE) {
+            p[0] = p[1] = stem16(dry[i]);
+            p[2] = stem16(fxl[i]);
+            p[3] = stem16(fxr[i]);
+            if (dry[i] > ctl.stem_peak) ctl.stem_peak = dry[i];
+            if (fxl[i] > ctl.stem_fx_peak) ctl.stem_fx_peak = fxl[i];
+        }
+    }
+}
+#endif
 /* the overload guard (synth.c syn_shed_*): fm1-base calls this from the audio interrupt when a render took over 90 %
  * of its time; the render sheds a step at its next block. Says so once (a toast) until it is all back */
 void app_overload(void)
@@ -1761,6 +1785,9 @@ void app_init(void)
     syn_host_defaults(&syn_alt);                       /* 1.3: the host voice's settings, parked */
     ml_init();
     sy_hold_store = 0;
+#if PLAT_USB_CH >= 4
+    syn_stem_out = stem_out;                           /* (the app-stems build) */
+#endif
     local_off = 0;
     if (mode == MODE_RUN4)
         syn_swap();                                    /* RUN4 mode: they are the ones that sound */
@@ -1985,6 +2012,9 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "shed")) *got = syn_shed;
     else if (!strcmp(what, "overloads")) *got = (int)ctl.overloads;
     else if (!strcmp(what, "redraws")) *got = (int)ctl.redraws;
+    else if (!strcmp(what, "usb_ch")) *got = FM1B_UAC_CH;
+    else if (!strcmp(what, "stem_peak")) { *got = ctl.stem_peak >> 8; ctl.stem_peak = 0; }      /* 16-bit scale */
+    else if (!strcmp(what, "stem_fx_peak")) { *got = ctl.stem_fx_peak >> 8; ctl.stem_fx_peak = 0; }
     else if (!strcmp(what, "user_bank")) *got = syn_bank[0].used;
     else if (!strcmp(what, "syn_bright")) *got = syn.bright;
     else if (!strcmp(what, "syn_rev")) *got = syn.rev_mix;
