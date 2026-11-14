@@ -4,7 +4,8 @@ RUN4 CTL is a firmware for the M-VAVE FM-1 with two modes:
 
 * **RUN4 mode** turns the FM-1 into a hardware controller for the iOS app RUN4: the 27 keys, 14 buttons, 7 encoders
   and the MASTER knob are sent to the app over USB-MIDI or Bluetooth MIDI, and the app draws its pages and lights on
-  the FM-1's 240 x 240 screen and LEDs. The FM-1 makes no sound in this mode.
+  the FM-1's 240 x 240 screen and LEDs. The FM-1 makes no sound in this mode, unless RUN4 plays it as an instrument
+  (the **FM-1 engine** of a RUN4 track, see "The FM-1 as RUN4's instrument").
 * **Synth mode** turns the FM-1 into a standalone six-operator FM synthesizer with effects, an arpeggiator and a
   step sequencer (16 patterns of up to 64 steps, chords, ties, live and step recording). It also plays from MIDI in, so it works as a sound module for RUN4, TOLF or any MIDI source.
 
@@ -21,8 +22,25 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
   page dots, tempo, bar and beat, transport and octave. With a RUN4 that speaks protocol 1.2 the header shows where you
   are (e.g. TAPE > WEAR), the parameter in focus has a frame and its position (5/12) is in the footer; turning K1 to K4
   shows that parameter large for a moment (also when you change it in the app), then the four tiles come back.
+* **Tape view.** On RUN4's Tape pages (with a RUN4 that speaks protocol 1.3) the screen shows the focused loop: its
+  waveform with the loop region lit, the playhead (red while recording) and five level meters (T1 to T4 and the master,
+  the focused track's in amber, a red cap when one clipped); the page's four values sit in a row under it, as in Synth
+  mode. Turning a knob still shows its value large for a moment.
 * **LEDs** show what RUN4 tells them to. Without the app, a held key lights itself.
 * Keys still play without the app. If the app is not there, the screen says NOT CONNECTED and the notes go on.
+
+### The FM-1 as RUN4's instrument
+
+A RUN4 track can use the **FM-1 engine**: the track's notes (its sequencer, chords, arpeggiator, what you play) are
+played by the FM-1's own FM synth while the FM-1 is in RUN4 mode, and come out of the FM-1's headphone / line output
+and over the USB cable into RUN4. RUN4 chooses the voice (one of the FM-1's 8 factory or 32 user voices, or one of its
+own) and a few live settings (algorithm, feedback, brightness, envelope speed, volume, vibrato, effects). Key pressure
+makes the sound brighter. MASTER is the FM-1's volume for it, as for the iPad's audio playing through the FM-1.
+
+The FM-1's keys keep going to RUN4 as before; RUN4 sends the track's notes back, so what you hear is what the track
+plays. Switching to Synth mode (SEL + HOME) silences RUN4's FM-1 track and Synth mode plays its own sound; back in
+RUN4 mode the track's sound returns unchanged. The settings live in RUN4: after switching the FM-1 off and on, or
+replugging it, RUN4 sends them again.
 
 ## Synth mode
 
@@ -140,7 +158,8 @@ and takes over the screen again as soon as you are back in RUN4 mode. While RUN4
 * **SEL + REC** and **SEL + PLAY** are RUN4's REC and PLAY (the screen says RUN4 REC / RUN4 PLAY); REC and PLAY alone
   stay the synth's. So you can arm a RUN4 track and record the synth without touching the app.
 * The FM-1's sound reaches RUN4 over the USB cable: the firmware is a USB audio device (its output, recordable) and
-  plays the computer's audio, as fm1-base's default. Choose the FM-1 as the input in RUN4.
+  plays the computer's audio, as fm1-base's default. Choose the FM-1 as the input in RUN4. What RUN4 receives is the
+  FM-1's own sound only; the iPad's audio is mixed in for the FM-1's headphones and line output.
 * If RUN4 sends its MIDI clock to the FM-1, the sequencer and the arpeggiator follow it (clock AUTO).
 
 ## Bluetooth
@@ -193,7 +212,7 @@ or PRESETS move, HOME or PLAY pick, any other page button or SAVE cancels.
 ## SETUP page
 
 This page lives in the firmware, not in RUN4. Hold **SEL** and press **GLO** to open it (it works with or without the
-app). K1 to K4 change the four tiles, any page button leaves it. Nothing you do on it is sent to RUN4 and the settings
+app). K1 to K4 change the four tiles, any page button leaves it, SELECT turns to its second sub-page (VOICE BACKUP). Nothing you do on it is sent to RUN4 and the settings
 are kept when you power the FM-1 off.
 
 | Tile | Values |
@@ -202,6 +221,19 @@ are kept when you power the FM-1 off.
 | K2 AFTERTOUCH | OFF (default), POLY, CHANNEL |
 | K3 LED LEVEL | OFF, LOW, HIGH (the dim LEDs) |
 | K4 KEY CHANNEL | MIDI channel 1 to 16 (default 1) |
+
+Turn **SELECT** (or PRESETS) for the second sub-page, **VOICE BACKUP**: RUN4 keeps a copy of the 32 user voices of
+Synth mode (U01 to U32). It needs a RUN4 that speaks protocol 1.3, connected; it works in both modes.
+
+| Tile | What it does |
+| --- | --- |
+| K1 BACKUP | turn it, then press **SAVE**: the 32 user voices go to RUN4, which keeps the last backup. The screen says BACKUP SENT |
+| K2 RESTORE | turn it: the FM-1 loads RUN4's last backup and checks it; then **SAVE** writes it over the 32 user voices (RESTORED n VOICES). Leaving the page first changes nothing |
+| K3 USER VOICES | how many user voices are stored |
+
+Messages: **NO HOST** (RUN4 is not connected, too old, or did not answer), **NO BACKUP** (RUN4 has none yet), **BAD
+CHECKSUM** (the backup arrived damaged: nothing is written). The backup holds the voices only, not the settings or the
+sequencer's patterns.
 
 Aftertouch is measured with the keys' own sensors. The velocity and pressure curves were set up without a device; if a
 setting feels too soft or too hard, pick another curve.
