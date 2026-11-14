@@ -18,7 +18,8 @@ typedef struct {
 
 /* where a parameter lives. SRC_CUR: a byte of the patch (offset in `off`, plus the operator's block); SRC_SYN: a field of syn_set_t */
 enum { S_NONE, S_OPB, S_PAT, S_BRIGHT, S_ENVSPD, S_LEVEL, S_DRIVE, S_CHORUS, S_DLYMIX, S_DLYDIV, S_DLYFB, S_REVMIX, S_REVTYPE,
-       S_REVSIZE, S_TRANSPOSE, S_TUNE, S_CHAN, S_BEND, S_VELSENS, S_ARPON, S_ARPMODE, S_ARPRATE, S_ARPOCT, S_ARPGATE };
+       S_REVSIZE, S_TRANSPOSE, S_TUNE, S_CHAN, S_BEND, S_VELSENS, S_ARPON, S_ARPMODE, S_ARPRATE, S_ARPOCT, S_ARPGATE,
+       S_MUTAMT, S_SCALE, S_ROOT, S_KEYMODE, S_MIDISCALE, S_CHORD, S_INV, S_SPREAD };
 
 static const char *const N_WAVE[] = {"TRIANGLE", "SAW DOWN", "SAW UP", "SQUARE", "SINE", "S&H"};
 static const char *const N_ARP[] = {"UP", "DOWN", "UP-DOWN", "RANDOM", "PLAYED"};
@@ -27,6 +28,15 @@ static const char *const N_DIV[] = {"1/8", "DOT 1/8", "1/4", "DOT 1/4", "1/2", "
 static const char *const N_REV[] = {"ROOM", "SPRING", "HALL"};
 static const char *const N_MODE[] = {"RATIO", "FIXED"};
 static const char *const N_OFF[] = {"OFF", "ON"};
+static const char *const N_MUT[] = {"SMALL", "MEDIUM", "WILD"};
+static const char *const N_SCALE[] = {"OFF", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYD",
+                                      "HARM MIN", "MAJ PENT", "MIN PENT", "BLUES"};      /* (OFF: chromatic) */
+static const char *const N_ROOT[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+static const char *const N_KEYMODE[] = {"SNAP", "IN KEY"};
+static const char *const N_MIDISC[] = {"AS IS", "SCALE"};
+static const char *const N_CHORD[] = {"OFF", "MAJ", "MIN", "7", "MAJ7", "MIN7", "SUS2", "SUS4", "POWER", "SCALE 3", "SCALE 4"};
+static const char *const N_INV[] = {"ROOT", "1ST", "2ND", "3RD"};
+static const char *const N_SPREAD[] = {"CLOSE", "OPEN", "WIDE"};
 
 #define P(nm, kd, fm, lo, hi, sg, sr) {nm, kd, fm, lo, hi, sg, sr, 0, 0}
 #define PN(nm, fm, lo, hi, sr, arr) {nm, R4P_KIND_ENUM, fm, lo, hi, 0, sr, arr, (uint8_t)(sizeof arr / sizeof arr[0])}
@@ -58,15 +68,19 @@ static const sp_page_t SP[SP_N] = {
                     {PN("DELAY TIME", F_NAMES, 0, 5, S_DLYDIV, N_DIV), P("DELAY FDBK", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_DLYFB),
                      PN("REVERB TYPE", F_NAMES, 0, 2, S_REVTYPE, N_REV), P("REVERB SIZE", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_REVSIZE)}},
      {{0}, {0}, {0}}},
-    {"GLOBAL", 2, {{P("TRANSPOSE", R4P_KIND_BI, F_SEMI, -24, 24, 1, S_TRANSPOSE), P("TUNE", R4P_KIND_BI, F_CENTS, -50, 50, 1, S_TUNE),
+    {"GLOBAL", 3, {{P("TRANSPOSE", R4P_KIND_BI, F_SEMI, -24, 24, 1, S_TRANSPOSE), P("TUNE", R4P_KIND_BI, F_CENTS, -50, 50, 1, S_TUNE),
                     P("MIDI CH", R4P_KIND_UNI, F_CHAN, 0, 16, 0, S_CHAN), P("BEND RANGE", R4P_KIND_UNI, F_BEND, 0, 12, 0, S_BEND)},
-                   {P("VELOCITY", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_VELSENS), EMPTYP, EMPTYP, EMPTYP}},
+                   {P("VELOCITY", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_VELSENS), PN("MUTATE", F_NAMES, 0, 2, S_MUTAMT, N_MUT),
+                    EMPTYP, EMPTYP},
+                   {PN("SCALE", F_NAMES, 0, 10, S_SCALE, N_SCALE), PN("ROOT", F_NAMES, 0, 11, S_ROOT, N_ROOT),
+                    PN("KEY MODE", F_NAMES, 0, 1, S_KEYMODE, N_KEYMODE), PN("MIDI IN", F_NAMES, 0, 1, S_MIDISCALE, N_MIDISC)}},
      {{0}, {0}, {0}}},
     {"ARP", 2, {{PN("ARP", F_NAMES, 0, 1, S_ARPON, N_OFF), PN("MODE", F_NAMES, 0, 4, S_ARPMODE, N_ARP),
                  PN("RATE", F_NAMES, 0, 2, S_ARPRATE, N_RATE), P("OCTAVES", R4P_KIND_UNI, F_NUM, 1, 3, 0, S_ARPOCT)},
-                {P("GATE", R4P_KIND_UNI, F_PCT, 10, 100, 0, S_ARPGATE), EMPTYP, EMPTYP, EMPTYP}},
+                {P("GATE", R4P_KIND_UNI, F_PCT, 10, 100, 0, S_ARPGATE), PN("CHORD", F_NAMES, 0, 10, S_CHORD, N_CHORD),
+                 PN("INVERSION", F_NAMES, 0, 3, S_INV, N_INV), PN("SPREAD", F_NAMES, 0, 2, S_SPREAD, N_SPREAD)}},
      {{0}, {0}, {0}}},
-    {"SEQUENCER", 3, {{EMPTYP, EMPTYP, EMPTYP, EMPTYP}}, {{0}, {0}, {0}}},     /* its own pages: sq_build (below) */
+    {"SEQUENCER", 4, {{EMPTYP, EMPTYP, EMPTYP, EMPTYP}}, {{0}, {0}, {0}}},     /* its own pages: sq_build (below) */
 };
 
 #define SY_AR 127                            /* Synth mode's one accent, on the wire scale (x2 on screen): warm amber */
@@ -74,6 +88,9 @@ static const sp_page_t SP[SP_N] = {
 #define SY_AB 32
 static uint8_t sy_touch_k;                   /* the knob turned last + 1: its tile in the accent for 2 s (the look, below) */
 static uint32_t sy_touch_at;
+static uint8_t sy_lockview;                  /* the tiles show a held step's locks: sy_lockhot = the locked ones (accent) */
+static uint8_t sy_lockhot;
+static int32_t sy_base[4] = {-1, -1, -1, -1};  /* a locked tile's base value (value14, a tick on its bar), -1 = none */
 static struct {
     uint8_t page, sub, op;                   /* the page shown, its sub-page, the operator the EDIT / ENV pages edit */
     uint8_t dirty_set;                       /* the settings changed since saved */
@@ -111,6 +128,14 @@ static uint8_t *sp_ptr(const sp_param_t *q, uint32_t off, int *is_signed)
     case S_ARPRATE: return &syn.arp_rate;
     case S_ARPOCT: return &syn.arp_oct;
     case S_ARPGATE: return &syn.arp_gate;
+    case S_MUTAMT: return &syn.mut_amt;
+    case S_SCALE: return &syn.scale;
+    case S_ROOT: return &syn.root;
+    case S_KEYMODE: return &syn.keymode;
+    case S_MIDISCALE: return &syn.midi_scale;
+    case S_CHORD: return &syn.chord;
+    case S_INV: return &syn.inv;
+    case S_SPREAD: return &syn.spread;
     default: return 0;
     }
 }
@@ -218,6 +243,7 @@ static void sp_build(void)
         syn_patch_label(g->track);
     }
     g->r = SY_AR; g->g = SY_AG; g->b = SY_AB;          /* one accent for all of Synth mode (the footer's dots, toasts) */
+    sy_lockview = 0;
     g->page_count = pg->nsub;
     g->page_idx = sui.sub;
     for (k = 0; k < 4u; k++) {
@@ -267,6 +293,7 @@ static void sp_page_press(uint32_t page)
     else {
         sui.page = (uint8_t)page;
         sui.sub = 0;
+        sq_ed.lview = 0;                      /* (a held step's lock page: the step's own again) */
     }
     sp_build();
 }
@@ -314,17 +341,72 @@ static void syn_load_all(void)
     }
     for (b = 0; b < SQ_OBJS; b++) {
         static sq_obj_t ob;
-        if (plat_store_load(OBJ_SEQ_A + b, &ob, sizeof ob) == (int)sizeof ob)
-            sq_obj_take(b, &ob);
+        int n = plat_store_load(OBJ_SEQ_A + b, &ob, sizeof ob);
+        if (n > 0)
+            sq_obj_take(b, &ob, (uint32_t)n);        /* (a version 1 object: the patterns, no locks, no chain) */
     }
     sq_dirty = 0;
-    if (plat_store_load(OBJ_SYNSET, &t, sizeof t) == (int)sizeof t && t.ver == SYN_SET_VER && t.patch_idx < SYN_PATCHES &&
+    {
+        int n = plat_store_load(OBJ_SYNSET, &t, sizeof t);
+        if (n == (int)SYN_SET_V2_SIZE && t.ver == 2u) {   /* stored before the keys and the song: their defaults */
+            syn_set_fix(&t, 1);
+            n = (int)sizeof t;
+        }
+        if (n != (int)sizeof t)
+            t.ver = 0;
+    }
+    if (t.ver == SYN_SET_VER && t.patch_idx < SYN_PATCHES &&
         t.seq_pat < SQ_PATS && t.seq_clock < SQC_N && t.seq_trn >= -24 && t.seq_trn <= 24 && t.arp_mode < ARP_N &&
         t.rev_type < REV_N) {
         syn = t;
+        syn_set_fix(&syn, 0);
         fp_sanitize(syn.cur);
         syn_dirty = 1;
     }
+}
+/* MUTATE (SEL + EDIT): a variation of the sounding voice by GLO's MUTATE amount (synth.c syn_mutate); SEL + SAVE swaps
+ * back to the voice before it and again to the variation (one level). Nothing is stored into a voice slot until SAVE;
+ * the sounding voice is kept like any edit. */
+static struct { uint8_t bak[FP_SIZE + 1], mut[FP_SIZE + 1]; uint8_t valid, undone; uint32_t rng; } smu = {{0}, {0}, 0, 0, 0x9E3779B9u};
+static void sp_mutate(void)
+{
+    static const char *const AMT[3] = {"SMALL", "MEDIUM", "WILD"};
+    char t[32], u[4];
+    uint32_t chg, k, tries = 0;
+    memcpy(smu.bak, syn.cur, sizeof smu.bak);
+    smu.rng ^= plat_ticks24();
+    do
+        chg = syn_mutate(syn.cur, syn.mut_amt, &smu.rng);
+    while (!chg && ++tries < 8u);
+    memcpy(smu.mut, syn.cur, sizeof smu.mut);
+    smu.valid = 1;
+    smu.undone = 0;
+    strcpy(t, "MUTATE");
+    if (chg & 0x40u) u_cat(t, " ALG");
+    if (chg & 0x3Fu) {
+        u_cat(t, " OP");
+        for (k = 0; k < 6u; k++)
+            if ((chg >> k) & 1u) { u[0] = (char)('1' + k); u[1] = 0; u_cat(t, u); }
+    }
+    if (chg & 0x80u) u_cat(t, " LFO");
+    if (strlen(t) > 24u) strcpy(t, AMT[syn.mut_amt % 3u]), u_cat(t, " MUTATE");
+    sp_touch();
+    sui.edit_at = plat_ms();
+    sp_toast(t);
+    sp_build();
+}
+static void sp_mutate_undo(void)
+{
+    if (!smu.valid) {
+        sp_toast("NOTHING TO UNDO");
+        return;
+    }
+    smu.undone ^= 1u;
+    memcpy(syn.cur, smu.undone ? smu.bak : smu.mut, sizeof smu.bak);
+    sp_touch();
+    sui.edit_at = plat_ms();
+    sp_toast(smu.undone ? "UNDO MUTATE" : "REDO MUTATE");
+    sp_build();
 }
 static void sp_patch_step(int d)              /* PRESETS: the next patch that has a voice */
 {
@@ -337,6 +419,7 @@ static void sp_patch_step(int d)              /* PRESETS: the next patch that ha
     }
     syn_event(3, 0, 0, 0);
     syn_load_patch((uint32_t)i);
+    smu.valid = 0;                            /* (another voice: nothing of the last mutate to undo) */
     syn_patch_label(t);
     sp_toast(t);
     sp_build();
@@ -372,7 +455,16 @@ static struct {
     uint8_t clear;                           /* CLEAR armed (SAVE clears) */
     uint32_t arm_at;
     uint8_t drawn_step, drawn_pat, drawn_run, drawn_view;   /* what the grid shows: redrawn when the play moves */
+    uint8_t drawn_ci, drawn_rep;             /* ... and the song's entry */
+    uint8_t chain_cur;                       /* the SONG sub-page's entry (0..len; len = a new one) */
+    uint8_t del_arm;                         /* SONG: DELETE armed (SAVE deletes the entry) */
 } sqi;
+/* a held step's lock pages: the page button pressed while the step is held picks one (synth.c LK_*; 255 = none) */
+static const struct { uint8_t page, sub, id[4]; const char *name; } LKV[4] = {
+    {SP_HOME, 0, {LK_BRIGHT, LK_FB, LK_ENVSPD, LK_LEVEL}, "SYNTH"},
+    {SP_LFO, 0, {LK_LFOSPD, LK_LFODLY, LK_PMD, LK_AMD}, "LFO"},
+    {SP_FX, 0, {LK_DRIVE, LK_CHORUS, LK_DLYMIX, LK_REVMIX}, "FX"},
+    {SP_FX, 1, {LK_DLYTIME, LK_DLYFB, 255, LK_REVSIZE}, "FX 2"}};
 static const char *const N_SQRATE[SQR_N] = {"1/8", "1/16", "1/16T", "1/32"};
 static const char *const N_CLOCK[SQC_N] = {"AUTO", "OUT", "INT"};
 
@@ -388,6 +480,7 @@ static void sq_disarm(void)
 {
     sqi.copy_to = 0;
     sqi.clear = 0;
+    sqi.del_arm = 0;
 }
 static void sq_note_text(const sq_step_t *s, char *t)     /* "C4", "C4 +2" (a chord of three), "TIE", "--" */
 {
@@ -434,6 +527,83 @@ static void sq_step_tiles(const sq_step_t *s, const sq_pat_t *pt, int note_first
     sq_num(t, sq_step_get(s, 3), "%");
     sq_tile(3, "CHANCE", R4P_KIND_UNI, sq_uni(sq_step_get(s, 3), 0, 100), t);
 }
+/* the held step's locks on lock page sq_ed.lview: each tile the locked value (in the accent, its base value a tick on
+ * the bar) or the base value */
+static void sq_lock_tiles(uint32_t pat)
+{
+    uint32_t k, lv = (sq_ed.lview - 1u) % 4u;
+    sy_lockview = 1;
+    sy_lockhot = 0;
+    for (k = 0; k < 4u; k++) {
+        const sp_param_t *q = &SP[LKV[lv].page].p[LKV[lv].sub][k];
+        r4p_slot_t *sl = &ui.page.slot[k], b;
+        uint32_t id = LKV[lv].id[k];
+        int32_t base, lk;
+        sy_base[k] = -1;
+        if (id == 255u) {
+            sq_tile(k, "", R4P_KIND_EMPTY, 0, "");
+            continue;
+        }
+        base = sp_get(q, LKV[lv].page == SP_HOME || LKV[lv].page == SP_LFO ? SP[LKV[lv].page].off[LKV[lv].sub][k] : 0);
+        lk = sq_lock_get(pat, (uint32_t)sq_ed.held, id);
+        strcpy(sl->name, q->name);
+        sp_value(q, lk != -1000 ? lk : base, sl);
+        if (lk != -1000) {
+            sp_value(q, base, &b);
+            sy_base[k] = b.value;
+            sy_lockhot |= (uint8_t)(1u << k);
+        }
+    }
+}
+/* K1..K4 on a lock page: the parameter locked on every held step; back at the base value the lock goes */
+static void sq_lock_turn(uint32_t k, int d)
+{
+    uint32_t lv = (sq_ed.lview - 1u) % 4u, id = LKV[lv].id[k], sel = sq_sel_pat(), i, off;
+    const sp_param_t *q = &SP[LKV[lv].page].p[LKV[lv].sub][k];
+    int32_t base, cur, nv;
+    int full = 0;
+    if (id == 255u)
+        return;
+    off = LKV[lv].page == SP_HOME || LKV[lv].page == SP_LFO ? SP[LKV[lv].page].off[LKV[lv].sub][k] : 0u;
+    base = sp_get(q, off);
+    cur = sq_lock_get(sel, (uint32_t)sq_ed.held, id);
+    cur = cur != -1000 ? cur : base;
+    if (q->kind == R4P_KIND_ENUM)
+        d = d > 0 ? 1 : -1;
+    nv = cur + d;
+    nv = nv < q->lo ? q->lo : nv > q->hi ? q->hi : nv;
+    for (i = 0; i < SQ_STEPS; i++)
+        if (sq_ed_is_held(i)) {
+            if (nv == base)
+                sq_lock_del(sel, i, id);
+            else if (sq_lock_set(sel, i, id, nv) < 0)
+                full = 1;
+        }
+    if (full)
+        sp_toast("LOCK LANES FULL");
+    sq_ed.held_used = 1;
+}
+/* the ALGORITHM encoder while a step is held: its algorithm locked (back at the voice's own: unlocked) */
+static void sq_lock_alg(int d)
+{
+    uint32_t sel = sq_sel_pat(), i;
+    int32_t base = syn.cur[FP_ALG] & 31, cur = sq_lock_get(sel, (uint32_t)sq_ed.held, LK_ALG), nv;
+    char t[24] = "LOCK ALG ", u[8];
+    int full = 0;
+    cur = cur != -1000 ? cur : base;
+    nv = cur + d;
+    nv = nv < 0 ? 0 : nv > 31 ? 31 : nv;
+    for (i = 0; i < SQ_STEPS; i++)
+        if (sq_ed_is_held(i)) {
+            if (nv == base) sq_lock_del(sel, i, LK_ALG);
+            else if (sq_lock_set(sel, i, LK_ALG, nv) < 0) full = 1;
+        }
+    sq_ed.held_used = 1;
+    if (full) strcpy(t, "LOCK LANES FULL");
+    else if (nv == base) strcpy(t, "ALG UNLOCKED");
+    else { u_int((unsigned)nv + 1u, u); u_cat(t, u); }
+    sp_toast(t);
+}
 static void sq_tempo_tile(uint32_t k)
 {
     char t[16], u[12];
@@ -459,9 +629,22 @@ static void sq_build(void)
     if (sq.run && sq.rec) {
         strcpy(t, "REC "); u_cat(t, g->track); strcpy(g->track, t);
     }
+    sy_lockview = 0;
     if (v == SQV_STEP) {
-        strcpy(g->title, "STEP "); u_int((unsigned)sq_ed.held + 1u, u); u_cat(g->title, u);
-        sq_step_tiles(&pt->s[sq_ed.held], pt, 1);
+        uint32_t nh = sq_ed_held_n();
+        int32_t alg = sq_lock_get(sel, (uint32_t)sq_ed.held, LK_ALG);
+        if (nh > 1u) {
+            u_int(nh, u); strcpy(g->title, u); u_cat(g->title, " STEPS");
+        } else {
+            strcpy(g->title, "STEP "); u_int((unsigned)sq_ed.held + 1u, u); u_cat(g->title, u);
+        }
+        if (sq_ed.lview) {
+            u_cat(g->title, " "); u_cat(g->title, LKV[(sq_ed.lview - 1u) % 4u].name);
+            sq_lock_tiles(sel);
+        } else {
+            if (alg != -1000) { u_cat(g->title, " ALG "); u_int((unsigned)alg + 1u, u); u_cat(g->title, u); }
+            sq_step_tiles(&pt->s[sq_ed.held], pt, 1);
+        }
     } else if (v == SQV_REC) {
         strcpy(g->title, "STEP REC");
         sq_num(t, sq_ed.cursor + 1, "/"); u_int(pt->len, u); u_cat(t, u);
@@ -471,9 +654,24 @@ static void sq_build(void)
         sq_num(t, pt->len, "");
         sq_tile(2, "LENGTH", R4P_KIND_UNI, sq_uni(pt->len, 1, 64), t);
         sq_tempo_tile(3);
+    } else if (sui.sub == 3) {                   /* SONG: the chain */
+        uint32_t c = sqi.chain_cur, len = sq_ch.len;
+        strcpy(g->title, "SONG");
+        g->page_count = 4;
+        g->page_idx = 3;
+        if (c < len) { u_int(c + 1u, u); strcpy(t, u); u_cat(t, "/"); u_int(len, u); u_cat(t, u); }
+        else strcpy(t, len >= SQ_CHAIN ? "FULL" : "NEW");
+        sq_tile(0, "ENTRY", R4P_KIND_UNI, sq_uni((int)c, 0, (int)(len < SQ_CHAIN ? len : SQ_CHAIN - 1u)), t);
+        if (sqi.del_arm) strcpy(t, "DEL?");
+        else if (c < len) sq_pat_name(t, sq_ch.pat[c]);
+        else strcpy(t, "--");
+        sq_tile(1, "PATTERN", R4P_KIND_ENUM, sq_enum(c < len ? sq_ch.pat[c] : 0, SQ_PATS), t);
+        if (c < len) { strcpy(t, "x"); u_int(sq_ch.rep[c], u); u_cat(t, u); } else strcpy(t, "--");
+        sq_tile(2, "REPEATS", R4P_KIND_UNI, sq_uni(c < len ? sq_ch.rep[c] : 1, 1, 16), t);
+        sq_tile(3, "SONG", R4P_KIND_TOGGLE, syn.song, syn.song ? "ON" : "OFF");
     } else {
         strcpy(g->title, "SEQUENCER");
-        g->page_count = 3;
+        g->page_count = 4;
         g->page_idx = sui.sub;
         if (sui.sub == 0) {
             sq_pat_name(t, sel);
@@ -521,7 +719,41 @@ static void sq_turn(uint32_t k, int d)
     uint32_t sel = sq_sel_pat();
     int v = sq_view(), x;
     if (v == SQV_STEP) {
-        sq_ed_step_turn((uint32_t)sq_ed.held, k, d);
+        if (sq_ed.lview) {
+            sq_lock_turn(k, d);
+        } else {
+            uint32_t i;
+            for (i = 0; i < SQ_STEPS; i++)
+                if (sq_ed_is_held(i))
+                    sq_ed_step_turn(i, k, d);
+        }
+    } else if (sui.sub == 3) {                   /* SONG: ENTRY, PATTERN, REPEATS, SONG on / off */
+        uint32_t c = sqi.chain_cur, len = sq_ch.len;
+        if (k == 0) {
+            x = (int)c + d;
+            x = x < 0 ? 0 : x > (int)(len < SQ_CHAIN ? len : SQ_CHAIN - 1u) ? (int)(len < SQ_CHAIN ? len : SQ_CHAIN - 1u) : x;
+            sqi.chain_cur = (uint8_t)x;
+            sqi.del_arm = 0;
+        } else if (k == 1) {
+            if (c >= len) {                      /* the new entry: the last one's pattern (or the one selected) to start */
+                sq_chain_set(c, len ? sq_ch.pat[len - 1u] : sel, 1);
+            } else {
+                x = (int)sq_ch.pat[c] + (d > 0 ? 1 : -1);
+                if (x < 0) {
+                    sqi.del_arm = 1;
+                    sp_toast("SAVE: DELETE ENTRY");
+                } else {
+                    sqi.del_arm = 0;
+                    sq_chain_set(c, (uint32_t)(x > SQ_PATS - 1 ? SQ_PATS - 1 : x), sq_ch.rep[c]);
+                }
+            }
+        } else if (k == 2 && c < len) {
+            x = (int)sq_ch.rep[c] + d;
+            sq_chain_set(c, sq_ch.pat[c], (uint32_t)(x < 1 ? 1 : x > 16 ? 16 : x));
+        } else if (k == 3) {
+            syn.song = (uint8_t)(d > 0);
+            sui.dirty_set = 1;
+        }
     } else if (v == SQV_REC || (sui.sub == 2 && k == 0)) {
         if (k == 0) {
             x = (int)sq_ed.cursor + d;
@@ -603,6 +835,33 @@ static void sq_turn(uint32_t k, int d)
 static int sq_save_press(void)
 {
     char t[24], u[8];
+    if (sui.page == SP_SEQ && sq_ed.held >= 0) {          /* a step held: its locks go (all held steps') */
+        uint32_t i;
+        for (i = 0; i < SQ_STEPS; i++)
+            if (sq_ed_is_held(i))
+                sq_lock_clear_step(sq_sel_pat(), i);
+        sq_ed.held_used = 1;
+        sp_toast("LOCKS CLEARED");
+        sq_build();
+        return 1;
+    }
+    if (sui.page == SP_SEQ && sui.sub == 3 && sq_ed.held < 0) {   /* SONG: SAVE deletes (armed) or inserts a copy */
+        if (sqi.del_arm) {
+            sq_chain_delete(sqi.chain_cur);
+            sqi.del_arm = 0;
+            if (sqi.chain_cur > sq_ch.len) sqi.chain_cur = sq_ch.len;
+            sp_toast("ENTRY DELETED");
+        } else if (sqi.chain_cur < sq_ch.len && sq_ch.len < SQ_CHAIN) {
+            sq_chain_insert(sqi.chain_cur);
+            sqi.chain_cur++;
+            sp_toast("ENTRY INSERTED");
+        } else {
+            sp_toast(sq_ch.len >= SQ_CHAIN ? "SONG FULL" : "TURN PATTERN TO ADD");
+        }
+        sui.edit_at = plat_ms();
+        sq_build();
+        return 1;
+    }
     if (sui.page != SP_SEQ || (!sqi.copy_to && !sqi.clear))
         return 0;
     if (sqi.copy_to) {
@@ -646,15 +905,22 @@ static void sq_frame(uint32_t now)
     }
     if (sui.page != SP_SEQ || ui.setup)
         return;
+    if (sq.run && sq.in_song && sq_ed.follow && sq_ed.held < 0 && syn.seq_pat != sq.pat) {
+        syn.seq_pat = sq.pat;                 /* the song plays: the grid shows the pattern playing (until one is picked) */
+        sq_build();
+    }
     if (sq.run && sq_ed.follow && sq_ed.held < 0 && !(sq.rec && !sq.run) && sq.pat == sq_sel_pat())
         sq_ed.view = (uint8_t)(sq.step / SQ_PAGE);
     if (sq_ed.view * SQ_PAGE >= sq_ed_pat()->len)
         sq_ed.view = (uint8_t)((sq_ed_pat()->len - 1u) / SQ_PAGE);
-    if (sqi.drawn_step != sq.step || sqi.drawn_pat != sq.pat || sqi.drawn_run != sq.run || sqi.drawn_view != sq_ed.view) {
+    if (sqi.drawn_step != sq.step || sqi.drawn_pat != sq.pat || sqi.drawn_run != sq.run || sqi.drawn_view != sq_ed.view ||
+        sqi.drawn_ci != sq.ci || sqi.drawn_rep != sq.rep_n) {
         sqi.drawn_step = sq.step;
         sqi.drawn_pat = sq.pat;
         sqi.drawn_run = sq.run;
         sqi.drawn_view = sq_ed.view;
+        sqi.drawn_ci = sq.ci;
+        sqi.drawn_rep = sq.rep_n;
         ui.dirty |= D_TILE0;                  /* (the grid) */
     }
 }
@@ -708,8 +974,9 @@ static void sp_draw_head(void)
     cv_blit(0, 0);
 }
 
-/* one knob's tile of the row (x .. x + 54, y 2..81 of a canvas 84 high): name, value, a thin bar; hot = in the accent */
-static void row_tile(int32_t x, const r4p_slot_t *s, int hot)
+/* one knob's tile of the row (x .. x + 54, y 2..81 of a canvas 84 high): name, value, a thin bar; hot = in the accent;
+ * base >= 0: a locked value's base value (value14 as the slot's), a white tick on the bar */
+static void row_tile(int32_t x, const r4p_slot_t *s, int hot, int32_t base)
 {
     static const char *const SHORT[][2] = {{"AFTERTOUCH", "AFTERTCH"}, {"KEY CHANNEL", "KEY CH"}, {"BEND RANGE", "BEND"},
                                            {"REVERB TYPE", "REV TYPE"}, {"REVERB SIZE", "REV SIZE"}, {"DELAY FDBK", "DLY FDBK"},
@@ -765,14 +1032,28 @@ static void row_tile(int32_t x, const r4p_slot_t *s, int hot)
     default:
         break;
     }
+    if (base >= 0 && s->kind != R4P_KIND_TOGGLE) {        /* the base value under a lock */
+        if (s->kind == R4P_KIND_ENUM) {
+            n = (s->value >> 7) & 0x7F;
+            n = n < 2 ? 2 : n;
+            fill = (base & 0x7F) * bw / n + bw / n / 2;
+        } else {
+            fill = base * bw / R4P_V14_MAX;
+        }
+        cv_rect(bx + fill, by - 3, 1, 12, R4_TEXT);
+    }
 }
 /* the four tiles in a row (y 116..199): the knob turned last in the accent */
 static void sp_draw_tiles(void)
 {
     uint32_t k, now = plat_ms();
     cv_begin(240, 84, R4_BG);
-    for (k = 0; k < 4u; k++)
-        row_tile(4 + (int32_t)k * 59, &PG->slot[k], sy_touch_k == k + 1u && now - sy_touch_at < 2000u);
+    for (k = 0; k < 4u; k++) {
+        if (sy_lockview && !ui.setup)          /* a held step's lock page: the locked tiles in the accent */
+            row_tile(4 + (int32_t)k * 59, &PG->slot[k], (sy_lockhot >> k) & 1u, sy_base[k]);
+        else
+            row_tile(4 + (int32_t)k * 59, &PG->slot[k], sy_touch_k == k + 1u && now - sy_touch_at < 2000u, -1);
+    }
     cv_blit(0, 116);
 }
 
@@ -1068,7 +1349,9 @@ static void sq_draw_grid(void)
             cv_rect(x, y + h + 2, 12, 4, sy_accent(100));
         if ((v == SQV_REC && sq_ed.cursor == idx) || (v == SQV_PAGE && sui.sub == 2 && sq_ed.cursor == idx && !playing))
             cv_rect(x, y + h + 2, 12, 4, R4_RED);
-        if (v == SQV_STEP && sq_ed.held == (int8_t)idx) {
+        if (sq_step_locks(sel, idx))
+            cv_rect(x + 2, y - 3, 8, 2, sy_accent(100));      /* a parameter lock on it: a mark over the cell */
+        if (v == SQV_STEP && sq_ed_is_held(idx)) {
             cv_rect(x - 1, y - 1, 14, 1, sy_accent(100)); cv_rect(x - 1, y + h, 14, 1, sy_accent(100));
             cv_rect(x - 1, y - 1, 1, h + 2, sy_accent(100)); cv_rect(x + 12, y - 1, 1, h + 2, sy_accent(100));
         }
@@ -1092,7 +1375,11 @@ static void sq_draw_grid(void)
     u_cat(t, "  SW "); u_int(pt->swing, u); u_cat(t, u); u_cat(t, "%");
     if (syn.seq_trn) { u_cat(t, "  "); if (syn.seq_trn > 0) u_cat(t, "+"); sq_num(u, syn.seq_trn, " ST"); u_cat(t, u); }
     ptext(10, 67, &FONT_XS, t, R4_LABEL);
-    if (sq.run && sq.pat != sel) {
+    if (sq.run && sq.in_song) {               /* the song: entry n of len, loop r of its repeats */
+        strcpy(t, "SONG "); u_int(sq.ci + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int(sq_ch.len, u); u_cat(t, u);
+        u_cat(t, " x"); u_int(sq.rep_n + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int(sq_ch.rep[sq.ci % SQ_CHAIN], u); u_cat(t, u);
+        ptext(230 - pwidth(&FONT_XS, t), 67, &FONT_XS, t, sy_accent(100));
+    } else if (sq.run && sq.pat != sel) {
         strcpy(t, "NEXT "); sq_pat_name(u, sel); u_cat(t, u);
         ptext(230 - pwidth(&FONT_XS, t), 67, &FONT_XS, t, sy_accent(100));
     } else if (sq_ext() || sq_clock_mode() == SQC_OUT) {
@@ -1103,11 +1390,43 @@ static void sq_draw_grid(void)
     cv_blit(0, BAND_Y);
 }
 
+/* the SONG sub-page's band: the chain, 8 entries a row (pattern, repeats), the one playing lit, the cursor in red */
+static void sq_draw_chain(void)
+{
+    uint32_t i;
+    char t[8], u[8];
+    cv_begin(240, 82, R4_BG);
+    for (i = 0; i < SQ_CHAIN; i++) {
+        int32_t x = 4 + (int32_t)(i % 8u) * 29, y = 1 + (int32_t)(i / 8u) * 20;
+        int playing = sq.run && sq.in_song && sq.ci == i, has = i < sq_ch.len;
+        if (has) {
+            cv_rect(x, y, 27, 18, playing ? sy_accent(100) : R4_TILE);
+            u_int(sq_ch.pat[i] + 1u, u);
+            strcpy(t, sq_ch.pat[i] < 9u ? "0" : ""); u_cat(t, u);
+            ptext(x + 3, y + 3, &FONT_XS, t, playing ? R4_BG : R4_TEXT);
+            if (sq_ch.rep[i] > 1u) {
+                strcpy(t, "x"); u_int(sq_ch.rep[i], u); u_cat(t, u);
+                ptext(x + 26 - pwidth(&FONT_T, t), y + 9, &FONT_T, t, playing ? R4_BG : R4_LABEL);
+            }
+        } else if (i == sq_ch.len) {
+            cv_rect(x, y + 8, 27, 1, R4_EDGE);
+            cv_rect(x + 13, y + 4, 1, 9, R4_EDGE);
+        } else {
+            cv_rect(x + 12, y + 8, 3, 2, R4_TILE);
+        }
+        if (i == sqi.chain_cur) {             /* the cursor */
+            cv_rect(x, y + 18, 27, 1, R4_RED);
+            cv_rect(x, y - 1 < 0 ? 0 : y - 1, 27, 1, R4_RED);
+        }
+    }
+    sy.bytes += 240u * 82u * 2u;
+    cv_blit(0, BAND_Y);
+}
 /* the band: full (a page change, the toast gone) or a live frame */
 static void sp_draw_band(int full)
 {
     switch (sp_band_view()) {
-    case BV_GRID: sq_draw_grid(); break;
+    case BV_GRID: if (sui.sub == 3 && sq_ed.held < 0 && !(sq.rec && !sq.run)) sq_draw_chain(); else sq_draw_grid(); break;
     case BV_OPS: sy_ops(full); break;
     case BV_ENV: sy_env(full); break;
     case BV_LFO: sy_lfo(full); break;

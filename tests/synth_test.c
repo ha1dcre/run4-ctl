@@ -160,14 +160,14 @@ static void seq_tests(void)
     sq_defaults();
     CHECK(memcmp(keep, sq_pat, sizeof keep) != 0);
     for (i = 0; i < SQ_OBJS; i++)
-        CHECK(sq_obj_take(i, &ob[i]) == 0);
+        CHECK(sq_obj_take(i, &ob[i], sizeof ob[i]) == 0);
     CHECK(!memcmp(keep, sq_pat, sizeof keep));
     ob[2].magic ^= 1;
-    CHECK(sq_obj_take(2, &ob[2]) < 0 && sq_obj_take(1, &ob[2]) < 0);
+    CHECK(sq_obj_take(2, &ob[2], sizeof ob[2]) < 0 && sq_obj_take(1, &ob[2], sizeof ob[2]) < 0);
     ob[2].magic ^= 1;
     ob[2].p[0].len = 0; ob[2].p[0].rate = 9; ob[2].p[0].s[0].f = 0xFF;
-    CHECK(sq_obj_take(2, &ob[2]) == 0 && sq_pat[8].len == 16 && sq_pat[8].rate == SQR_16 && sq_n(&sq_pat[8].s[0]) <= 4);
-    printf("  seq store: %u bytes in %u objects of %u (16 patterns x 64 steps x 8 bytes)\n", (unsigned)(SQ_OBJS * sizeof(sq_obj_t)),
+    CHECK(sq_obj_take(2, &ob[2], sizeof ob[2]) == 0 && sq_pat[8].len == 16 && sq_pat[8].rate == SQR_16 && sq_n(&sq_pat[8].s[0]) <= 4);
+    printf("  seq store: %u bytes in %u objects of %u (16 patterns x 64 steps x 8 bytes, 6 lock lanes each, the chain)\n", (unsigned)(SQ_OBJS * sizeof(sq_obj_t)),
            (unsigned)SQ_OBJS, (unsigned)sizeof(sq_obj_t));
 
     /* playback: a chord, a TIE holds it over the gate into the next step, a rest ends it */
@@ -311,6 +311,190 @@ static void seq_tests(void)
     syn.seq_clock = SQC_AUTO;
     sq_midi_out = 0;
     run_small(44100);
+}
+
+/* ---------------------------------------------------------------- step 2: keys, chords, locks, song, mutate --- */
+static uint32_t popc(uint32_t m) { uint32_t n = 0; while (m) { n += m & 1u; m >>= 1; } return n; }
+static void step2_tests(void)
+{
+    syn_set_t before = syn;
+    uint8_t c[4];
+    uint32_t i, n, k, ok;
+    /* scales: sizes, snapping (a tie goes down), degrees, IN KEY */
+    CHECK(popc(SCL_MASK[SCL_MAJOR]) == 7 && popc(SCL_MASK[SCL_MINPENT]) == 5 && popc(SCL_MASK[SCL_BLUES]) == 6 &&
+          popc(SCL_MASK[SCL_HARM]) == 7 && popc(SCL_MASK[SCL_CHROM]) == 12 && popc(SCL_MASK[SCL_MAJPENT]) == 5);
+    CHECK(syn_snap(61, SCL_MAJOR, 0) == 60 && syn_snap(66, SCL_MAJOR, 0) == 65 && syn_snap(64, SCL_MAJOR, 0) == 64);
+    CHECK(syn_snap(61, SCL_MINPENT, 9) == 60 && syn_snap(63, SCL_MINPENT, 9) == 62 && syn_snap(61, SCL_CHROM, 0) == 61);
+    CHECK(syn_snap(1, SCL_MAJOR, 0) == 0 && syn_snap(127, SCL_MAJOR, 0) == 127);
+    CHECK(syn_degree(60, 0, SCL_MAJOR, 0) == 60 && syn_degree(60, 7, SCL_MAJOR, 0) == 72 && syn_degree(60, 2, SCL_MINOR, 0) == 63 &&
+          syn_degree(60, -1, SCL_MAJOR, 0) == 59 && syn_degree(57, 5, SCL_MINPENT, 9) == 69 && syn_degree(62, 2, SCL_MAJOR, 0) == 65 &&
+          syn_degree(64, -3, SCL_MAJOR, 0) == 59);
+    syn.scale = SCL_DORIAN; syn.root = 2; syn.keymode = KM_INKEY;
+    CHECK(syn_key_note(53, 0, 0) == 50 && syn_key_note(55, 1, 0) == 52 && syn_key_note(54, -1, 0) == -1 &&
+          syn_key_note(53, 7, 1) == 74);                  /* white key 0 = D3 + 12 x octave, black keys silent */
+    syn.keymode = KM_SNAP;
+    CHECK(syn_key_note(54, -1, 0) == 53);                 /* F#3 in D dorian: F (a tie goes down) */
+    /* chords */
+    CHECK(syn_chord(60, CH_MAJ, 0, 0, 0, 0, c) == 3 && c[0] == 60 && c[1] == 64 && c[2] == 67);
+    CHECK(syn_chord(60, CH_MIN7, 0, 0, 0, 0, c) == 4 && c[1] == 63 && c[3] == 70);
+    CHECK(syn_chord(60, CH_MAJ, 1, 0, 0, 0, c) == 3 && c[0] == 64 && c[2] == 72);
+    CHECK(syn_chord(60, CH_MAJ, 2, 0, 0, 0, c) == 3 && c[0] == 67 && c[1] == 72 && c[2] == 76);
+    CHECK(syn_chord(60, CH_MAJ, 0, SPR_OPEN, 0, 0, c) == 3 && c[0] == 60 && c[1] == 67 && c[2] == 76);
+    CHECK(syn_chord(60, CH_MAJ, 0, SPR_WIDE, 0, 0, c) == 3 && c[0] == 48 && c[1] == 64);
+    CHECK(syn_chord(60, CH_POWER, 0, 0, 0, 0, c) == 3 && c[2] == 72 && syn_chord(60, CH_OFF, 3, 2, 0, 0, c) == 1 && c[0] == 60);
+    CHECK(syn_chord(62, CH_SCALE3, 0, 0, SCL_MAJOR, 0, c) == 3 && c[0] == 62 && c[1] == 65 && c[2] == 69);     /* D minor in C */
+    CHECK(syn_chord(67, CH_SCALE4, 0, 0, SCL_MAJOR, 0, c) == 4 && c[1] == 71 && c[3] == 77);                  /* G7 in C */
+    CHECK(syn_chord(125, CH_MAJ7, 0, 0, 0, 0, c) == 1);  /* (out of range dropped) */
+    syn.scale = SCL_CHROM; syn.root = 0;
+    /* settings migration: a version 2 store gets the defaults of the new fields */
+    {
+        syn_set_t t = syn;
+        t.ver = 2; t.scale = 9; t.mut_amt = 77; t.song = 1;
+        syn_set_fix(&t, 1);
+        CHECK(t.ver == SYN_SET_VER && t.scale == 0 && t.mut_amt == 1 && t.song == 0 && t.bpm10 == syn.bpm10);
+        t.chord = 99; t.inv = 7;
+        syn_set_fix(&t, 0);
+        CHECK(t.chord == 0 && t.inv == 0);
+    }
+    /* locks: lanes are taken by the first lock of a parameter and freed with its last; six at most */
+    sq_defaults();
+    CHECK(sq_lock_get(0, 3, LK_BRIGHT) == -1000 && sq_lanes_used(0) == 0);
+    CHECK(sq_lock_set(0, 3, LK_BRIGHT, -20) == 0 && sq_lock_get(0, 3, LK_BRIGHT) == -20 && sq_lanes_used(0) == 1);
+    CHECK(sq_lock_set(0, 5, LK_BRIGHT, 99) == 0 && sq_lock_get(0, 5, LK_BRIGHT) == 63);     /* clamped */
+    for (i = 0, ok = 0; i < 5u; i++)
+        ok += sq_lock_set(0, 0, LK_DRIVE + i, 10) == 0;
+    CHECK(ok == 5 && sq_lanes_used(0) == 6 && sq_lock_set(0, 1, LK_ALG, 3) < 0);
+    sq_lock_del(0, 0, LK_DRIVE);
+    CHECK(sq_lanes_used(0) == 5 && sq_lock_set(0, 1, LK_ALG, 3) == 0);
+    CHECK(sq_step_locks(0, 3) == 1u << LK_BRIGHT && sq_step_locks(0, 0) == (0x1Fu << LK_DRIVE & ~(1u << LK_DRIVE)));
+    sq_lock_clear_step(0, 0);
+    CHECK(sq_step_locks(0, 0) == 0 && sq_lanes_used(0) == 2);
+    sq_copy(0, 9);
+    CHECK(sq_lock_get(9, 3, LK_BRIGHT) == -20);
+    sq_clear(9);
+    CHECK(sq_lock_get(9, 3, LK_BRIGHT) == -1000);
+    /* the store: version 2 keeps locks and the chain; a version 1 object loads its patterns, without locks */
+    {
+        static sq_obj_t o2, o1;
+        sq_chain_set(0, 2, 3); sq_chain_set(1, 4, 1);
+        sq_obj_fill(0, &o2);
+        sq_defaults();
+        CHECK(sq_obj_take(0, &o2, sizeof o2) == 0 && sq_lock_get(0, 3, LK_BRIGHT) == -20 && sq_ch.len == 2 && sq_ch.pat[0] == 2 &&
+              sq_ch.rep[0] == 3);
+        CHECK(sq_obj_take(0, &o2, sizeof o2 - 2u) < 0);
+        o1 = o2;
+        o1.ver = 1;
+        sq_pat[1].len = 5;
+        CHECK(sq_obj_take(0, &o1, SQ_OBJ_V1_SIZE) == 0 && sq_pat[1].len == 16 && sq_lock_get(0, 3, LK_BRIGHT) == -1000 &&
+              sq_lanes_used(0) == 0 && sq_ch.len == 2);    /* (the chain is not in a version 1 object: kept) */
+        o2.lk[0].id[0] = 40;                               /* a damaged lane goes */
+        CHECK(sq_obj_take(0, &o2, sizeof o2) == 0 && sq_lanes_used(0) == 1);
+        printf("  seq store v2: %u bytes an object (v1 %u), locks %u B and chain %u B in RAM\n", (unsigned)sizeof(sq_obj_t),
+               (unsigned)SQ_OBJ_V1_SIZE, (unsigned)sizeof sq_lk, (unsigned)sizeof sq_ch);
+    }
+    /* playback: a locked step puts its locks on, a plain one takes them off, a TIE adds its own, stop clears them */
+    sq_defaults();
+    memset(&sq_ch, 0, sizeof sq_ch);
+    syn.rev_mix = 0; syn.dly_mix = 0; syn.chorus = 0; syn.arp_on = 0; syn.song = 0; syn.bpm10 = 1200;
+    for (i = 0; i < 16u; i++) sq_pat[0].s[i].f = 0;
+    sq_pat[0].s[0].f = SQ_ON | 1u; sq_pat[0].s[0].note[0] = 60;
+    sq_pat[0].s[1].f = SQ_ON | SQ_TIE;
+    sq_pat[0].s[4].f = SQ_ON | 1u; sq_pat[0].s[4].note[0] = 62;
+    sq_pat[0].s[8].f = 0;                                 /* (off: changes nothing) */
+    sq_lock_set(0, 0, LK_ALG, 30);
+    sq_lock_set(0, 1, LK_BRIGHT, 40);
+    sq_lock_set(0, 8, LK_LEVEL, 10);
+    syn.seq_pat = 0;
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_seq_start(1);
+    run(BLK * 2);
+    CHECK(syn_lk.mask == 1u << LK_ALG && syn_lk.v[LK_ALG] == 30 && syn_eff_alg == 30);
+    while (sq.step < 2u) run(BLK);
+    CHECK(syn_lk.mask == (1u << LK_ALG | 1u << LK_BRIGHT) && syn_lk.v[LK_BRIGHT] == 40);
+    while (sq.step < 5u) run(BLK);
+    CHECK(syn_lk.mask == 0 && syn_eff_alg == (syn.cur[FP_ALG] & 31u));
+    while (sq.step < 9u) run(BLK);
+    CHECK(syn_lk.mask == 0);                              /* (a step that plays nothing) */
+    syn_seq_start(0);
+    sq_lock_set(0, 4, LK_DRIVE, 50);
+    syn_seq_start(1);
+    while (sq.step < 5u) run(BLK);
+    CHECK(syn_lk.mask == 1u << LK_DRIVE && fxv.drive == 50 && syn.drive == 0);
+    syn_seq_start(0);
+    run(BLK);
+    CHECK(syn_lk.mask == 0 && fxv.drive == 0);
+    /* the song: P2 twice, P3 once, again from the start */
+    sq_defaults();
+    for (i = 0; i < SQ_PATS; i++) { sq_pat[i].len = 4; sq_pat[i].s[0].f = SQ_ON | 1u; sq_pat[i].s[0].note[0] = 60; }
+    sq_chain_set(0, 1, 2); sq_chain_set(1, 2, 1);
+    syn.song = 1; syn.seq_pat = 9;
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_seq_start(1);
+    {
+        uint8_t seen[8], ns = 0, last = 255;
+        uint32_t lp = 0;
+        while (ns < 8u && pn < 44100u * 30u) {
+            run(BLK);
+            if (sq.loops != lp || last == 255) {
+                lp = sq.loops;
+                seen[ns++] = sq.pat;
+                last = sq.pat;
+            }
+        }
+        CHECK(ns == 8 && seen[0] == 1 && seen[1] == 1 && seen[2] == 2 && seen[3] == 1 && seen[4] == 1 && seen[5] == 2 && seen[6] == 1);
+        printf("  song: P%u P%u P%u P%u P%u P%u (chain P2 x2, P3)\n", seen[0] + 1, seen[1] + 1, seen[2] + 1, seen[3] + 1, seen[4] + 1, seen[5] + 1);
+    }
+    syn.song = 0;                                         /* off while playing: the selected pattern from the next loop */
+    {
+        uint32_t lp = sq.loops;
+        while (sq.loops < lp + 2u) run(BLK);
+        CHECK(sq.pat == 9 && !sq.in_song);
+    }
+    syn_seq_start(0);
+    run(BLK);
+    sq_chain_insert(0);
+    CHECK(sq_ch.len == 3 && sq_ch.pat[1] == 1 && sq_ch.rep[1] == 2);
+    sq_chain_delete(0);
+    sq_chain_delete(5);
+    CHECK(sq_ch.len == 2 && sq_ch.pat[1] == 2);
+    /* mutate: always audible, carriers loud, ratios on the grid; something changes */
+    {
+        uint32_t seed = 1234u, quiet = 0, offgrid = 0, unchanged = 0, trials = 0;
+        double minpk = 1.0;
+        for (k = 0; k < SYN_NFACTORY; k++)
+            for (n = 0; n < 3u; n++)
+                for (i = 0; i < 12u; i++) {
+                    uint8_t orig[FP_SIZE + 1];
+                    uint32_t chg, j, car;
+                    double pk;
+                    syn_load_patch(k);
+                    memcpy(orig, syn.cur, sizeof orig);
+                    chg = syn_mutate(syn.cur, n, &seed);
+                    trials++;
+                    unchanged += chg == 0;
+                    car = fm6_carriers(syn.cur[FP_ALG] & 31u);
+                    for (j = 0; j < 6u; j++) {
+                        const uint8_t *op = syn.cur + (5u - j) * FP_OP, *oo = orig + (5u - j) * FP_OP;
+                        if ((car >> (5u - j)) & 1u)
+                            quiet += op[FP_OL] < 75u;
+                        if (!op[FP_MODE] && (op[FP_FC] != oo[FP_FC] || op[FP_FF] != oo[FP_FF]) && op[FP_FF] != 0u && op[FP_FF] != 50u)
+                            offgrid++;
+                    }
+                    syn_reset_sound(); syn_dirty = 1; pn = 0;
+                    syn_event(1, 60, 100, 0);
+                    run(44100 / 4);
+                    syn_event(2, 60, 0, 0);
+                    pk = peak_since(0, pn, 0);
+                    if (pk < minpk) minpk = pk;
+                }
+        printf("  mutate: %u voices, softest peak %.3f, %u unchanged\n", trials, minpk, unchanged);
+        CHECK(quiet == 0 && offgrid == 0 && minpk > 0.01 && unchanged < trials / 10u);
+    }
+    syn = before;
+    syn_dirty = 1;
+    syn_reset_sound();
+    sq_defaults();
+    memset(&sq, 0, sizeof sq);
 }
 
 /* ---------------------------------------------------------------- the host voice (protocol 1.3) --- */
@@ -507,6 +691,7 @@ int main(int argc, char **argv)
     run(44100 * 2);
     seq_tests();
 
+    step2_tests();
     host_voice_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */

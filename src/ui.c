@@ -488,8 +488,11 @@ static void ui_draw(void)
     if (ui.local) {
         if (ui.dirty & (D_TILE0 | D_TILE0 << 1 | D_CLEAR))
             sp_draw_band(1);
-        else if (ui.dirty & D_LIVE)
+        else if (ui.dirty & D_LIVE) {
             sp_draw_band(0);
+            if (ui.toast_until)
+                ui.dirty |= D_TOAST;                           /* (the live band drew under the toast: it again) */
+        }
         if (ui.dirty & (D_TILE0 << 2 | D_TILE0 << 3))
             sp_draw_tiles();
     } else if (ui.big1 && host_page() && ui.connected) {      /* 1.2: the big value over the tiles */

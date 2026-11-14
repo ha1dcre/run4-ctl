@@ -14,7 +14,15 @@
  * Plain C, integer only. Included by synth.c (the unity build and tests/synth_test.c). Two contexts, as the rest of
  * synth.c: the audio context runs the clock (sq_clock, from syn_render) and live recording (from syn_apply_event); the
  * main loop edits the patterns (sq_ed_*) and sets the transport through the event ring. Byte-sized fields only are
- * shared, so a step being edited while it plays sounds either old or new. */
+ * shared, so a step being edited while it plays sounds either old or new.
+ *
+ * Parameter locks (Elektron's idea): a step can lock some of the sound's parameters (synth.c LK_*) to its own value.
+ * Sparse: each pattern has SQ_LANES lanes, a lane is one parameter and its value on each step (none = SQ_NOLOCK); a
+ * lane is taken by the first lock of a parameter and freed with its last. A step that plays notes puts its locks on
+ * (every other parameter back to its base value); a TIE step adds its own on top (the note goes on, the sound changes);
+ * a step that plays nothing (off, a rest, chance said no) changes nothing; stopping takes them all off.
+ * The chain (the song): up to SQ_CHAIN entries, a pattern and how often it plays; with the song on the sequencer plays
+ * them in order from the first, each to its end as a queued pattern change does, and starts over after the last. */
 
 #define SQ_STEPS 64
 #define SQ_PATS 16
@@ -49,15 +57,36 @@ typedef struct {
 } sq_pat_t;
 _Static_assert(sizeof(sq_step_t) == 8u && sizeof(sq_pat_t) == 520u, "sequencer store layout");
 static sq_pat_t sq_pat[SQ_PATS];
+#define SQ_LANES 6                           /* lock lanes a pattern: six parameters locked on any of its steps */
+#define SQ_NOLOCK 0xFFu
+typedef struct {
+    uint8_t id[SQ_LANES];                    /* the lane's parameter (LK_*), SQ_NOLOCK = a free lane */
+    uint8_t rsv[2];
+    uint8_t v[SQ_LANES][SQ_STEPS];           /* per step: the value - LK_LO[id], or SQ_NOLOCK */
+} sq_lanes_t;
+static sq_lanes_t sq_lk[SQ_PATS];
+#define SQ_CHAIN 32
+typedef struct { uint8_t len, rsv; uint8_t pat[SQ_CHAIN], rep[SQ_CHAIN]; } sq_chain_t;   /* rep 1..16 */
+static sq_chain_t sq_ch;
 
-/* stored in four objects of four patterns (app.h OBJ_SEQ_A..D): 8 + 4 x 520 = 2088 bytes each, 8352 in all */
+/* stored in four objects of four patterns (app.h OBJ_SEQ_A..D). Version 1: 8 + 4 x 520 = 2088 bytes; version 2 adds the
+ * patterns' lock lanes (4 x 392) and the chain (66, used in object 0): 3724 bytes each (PLAT_STORE_MAX 3840), 14896 in
+ * all, each still in its own pair of 4 KiB sectors. A version 1 object loads as it was, without locks and chain. */
 #define SQ_OBJ_PATS 4u
 #define SQ_OBJS (SQ_PATS / SQ_OBJ_PATS)
 #define SQ_MAGIC 0x54505153u                 /* "SQPT" */
-#define SQ_VER 1u
-typedef struct { uint32_t magic; uint8_t ver, first, rsv[2]; sq_pat_t p[SQ_OBJ_PATS]; } sq_obj_t;
-_Static_assert(sizeof(sq_obj_t) == 2088u, "sequencer object size");
-static uint8_t sq_dirty;                     /* bit o: object o changed since saved */
+#define SQ_VER 2u
+#define SQ_OBJ_V1_SIZE 2088u
+typedef struct {
+    uint32_t magic; uint8_t ver, first, rsv[2];
+    sq_pat_t p[SQ_OBJ_PATS];                 /* (version 1 ends here) */
+    sq_lanes_t lk[SQ_OBJ_PATS];
+    sq_chain_t chain;
+    uint8_t pad[2];
+} sq_obj_t;
+_Static_assert(sizeof(sq_lanes_t) == 392u && sizeof(sq_chain_t) == 66u && offsetof(sq_obj_t, lk) == SQ_OBJ_V1_SIZE &&
+               sizeof(sq_obj_t) == 3724u, "sequencer object size");
+static uint8_t sq_dirty;                     /* bit o: object o changed since saved (the chain: object 0) */
 
 static uint32_t sq_n(const sq_step_t *s) { return s->f & SQ_NMASK; }
 static int sq_is_tie(const sq_step_t *s) { return (s->f & SQ_TIE) != 0; }
@@ -67,6 +96,7 @@ static int sq_plays(const sq_step_t *s) { return sq_is_on(s) && sq_has(s); }
 static void sq_set_n(sq_step_t *s, uint32_t n) { s->f = (uint8_t)((s->f & ~SQ_NMASK) | (n > SQ_NOTES ? SQ_NOTES : n)); }
 static void sq_touch(uint32_t pat) { sq_dirty = (uint8_t)(sq_dirty | 1u << (pat / SQ_OBJ_PATS)); }
 
+static void sq_lanes_init(sq_lanes_t *l) { memset(l, SQ_NOLOCK, sizeof *l); }
 static void sq_pat_init(sq_pat_t *p)
 {
     memset(p, 0, sizeof *p);
@@ -99,8 +129,11 @@ static void sq_defaults(void)
 {
     static const uint8_t PAT[16] = {36, 0, 48, 0, 36, 0, 51, 48, 36, 0, 48, 0, 34, 0, 46, 43};    /* pattern 1: a bass line */
     uint32_t i;
-    for (i = 0; i < SQ_PATS; i++)
+    for (i = 0; i < SQ_PATS; i++) {
         sq_pat_init(&sq_pat[i]);
+        sq_lanes_init(&sq_lk[i]);
+    }
+    memset(&sq_ch, 0, sizeof sq_ch);
     for (i = 0; i < 16u; i++)
         if (PAT[i]) {
             sq_pat[0].s[i].note[0] = PAT[i];
@@ -116,17 +149,151 @@ static void sq_obj_fill(uint32_t o, sq_obj_t *b)
     b->ver = SQ_VER;
     b->first = (uint8_t)(o * SQ_OBJ_PATS);
     memcpy(b->p, &sq_pat[o * SQ_OBJ_PATS], sizeof b->p);
+    memcpy(b->lk, &sq_lk[o * SQ_OBJ_PATS], sizeof b->lk);
+    b->chain = sq_ch;
 }
-static int sq_obj_take(uint32_t o, const sq_obj_t *b)
+static void sq_lanes_sanitize(sq_lanes_t *l)
+{
+    uint32_t i, k;
+    for (i = 0; i < SQ_LANES; i++) {
+        if (l->id[i] >= LK_N) {
+            l->id[i] = SQ_NOLOCK;
+            memset(l->v[i], SQ_NOLOCK, SQ_STEPS);
+        }
+        for (k = 0; k < SQ_STEPS && l->id[i] != SQ_NOLOCK; k++)
+            if (l->v[i][k] != SQ_NOLOCK && (int32_t)l->v[i][k] > LK_HI[l->id[i]] - LK_LO[l->id[i]])
+                l->v[i][k] = SQ_NOLOCK;
+    }
+}
+/* what plat_store_load gave (len bytes): a version 2 object, or a version 1 one (no locks, no chain: migrated) */
+static int sq_obj_take(uint32_t o, const sq_obj_t *b, uint32_t len)
 {
     uint32_t i;
-    if (o >= SQ_OBJS || b->magic != SQ_MAGIC || b->ver != SQ_VER || b->first != o * SQ_OBJ_PATS)
+    int v1 = len == SQ_OBJ_V1_SIZE && b->ver == 1u;
+    if (o >= SQ_OBJS || b->magic != SQ_MAGIC || b->first != o * SQ_OBJ_PATS || !(v1 || (len == sizeof *b && b->ver == SQ_VER)))
         return -1;
     for (i = 0; i < SQ_OBJ_PATS; i++) {
-        sq_pat[o * SQ_OBJ_PATS + i] = b->p[i];
-        sq_pat_sanitize(&sq_pat[o * SQ_OBJ_PATS + i]);
+        uint32_t pi = o * SQ_OBJ_PATS + i;
+        sq_pat[pi] = b->p[i];
+        sq_pat_sanitize(&sq_pat[pi]);
+        if (v1) {
+            sq_lanes_init(&sq_lk[pi]);
+        } else {
+            sq_lk[pi] = b->lk[i];
+            sq_lanes_sanitize(&sq_lk[pi]);
+        }
+    }
+    if (o == 0u && !v1) {
+        sq_ch = b->chain;
+        if (sq_ch.len > SQ_CHAIN) sq_ch.len = 0;
+        for (i = 0; i < SQ_CHAIN; i++) {
+            sq_ch.pat[i] %= SQ_PATS;
+            if (sq_ch.rep[i] < 1u || sq_ch.rep[i] > 16u) sq_ch.rep[i] = 1;
+        }
     }
     return 0;
+}
+
+/* ------------------------------------------------------------ locks --- */
+static int sq_lane_of(const sq_lanes_t *l, uint32_t id)
+{
+    int i;
+    for (i = 0; i < SQ_LANES; i++)
+        if (l->id[i] == id)
+            return i;
+    return -1;
+}
+static int32_t sq_lock_get(uint32_t pat, uint32_t step, uint32_t id)     /* the locked value, or -1000 = none */
+{
+    const sq_lanes_t *l = &sq_lk[pat % SQ_PATS];
+    int i = sq_lane_of(l, id);
+    if (i < 0 || l->v[i][step % SQ_STEPS] == SQ_NOLOCK)
+        return -1000;
+    return (int32_t)l->v[i][step % SQ_STEPS] + LK_LO[id];
+}
+static void sq_lock_del(uint32_t pat, uint32_t step, uint32_t id)
+{
+    sq_lanes_t *l = &sq_lk[pat % SQ_PATS];
+    int i = sq_lane_of(l, id);
+    uint32_t k;
+    if (i < 0)
+        return;
+    l->v[i][step % SQ_STEPS] = SQ_NOLOCK;
+    for (k = 0; k < SQ_STEPS && l->v[i][k] == SQ_NOLOCK; k++)
+        ;
+    if (k == SQ_STEPS)
+        l->id[i] = SQ_NOLOCK;                /* its last lock: the lane is free */
+    sq_touch(pat);
+}
+static int sq_lock_set(uint32_t pat, uint32_t step, uint32_t id, int32_t val)   /* 0 ok, -1 no lane free */
+{
+    sq_lanes_t *l = &sq_lk[pat % SQ_PATS];
+    int i = sq_lane_of(l, id);
+    if (id >= LK_N)
+        return -1;
+    if (i < 0) {
+        for (i = 0; i < SQ_LANES && l->id[i] != SQ_NOLOCK; i++)
+            ;
+        if (i == SQ_LANES)
+            return -1;
+        l->id[i] = (uint8_t)id;
+        memset(l->v[i], SQ_NOLOCK, SQ_STEPS);
+    }
+    val = val < LK_LO[id] ? LK_LO[id] : val > LK_HI[id] ? LK_HI[id] : val;
+    l->v[i][step % SQ_STEPS] = (uint8_t)(val - LK_LO[id]);
+    sq_touch(pat);
+    return 0;
+}
+static uint32_t sq_step_locks(uint32_t pat, uint32_t step)  /* the parameters locked on a step, a bit each */
+{
+    const sq_lanes_t *l = &sq_lk[pat % SQ_PATS];
+    uint32_t i, m = 0;
+    for (i = 0; i < SQ_LANES; i++)
+        if (l->id[i] != SQ_NOLOCK && l->v[i][step % SQ_STEPS] != SQ_NOLOCK)
+            m |= 1u << l->id[i];
+    return m;
+}
+static void sq_lock_clear_step(uint32_t pat, uint32_t step)
+{
+    uint32_t id, m = sq_step_locks(pat, step);
+    for (id = 0; id < LK_N; id++)
+        if ((m >> id) & 1u)
+            sq_lock_del(pat, step, id);
+}
+static uint32_t sq_lanes_used(uint32_t pat)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < SQ_LANES; i++)
+        n += sq_lk[pat % SQ_PATS].id[i] != SQ_NOLOCK;
+    return n;
+}
+/* step idx of pattern pat sounds (audio context): its locks on; tie: on top of what is on */
+static void sq_lock_fire(uint32_t pat, uint32_t idx, int tie)
+{
+    const sq_lanes_t *l = &sq_lk[pat % SQ_PATS];
+    uint32_t m = tie ? syn_lk.mask : 0u, i;
+    int16_t v[LK_N];
+    memcpy(v, syn_lk.v, sizeof v);
+    for (i = 0; i < SQ_LANES; i++)
+        if (l->id[i] != SQ_NOLOCK && l->v[i][idx % SQ_STEPS] != SQ_NOLOCK) {
+            m |= 1u << l->id[i];
+            v[l->id[i]] = (int16_t)(l->v[i][idx % SQ_STEPS] + LK_LO[l->id[i]]);
+        }
+    for (i = 0; i < LK_N; i++)
+        if (((m ^ syn_lk.mask) >> i & 1u) || ((m >> i & 1u) && v[i] != syn_lk.v[i]))
+            break;
+    if (i == LK_N)
+        return;                              /* (nothing changes: no resync) */
+    memcpy(syn_lk.v, v, sizeof v);
+    syn_lk.mask = m;
+    syn_dirty = 1;
+}
+static void sq_lock_off(void)
+{
+    if (syn_lk.mask) {
+        syn_lk.mask = 0;
+        syn_dirty = 1;
+    }
 }
 
 /* ----------------------------------------------------- the transport --- */
@@ -157,10 +324,15 @@ static struct {
     uint8_t ext_ticks;                       /* ticks owed by F8s not taken yet */
     uint8_t out_div;                         /* ticks to the next F8 out */
     uint32_t played;                         /* steps that sounded (tests, the simulator) */
+    /* the song */
+    uint8_t ci;                              /* the chain entry playing */
+    uint8_t rep_n;                           /* its loops played so far */
+    uint8_t in_song;                         /* the song plays (set at a start or a loop end) */
 } sq;
 static void (*sq_midi_out)(uint8_t rt);      /* the app's: a MIDI real-time byte out (F8, FA, FC); 0 = none */
 
 static uint32_t sq_clock_mode(void);
+static int sq_song(void);                    /* the song is on (synth.c: syn.song) */
 static int32_t sq_transpose(void);
 static uint32_t sq_sel_pat(void);
 static uint32_t sq_bpm10(void);
@@ -244,6 +416,7 @@ static void sq_fire(uint32_t idx)
         if (sq.n_notes) {
             sq.off_at = sq.len_smp * sq.gate_org / 100u;
             sq.hold = (uint8_t)next_tie;
+            sq_lock_fire(sq.pat, idx, 1);    /* its locks on top: the held note's sound changes */
         }
         return;
     }
@@ -253,6 +426,7 @@ static void sq_fire(uint32_t idx)
         return;
     }
     gate = s->gate ? s->gate : p->gate;
+    sq_lock_fire(sq.pat, idx, 0);            /* (before the notes start: they start with the locked sound) */
     for (i = 0; i < sq_n(s); i++) {
         int32_t nt = (int32_t)s->note[i] + trn;
         if (nt < 0 || nt > 127)
@@ -288,12 +462,27 @@ static void sq_tick(void)
     }
     if (sq.pos < sq.nstart)
         return;
-    if ((uint32_t)sq.step + 1u >= p->len) {  /* the end of the loop: the selected pattern takes over */
+    if ((uint32_t)sq.step + 1u >= p->len) {  /* the end of the loop: the selected pattern takes over, or the song goes on */
         sq.pos = 0;
         sq.loops++;
-        if (sq.pat != sq_sel_pat()) {
-            sq.pat = (uint8_t)sq_sel_pat();
-            sq.rh_n = 0;
+        if (sq_song()) {
+            if (!sq.in_song || sq.ci >= sq_ch.len) {          /* (switched on meanwhile, or the chain got shorter) */
+                sq.ci = 0;
+                sq.rep_n = 0;
+            } else if (++sq.rep_n >= sq_ch.rep[sq.ci]) {
+                sq.ci = (uint8_t)((sq.ci + 1u) % sq_ch.len);
+                sq.rep_n = 0;
+            }
+            sq.in_song = 1;
+            if (sq.pat != sq_ch.pat[sq.ci])
+                sq.rh_n = 0;
+            sq.pat = sq_ch.pat[sq.ci];
+        } else {
+            sq.in_song = 0;
+            if (sq.pat != sq_sel_pat()) {
+                sq.pat = (uint8_t)sq_sel_pat();
+                sq.rh_n = 0;
+            }
         }
         sq_fire(0);
     } else {
@@ -306,6 +495,11 @@ static void sq_start(int run)
         return;
     if (run) {
         sq.pat = (uint8_t)sq_sel_pat();
+        sq.in_song = (uint8_t)sq_song();
+        sq.ci = 0;
+        sq.rep_n = 0;
+        if (sq.in_song)
+            sq.pat = sq_ch.pat[0];           /* the song starts at its first entry */
         sq.pos = 0;
         sq.ticks = 0;
         sq.loops = 0;
@@ -323,6 +517,7 @@ static void sq_start(int run)
     } else {
         sq.run = 0;
         sq_release();
+        sq_lock_off();
         sq.rh_n = 0;
         if (sq_midi_out && sq_clock_mode() == SQC_OUT)
             sq_midi_out(0xFCu);
@@ -448,7 +643,9 @@ static struct {
     uint8_t cursor;                          /* step recording writes here */
     uint8_t entry_open;                      /* step recording: keys of a chord are down */
     uint8_t last_note;                       /* the last note entered: a step switched on gets it */
-} sq_ed = {-1, 0, 0, 0, 0, 1, 0, 0, 60};
+    uint8_t lview;                           /* a held step's knobs: 0 its NOTE / VEL / GATE / CHANCE, 1.. a lock page */
+    uint64_t more;                           /* more steps held with it (SEL + their keys): bit i = step i */
+} sq_ed = {-1, 0, 0, 0, 0, 1, 0, 0, 60, 0, 0};
 
 static sq_pat_t *sq_ed_pat(void) { return &sq_pat[sq_sel_pat()]; }
 static void sq_add_note(sq_step_t *s, uint8_t note)
@@ -490,9 +687,21 @@ static void sq_ed_step_up(void)
 {
     if (sq_ed.held < 0)
         return;
-    if (!sq_ed.held_used)
+    if (!sq_ed.held_used && !sq_ed.more)
         sq_ed_toggle((uint32_t)sq_ed.held);
     sq_ed.held = -1;
+    sq_ed.more = 0;
+}
+static int sq_ed_is_held(uint32_t i)         /* step i is the held one or one of the steps held with it */
+{
+    return sq_ed.held >= 0 && (i == (uint32_t)sq_ed.held || ((sq_ed.more >> (i % SQ_STEPS)) & 1u));
+}
+static uint32_t sq_ed_held_n(void)
+{
+    uint32_t n = 0, i;
+    for (i = 0; i < SQ_STEPS; i++)
+        n += (uint32_t)sq_ed_is_held(i);
+    return n;
 }
 /* a note while a step is held: the first replaces what it holds, the next ones make a chord (up to 4) */
 static void sq_ed_note(uint8_t note)
@@ -593,6 +802,7 @@ static void sq_ed_rest(void)
 {
     sq_step_t *s = &sq_ed_pat()->s[sq_ed.cursor % SQ_STEPS];
     memset(s, 0, sizeof *s);
+    sq_lock_clear_step(sq_sel_pat(), sq_ed.cursor);     /* (a rest is an empty step: its locks go too) */
     sq_ed.entry_open = 0;
     sq_touch(sq_sel_pat());
     sq_ed_advance();
@@ -612,6 +822,7 @@ static void sq_copy(uint32_t from, uint32_t to)
     if (from >= SQ_PATS || to >= SQ_PATS || from == to)
         return;
     sq_pat[to] = sq_pat[from];
+    sq_lk[to] = sq_lk[from];
     sq_touch(to);
 }
 static void sq_clear(uint32_t p)
@@ -619,7 +830,37 @@ static void sq_clear(uint32_t p)
     if (p >= SQ_PATS)
         return;
     sq_pat_init(&sq_pat[p]);
+    sq_lanes_init(&sq_lk[p]);
     sq_touch(p);
+}
+/* the chain (main loop): entry i = pattern p, played rep times */
+static void sq_chain_set(uint32_t i, uint32_t pat, uint32_t rep)
+{
+    if (i > sq_ch.len || i >= SQ_CHAIN)
+        return;
+    if (i == sq_ch.len)
+        sq_ch.len++;                         /* (one past the end: appended) */
+    sq_ch.pat[i] = (uint8_t)(pat % SQ_PATS);
+    sq_ch.rep[i] = (uint8_t)(rep < 1u ? 1u : rep > 16u ? 16u : rep);
+    sq_touch(0);
+}
+static void sq_chain_insert(uint32_t i)      /* a copy of entry i after it */
+{
+    if (i >= sq_ch.len || sq_ch.len >= SQ_CHAIN)
+        return;
+    memmove(sq_ch.pat + i + 1, sq_ch.pat + i, sq_ch.len - i);
+    memmove(sq_ch.rep + i + 1, sq_ch.rep + i, sq_ch.len - i);
+    sq_ch.len++;
+    sq_touch(0);
+}
+static void sq_chain_delete(uint32_t i)
+{
+    if (i >= sq_ch.len)
+        return;
+    memmove(sq_ch.pat + i, sq_ch.pat + i + 1, sq_ch.len - i - 1u);
+    memmove(sq_ch.rep + i, sq_ch.rep + i + 1, sq_ch.len - i - 1u);
+    sq_ch.len--;
+    sq_touch(0);
 }
 static uint32_t sq_count_on(const sq_pat_t *p)     /* steps that play (tests, the screen) */
 {

@@ -143,6 +143,7 @@ wait 100
 tap SAVE
 wait 100
 tap SEQ
+tap SEQ
 wait 60
 turn K1 2
 wait 100
@@ -157,6 +158,7 @@ tap SAVE
 wait 100
 expect seq_on 0
 # the patterns are kept: stopped, a few seconds after the last edit they are stored; a power cycle brings them back
+tap SEQ
 tap SEQ
 turn K1 -1
 wait 4500

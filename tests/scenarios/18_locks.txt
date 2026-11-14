@@ -1,0 +1,132 @@
+# Parameter locks: a step held on the SEQ grid, a page button picks the lock page (HOME: SYNTH, LFO, FX, FX again: FX 2,
+# SEQ: the step's own NOTE / VELOCITY / GATE / CHANCE), K1..K4 lock on that step, back at the base value the lock
+# goes; ALGORITHM locks the algorithm; SEL + more step keys hold several; SAVE on a held step clears its locks. Locks
+# sound with their step, show on the grid, go with COPY, stay over a power cycle.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+tap SEQ
+wait 100
+expect syn_page 70
+expect lock_steps 0
+# step 1 held, the SYNTH lock page (HOME), BRIGHT +20
+key w0 down
+wait 40
+tap HOME
+wait 40
+expect lview 1
+expect syn_page 70
+turn K1 20 20
+wait 100
+expect lock1_2 20
+shot lock_page.png
+# back to the base value: unlocked; then +30
+turn K1 -20 20
+wait 50
+expect lock1_2 -1000
+turn K1 30 20
+wait 50
+expect lock1_2 30
+# the ALGORITHM encoder locks the algorithm (the voice's own is 1 + 4 = 5 here)
+turn ALGO 4
+wait 50
+expect lock_lanes 2
+# FX: DELAY 40; FX again: FX 2 (DELAY TIME); a page without locks says so
+tap FX
+wait 40
+expect lview 3
+turn K3 40 20
+wait 50
+expect lock1_11 40
+shot lock_fx.png
+tap FX
+wait 40
+expect lview 4
+tap ENV
+wait 40
+expect lview 4
+expect toast 1
+tap SEQ
+wait 40
+expect lview 0
+shot lock_step.png
+key w0 up
+wait 100
+expect seq_plays1 1
+expect lock_steps 1
+shot lock_grid.png
+# several steps: step 3 held, SEL + steps 5 and 7 with it; FEEDBACK +3 on all three (the voice has 3: locked to 6)
+key w2 down
+wait 40
+press SEL
+wait 20
+key w4 down
+key w6 down
+wait 40
+release SEL
+expect held_n 3
+tap HOME
+wait 40
+turn K2 3 20
+wait 100
+shot lock_multi.png
+key w6 up
+key w4 up
+key w2 up
+wait 100
+expect lock_steps 4
+expect lock3_1 6
+expect lock5_1 6
+expect lock7_1 6
+expect seq_plays3 1
+expect seq_plays5 1
+shot lock_grid_marks.png
+# playback: step 1's locks sound with it (ALGORITHM, BRIGHT, DELAY), step 3's then (FEEDBACK), stop clears them
+expect lock_mask 0
+tap PLAY
+expect lock_mask 2053
+wait 250
+expect lock_mask 2
+tap PLAY
+wait 50
+expect lock_mask 0
+# SAVE with step 1 held: its locks go
+key w0 down
+wait 40
+tap SAVE
+wait 40
+key w0 up
+wait 100
+expect lock1_2 -1000
+expect lock_steps 3
+expect seq_plays1 1
+# COPY TO pattern 4 (third sub-page) carries the locks
+tap SEQ
+tap SEQ
+wait 60
+turn K2 4
+wait 100
+tap SAVE
+wait 100
+tap SEQ
+tap SEQ
+wait 60
+turn K1 3
+wait 100
+expect seq_pat 4
+expect lock_steps 3
+expect lock5_1 6
+# kept over a power cycle (stored a few seconds after the last edit)
+wait 4500
+expect seq_dirty 0
+reboot
+wait 300
+expect mode 1
+expect seq_pat 4
+expect lock_steps 3
+expect lock7_1 6

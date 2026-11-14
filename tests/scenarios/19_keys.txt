@@ -1,0 +1,124 @@
+# Scale and chord keys (Synth mode): GLO's third sub-page KEYS (SCALE, ROOT, KEY MODE, MIDI IN), ARP's second CHORD,
+# INVERSION, SPREAD. SNAP moves a key to the nearest note in the scale, IN KEY makes the white keys the scale (black
+# keys silent); a chord turns one key into up to four notes for the arpeggiator, step and live recording. MIDI in is
+# played as it comes unless MIDI IN is SCALE.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+# chromatic (the default): G#3 plays G#3
+key 3 down 100 0
+wait 40
+expect keynote3 56
+key 3 up
+wait 40
+tap GLO
+tap GLO
+tap GLO
+wait 60
+expect syn_page 52
+shot keys_page.png
+# D major, SNAP: G#3 (between G and A) plays G, F#3 plays F#
+turn K1 1
+turn K2 2
+wait 100
+expect syn_scale 1
+shot keys_dmajor.png
+leds
+key 3 down 100 0
+key 1 down 100 0
+wait 40
+expect keynote3 55
+expect keynote1 54
+key 3 up
+key 1 up
+wait 40
+# IN KEY: the white keys are D major from D3 up; a black key is silent
+turn K3 1
+wait 60
+key w0 down 100 0
+key w2 down 100 0
+key b0 down 100 0
+wait 40
+expect keynote0 50
+expect keynote4 54
+expect key_notes 2
+shot keys_inkey.png
+key w0 up
+key w2 up
+key b0 up
+wait 40
+# chords (ARP's second sub-page): SCALE 3 = the triad of the scale on the key: E3 (white key 2) -> E G B
+tap ARP
+tap ARP
+wait 60
+expect syn_page 61
+turn K2 9 20
+wait 60
+key w1 down 100 0
+wait 60
+expect key_notes 3
+expect keynote2 52
+shot keys_chord.png
+key w1 up
+wait 40
+# MAJ, first inversion, OPEN: D3 -> F#3 D4 A4 (the second lowest an octave up)
+turn K2 -8 20
+turn K3 1
+turn K4 1
+wait 60
+key w0 down 100 0
+wait 60
+expect key_notes 3
+expect keynote0 54
+key w0 up
+wait 40
+# the chord feeds the arpeggiator: ARP on, one key, three notes held
+tap ARP
+wait 60
+turn K1 1
+wait 60
+key w0 down 100 0
+wait 200
+expect arp_held 3
+key w0 up
+wait 100
+expect arp_held 0
+turn K1 -1
+wait 60
+# step recording: one key writes the chord into the step
+tap SEQ
+tap REC
+wait 60
+key w3 down 100 0
+wait 60
+key w3 up
+wait 60
+expect seq_n1 3
+tap REC
+wait 60
+# MIDI in: as it comes by default (C#4 plays C#4); MIDI IN = SCALE snaps it (D#4 -> D4)
+midi 90 3D 64
+wait 60
+expect newest_note 61
+midi 80 3D 00
+tap GLO
+tap GLO
+tap GLO
+wait 60
+turn K4 1
+wait 60
+midi 90 3F 64
+wait 60
+expect newest_note 62
+midi 80 3F 00
+wait 50
+# kept over a power cycle
+wait 4500
+reboot
+wait 300
+expect syn_scale 1

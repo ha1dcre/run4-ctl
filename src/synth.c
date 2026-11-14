@@ -7,6 +7,7 @@
  *
  * Threading, as on the device: syn_render() runs in the audio context; the main loop (keys, UI) calls syn_event() (a
  * small ring) and edits the settings, which the render reads at its block starts. */
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include "synth/fm6_tables.h"
@@ -42,8 +43,17 @@ typedef struct {
     uint8_t at_depth;                        /* key pressure into BRIGHT, 0..63 at full pressure (was a spare byte: 0
                                               * in stores written before; Synth mode leaves it 0, the host voice sets it) */
     uint16_t bpm10;                          /* 400..2400 */
+    /* version 3: the keys (scale and chord), mutate, the song (stores of version 2 end here: migrated, defaults) */
+    uint8_t scale, root, keymode, midi_scale;  /* SCL_*; root 0..11 (C..B); KM_SNAP / KM_INKEY; MIDI in snapped too */
+    uint8_t chord, inv, spread;              /* CH_*; inversion 0..3; SPR_* */
+    uint8_t mut_amt;                         /* MUTATE: 0 small, 1 medium, 2 wild */
+    uint8_t song;                            /* the sequencer plays the chain (synth_seq.c) */
+    uint8_t rsv3[3];
 } syn_set_t;
-#define SYN_SET_VER 2                        /* 2: the patterns moved to their own objects (synth_seq.c) */
+#define SYN_SET_VER 3                        /* 2: the patterns moved to their own objects (synth_seq.c); 3: keys, song */
+#define SYN_SET_V2_SIZE 186u                 /* a version 2 store: the same fields up to bpm10 */
+_Static_assert(offsetof(syn_set_t, bpm10) == 184u && offsetof(syn_set_t, scale) == SYN_SET_V2_SIZE && sizeof(syn_set_t) == 198u,
+               "settings store layout");
 static syn_set_t syn;
 static uint8_t syn_dirty = 1;                /* an edit: the next block copies the patch again */
 
@@ -286,12 +296,64 @@ static uint32_t syn_voices_peak;
 
 static int32_t syn_clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+/* ------------------------------------------------------- parameter locks --- */
+/* The sequencer's parameter locks (synth_seq.c) override these while a locked step plays: the sound is the settings
+ * and the patch with the overrides on top, nothing of them is ever written into syn (a voice or the settings saved
+ * meanwhile are the base values). Set in the audio context (sq_fire), read by the render (syn_sync, the effects). */
+enum { LK_ALG, LK_FB, LK_BRIGHT, LK_ENVSPD, LK_LEVEL, LK_LFOSPD, LK_LFODLY, LK_PMD, LK_AMD, LK_DRIVE, LK_CHORUS,
+       LK_DLYMIX, LK_REVMIX, LK_DLYTIME, LK_DLYFB, LK_REVSIZE, LK_N };
+static const int8_t LK_LO[LK_N] = {0, 0, -64, -64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static const int8_t LK_HI[LK_N] = {31, 7, 63, 63, 100, 99, 99, 99, 99, 100, 100, 100, 100, 5, 100, 100};
+static struct { uint32_t mask; int16_t v[LK_N]; } syn_lk;   /* bit id: locked to v[id] */
+static int32_t syn_lkv(uint32_t id, int32_t base) { return (syn_lk.mask >> id) & 1u ? syn_lk.v[id] : base; }
+static int32_t syn_lock_base(uint32_t id)     /* the base value a lock overrides (the settings, the patch) */
+{
+    switch (id) {
+    case LK_ALG: return syn.cur[FP_ALG] & 31;
+    case LK_FB: return syn.cur[FP_FB];
+    case LK_BRIGHT: return syn.bright;
+    case LK_ENVSPD: return syn.env_spd;
+    case LK_LEVEL: return syn.level;
+    case LK_LFOSPD: return syn.cur[FP_LFS];
+    case LK_LFODLY: return syn.cur[FP_LFD];
+    case LK_PMD: return syn.cur[FP_LPMD];
+    case LK_AMD: return syn.cur[FP_LAMD];
+    case LK_DRIVE: return syn.drive;
+    case LK_CHORUS: return syn.chorus;
+    case LK_DLYMIX: return syn.dly_mix;
+    case LK_REVMIX: return syn.rev_mix;
+    case LK_DLYTIME: return syn.dly_div;
+    case LK_DLYFB: return syn.dly_fb;
+    default: return syn.rev_size;
+    }
+}
+/* the effects' amounts for one block, the locks on top (the render sets it once a block) */
+static struct { int32_t drive, chorus, dly_mix, dly_div, dly_fb, rev_mix, rev_size; } fxv;
+static void syn_fxv(void)
+{
+    fxv.drive = syn_lkv(LK_DRIVE, syn.drive);
+    fxv.chorus = syn_lkv(LK_CHORUS, syn.chorus);
+    fxv.dly_mix = syn_lkv(LK_DLYMIX, syn.dly_mix);
+    fxv.dly_div = syn_lkv(LK_DLYTIME, syn.dly_div);
+    fxv.dly_fb = syn_lkv(LK_DLYFB, syn.dly_fb);
+    fxv.rev_mix = syn_lkv(LK_REVMIX, syn.rev_mix);
+    fxv.rev_size = syn_lkv(LK_REVSIZE, syn.rev_size);
+}
+
 static void syn_sync(void)                   /* the patch, with the macros; once per block when something changed */
 {
     uint8_t *p = syn_eff;
     uint32_t k, car;
-    int32_t meg = syn_clamp(syn.env_spd, -64, 63) * 40 / 64;
+    int32_t meg = syn_clamp(syn_lkv(LK_ENVSPD, syn.env_spd), -64, 63) * 40 / 64;
     memcpy(p, syn.cur, FP_SIZE + 1u);
+    if (syn_lk.mask) {                       /* the sequencer's locks on the patch's own parameters */
+        p[FP_ALG] = (uint8_t)syn_lkv(LK_ALG, p[FP_ALG]);
+        p[FP_FB] = (uint8_t)syn_lkv(LK_FB, p[FP_FB]);
+        p[FP_LFS] = (uint8_t)syn_lkv(LK_LFOSPD, p[FP_LFS]);
+        p[FP_LFD] = (uint8_t)syn_lkv(LK_LFODLY, p[FP_LFD]);
+        p[FP_LPMD] = (uint8_t)syn_lkv(LK_PMD, p[FP_LPMD]);
+        p[FP_LAMD] = (uint8_t)syn_lkv(LK_AMD, p[FP_LAMD]);
+    }
     syn_eff_alg = p[FP_ALG] & 31u;
     car = fm6_carriers(syn_eff_alg);
     for (k = 0; k < 6u; k++) {
@@ -409,6 +471,7 @@ static void syn_event(uint8_t kind, uint8_t a, uint8_t b, uint8_t src)
 /* ------------------------------------------------------------ sequencer --- */
 #include "synth_seq.c"
 static uint32_t sq_clock_mode(void) { return syn.seq_clock < SQC_N ? syn.seq_clock : SQC_AUTO; }
+static int sq_song(void) { return syn.song && sq_ch.len; }
 static int32_t sq_transpose(void) { return syn.seq_trn; }
 static uint32_t sq_sel_pat(void) { return syn.seq_pat % SQ_PATS; }
 static uint32_t sq_bpm10(void) { return syn.bpm10 < 400u ? 400u : syn.bpm10 > 2400u ? 2400u : syn.bpm10; }
@@ -544,9 +607,9 @@ static const uint8_t DLY_DIV16[6] = {2, 3, 4, 6, 8, 12};      /* the delay time 
 static int32_t fx_drive(int32_t x)           /* a cubic soft clip; the amount is a pre-gain of 1x .. 8x */
 {
     int64_t v, c;
-    if (!syn.drive)
+    if (!fxv.drive)
         return x;
-    v = (int64_t)x * (256 + syn.drive * 1792 / 100) >> 8;
+    v = (int64_t)x * (256 + fxv.drive * 1792 / 100) >> 8;
     v = v > (1 << 23) ? (1 << 23) : v < -(1 << 23) ? -(1 << 23) : v;
     c = (v * v >> 23) * v >> 23;
     return (int32_t)((v - c / 3) * 3 / 2);       /* the rails land at 1.0 again */
@@ -557,7 +620,7 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
     int32_t l, r, x = in, wl = 0, wr = 0;
     x = fx_drive(x);
     l = r = x;
-    if (syn.chorus) {                          /* two taps, opposite LFO phase: a triangle sweeping 8..20 ms */
+    if (fxv.chorus) {                          /* two taps, opposite LFO phase: a triangle sweeping 8..20 ms */
         uint32_t ph = fx_st.cph += 3u * 7000u;    /* ~0.8 Hz */
         int32_t tri = (int32_t)((ph >> 15) & 0xFFFFu);
         int32_t t1, t2, a, b;
@@ -568,23 +631,23 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
         a = fx_cho[(fx_st.cw - (uint32_t)t1) % CHO_N] << 8;
         b = fx_cho[(fx_st.cw - (uint32_t)t2) % CHO_N] << 8;
         fx_st.cw++;
-        l = x + (int32_t)((int64_t)(a - x) * syn.chorus / 200);
-        r = x + (int32_t)((int64_t)(b - x) * syn.chorus / 200);
+        l = x + (int32_t)((int64_t)(a - x) * fxv.chorus / 200);
+        r = x + (int32_t)((int64_t)(b - x) * fxv.chorus / 200);
     }
-    if (syn.dly_mix) {                         /* a ping-pong: L feeds R, R feeds L */
-        uint32_t div16 = DLY_DIV16[syn.dly_div % 6u], tn = syn_step_samples(1) * div16 / 1u;
+    if (fxv.dly_mix) {                         /* a ping-pong: L feeds R, R feeds L */
+        uint32_t div16 = DLY_DIV16[(uint32_t)fxv.dly_div % 6u], tn = syn_step_samples(1) * div16 / 1u;
         uint32_t tt = tn > DLY_N - 1u ? DLY_N - 1u : tn;
         int32_t dl = fx_dly[0][(fx_st.dw - tt) % DLY_N] << 8, dr = fx_dly[1][(fx_st.dw - tt) % DLY_N] << 8;
-        int32_t fb = syn.dly_fb * 640 / 100;   /* up to 0.62 */
+        int32_t fb = fxv.dly_fb * 640 / 100;   /* up to 0.62 */
         fx_dly[0][fx_st.dw % DLY_N] = (int16_t)((l + (int32_t)((int64_t)dr * fb >> 10)) >> 8);
         fx_dly[1][fx_st.dw % DLY_N] = (int16_t)((r + (int32_t)((int64_t)dl * fb >> 10)) >> 8);
         fx_st.dw++;
-        l += (int32_t)((int64_t)dl * syn.dly_mix / 100);
-        r += (int32_t)((int64_t)dr * syn.dly_mix / 100);
+        l += (int32_t)((int64_t)dl * fxv.dly_mix / 100);
+        r += (int32_t)((int64_t)dr * fxv.dly_mix / 100);
     }
-    if (syn.rev_mix) {                         /* 4 parallel damped combs, 2 allpasses, per channel */
+    if (fxv.rev_mix) {                         /* 4 parallel damped combs, 2 allpasses, per channel */
         uint32_t ch, k, ty = syn.rev_type % REV_N;
-        int32_t fbk = 18000 + syn.rev_size * 130 + (int32_t)ty * 1500;    /* Q15 feedback, ~0.55 .. 0.95 */
+        int32_t fbk = 18000 + fxv.rev_size * 130 + (int32_t)ty * 1500;    /* Q15 feedback, ~0.55 .. 0.95 */
         for (ch = 0; ch < 2u; ch++) {
             int32_t s = ((ch ? r : l) >> 2), acc = 0;
             for (k = 0; k < 4u; k++) {
@@ -609,8 +672,8 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
             }
             if (ch) wr = acc; else wl = acc;
         }
-        l += (int32_t)((int64_t)wl * syn.rev_mix / 60);
-        r += (int32_t)((int64_t)wr * syn.rev_mix / 60);
+        l += (int32_t)((int64_t)wl * fxv.rev_mix / 60);
+        r += (int32_t)((int64_t)wr * fxv.rev_mix / 60);
     }
     *outl = l;
     *outr = r;
@@ -707,13 +770,14 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         if (syn_dirty)
             syn_sync();
         syn_clock(FM6_N);
+        syn_fxv();                           /* (after the clock: a locked step that just started counts) */
         lfo_v = fm6_lfo_sample(&syn_lfo);
         lfo_d = fm6_lfo_delay(&syn_lfo);
         fb = syn_eff[FP_FB];
         memset(mix, 0, sizeof mix);
         for (k = 0; k < SYN_VOICES; k++) {
             syn_voice_t *v = &syn_v[k];
-            int32_t lf, lvl = syn_clamp(syn.bright, -64, 63) * 24;
+            int32_t lf, lvl = syn_clamp(syn_lkv(LK_BRIGHT, syn.bright), -64, 63) * 24;
             if (!v->n.live)
                 continue;
             if (syn.at_depth)                /* pressure opens the modulators: up to at_depth BRIGHT steps */
@@ -737,7 +801,7 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         if (live > syn_voices_peak)
             syn_voices_peak = live;
         {
-            int32_t gain = (int32_t)(master_q12 * (uint32_t)syn_clamp(syn.level, 0, 100) / 100u);
+            int32_t gain = (int32_t)(master_q12 * (uint32_t)syn_clamp(syn_lkv(LK_LEVEL, syn.level), 0, 100) / 100u);
             for (i = 0; i < FM6_N; i++) {
                 int32_t l, r;
                 fx_run(mix[i], &l, &r);
@@ -765,6 +829,7 @@ static void syn_defaults(void)
     syn.arp_mode = ARP_UP; syn.arp_rate = 1; syn.arp_oct = 1; syn.arp_gate = 60;
     syn.seq_pat = 0; syn.seq_clock = SQC_AUTO; syn.seq_trn = 0;
     syn.bpm10 = 1200;
+    syn.mut_amt = 1;                         /* (scale chromatic, key mode SNAP, no chord, song off: all 0) */
     syn_load_patch(0);
     syn_dirty = 1;
 }
@@ -791,6 +856,7 @@ static void syn_reset_sound(void)
     syn_bend = 0;
     syn_chan_at = 0;
     syn_active_voices = 0;
+    syn_lk.mask = 0;
 }
 static void syn_swap(void)
 {
@@ -814,6 +880,221 @@ static void syn_host_defaults(syn_set_t *out)
     syn = keep;
     syn_dirty = 1;
 }
+/* a version 3 settings store with its new fields in their ranges (a version 2 one: their defaults) */
+static void syn_set_fix(syn_set_t *t, int from_v2)
+{
+    if (from_v2) {
+        memset((uint8_t *)t + SYN_SET_V2_SIZE, 0, sizeof *t - SYN_SET_V2_SIZE);
+        t->mut_amt = 1;
+        t->ver = SYN_SET_VER;
+    }
+    if (t->scale >= 11u) t->scale = 0;
+    if (t->root > 11u) t->root = 0;
+    if (t->keymode > 1u) t->keymode = 0;
+    if (t->midi_scale > 1u) t->midi_scale = 0;
+    if (t->chord >= 11u) t->chord = 0;
+    if (t->inv > 3u) t->inv = 0;
+    if (t->spread > 2u) t->spread = 0;
+    if (t->mut_amt > 2u) t->mut_amt = 1;
+    if (t->song > 1u) t->song = 0;
+}
+
+/* ---------------------------------------------------------- scale and chord --- */
+/* The keys can play in a scale: SNAP moves each key's note to the nearest one in the scale (a tie goes down), IN KEY
+ * makes the 16 white keys the scale's notes in a row from the root (the black keys are silent). A chord turns one key
+ * into up to four notes (the arpeggiator and the recording get them all). Pure functions: the keys (app.c), MIDI in. */
+enum { SCL_CHROM, SCL_MAJOR, SCL_MINOR, SCL_DORIAN, SCL_PHRYG, SCL_LYDIAN, SCL_MIXO, SCL_HARM, SCL_MAJPENT, SCL_MINPENT,
+       SCL_BLUES, SCL_N };
+enum { KM_SNAP, KM_INKEY };
+enum { CH_OFF, CH_MAJ, CH_MIN, CH_7, CH_MAJ7, CH_MIN7, CH_SUS2, CH_SUS4, CH_POWER, CH_SCALE3, CH_SCALE4, CH_N };
+enum { SPR_CLOSE, SPR_OPEN, SPR_WIDE, SPR_N };
+#define B12(a, b, c, d, e, f, g) (1u << (a) | 1u << (b) | 1u << (c) | 1u << (d) | 1u << (e) | 1u << (f) | 1u << (g))
+static const uint16_t SCL_MASK[SCL_N] = {
+    0xFFFu, B12(0, 2, 4, 5, 7, 9, 11), B12(0, 2, 3, 5, 7, 8, 10), B12(0, 2, 3, 5, 7, 9, 10), B12(0, 1, 3, 5, 7, 8, 10),
+    B12(0, 2, 4, 6, 7, 9, 11), B12(0, 2, 4, 5, 7, 9, 10), B12(0, 2, 3, 5, 7, 8, 11), B12(0, 2, 4, 7, 9, 9, 9),
+    B12(0, 3, 5, 7, 10, 10, 10), B12(0, 3, 5, 6, 7, 10, 10)};
+static int syn_in_scale(int32_t n, uint32_t scale, uint32_t root)
+{
+    return (SCL_MASK[scale % SCL_N] >> (uint32_t)(((n - (int32_t)root) % 12 + 12) % 12)) & 1u;
+}
+static int32_t syn_snap(int32_t n, uint32_t scale, uint32_t root)   /* the nearest note in the scale, a tie down */
+{
+    int32_t d;
+    if (scale % SCL_N == SCL_CHROM || syn_in_scale(n, scale, root))
+        return n;
+    for (d = 1; d < 12; d++) {
+        if (n - d >= 0 && syn_in_scale(n - d, scale, root))
+            return n - d;
+        if (n + d <= 127 && syn_in_scale(n + d, scale, root))
+            return n + d;
+    }
+    return n;
+}
+/* the note i scale steps up from `base` (a note of the scale; i may be negative) */
+static int32_t syn_degree(int32_t base, int32_t i, uint32_t scale, uint32_t root)
+{
+    uint32_t m = SCL_MASK[scale % SCL_N], cnt = 0, k, pc = (uint32_t)(((base - (int32_t)root) % 12 + 12) % 12);
+    int32_t j = 0, oct = base - (int32_t)pc;              /* oct: the root at or below base */
+    int8_t deg[12];
+    for (k = 0; k < 12u; k++)
+        if ((m >> k) & 1u) {
+            if (k <= pc) j = (int32_t)cnt;                /* base's place in the scale (the one below if it is not in it) */
+            deg[cnt++] = (int8_t)k;
+        }
+    i += j;
+    while (i < 0)
+        i += (int32_t)cnt, oct -= 12;
+    return oct + 12 * (i / (int32_t)cnt) + deg[i % (int32_t)cnt];
+}
+/* the note a key plays (IN KEY: white key w = degree w from the root of octave 3, + 12 per octave shift; SNAP: snapped);
+ * -1 = silent (a black key in IN KEY) */
+static int32_t syn_key_note(int32_t chromatic, int white_idx, int32_t octave)
+{
+    if (syn.scale % SCL_N != SCL_CHROM && syn.keymode == KM_INKEY) {
+        if (white_idx < 0)
+            return -1;
+        return syn_degree(48 + (int32_t)syn.root + 12 * octave, white_idx, syn.scale, syn.root);
+    }
+    return syn_snap(chromatic, syn.scale, syn.root);
+}
+static void syn_sort4(uint8_t *v, uint32_t n)
+{
+    uint32_t i, j;
+    for (i = 1; i < n; i++)
+        for (j = i; j > 0 && v[j - 1] > v[j]; j--) {
+            uint8_t t = v[j];
+            v[j] = v[j - 1];
+            v[j - 1] = t;
+        }
+}
+/* the chord a note makes (out: up to 4 notes, ascending; returns how many; CH_OFF: the note alone) */
+static uint32_t syn_chord(int32_t note, uint32_t chord, uint32_t inv, uint32_t spread, uint32_t scale, uint32_t root, uint8_t *out)
+{
+    static const int8_t IV[CH_N][4] = {{0, -1, -1, -1}, {0, 4, 7, -1}, {0, 3, 7, -1}, {0, 4, 7, 10}, {0, 4, 7, 11},
+                                       {0, 3, 7, 10}, {0, 2, 7, -1}, {0, 5, 7, -1}, {0, 7, 12, -1}, {0, 0, 0, -1}, {0, 0, 0, 0}};
+    int32_t v[4];
+    uint32_t n = 0, i, k;
+    chord %= CH_N;
+    for (i = 0; i < 4u && IV[chord][i] >= 0; i++) {
+        if (chord == CH_SCALE3 || chord == CH_SCALE4)   /* thirds of the scale (a major or minor triad / seventh in key) */
+            v[n++] = scale % SCL_N == SCL_CHROM ? note + IV[chord == CH_SCALE3 ? CH_MAJ : CH_7][i]
+                     : syn_degree(syn_snap(note, scale, root), 2 * (int32_t)i, scale, root);
+        else
+            v[n++] = note + IV[chord][i];
+    }
+    for (k = 0; k < inv && k + 1u < n; k++) {         /* inversions: the lowest goes up an octave */
+        int32_t lo = 0;
+        for (i = 1; i < n; i++)
+            if (v[i] < v[lo]) lo = (int32_t)i;
+        v[lo] += 12;
+    }
+    if (n >= 3u && spread == SPR_OPEN) {              /* open: the second lowest an octave up */
+        int32_t lo = 0, lo2 = -1;
+        for (i = 1; i < n; i++)
+            if (v[i] < v[lo]) lo = (int32_t)i;
+        for (i = 0; i < n; i++)
+            if ((int32_t)i != lo && (lo2 < 0 || v[i] < v[lo2])) lo2 = (int32_t)i;
+        v[lo2] += 12;
+    } else if (n >= 2u && spread == SPR_WIDE) {       /* wide: the lowest an octave down, under the rest */
+        int32_t lo = 0;
+        for (i = 1; i < n; i++)
+            if (v[i] < v[lo]) lo = (int32_t)i;
+        v[lo] -= 12;
+    }
+    for (i = 0, k = 0; i < n; i++) {                  /* in range, each once */
+        uint32_t j;
+        if (v[i] < 0 || v[i] > 127)
+            continue;
+        for (j = 0; j < k && out[j] != (uint8_t)v[i]; j++)
+            ;
+        if (j == k)
+            out[k++] = (uint8_t)v[i];
+    }
+    syn_sort4(out, k);
+    return k;
+}
+
+/* --------------------------------------------------------------- mutate --- */
+/* A random variation of a voice (the 155-byte patch), amount 0 small, 1 medium, 2 wild. Musical limits: the ratios
+ * stay on a grid (whole numbers, and halves; carriers 0.5 .. 4), detune near the centre, the carriers stay audible
+ * (output level 75 and up, the loudest 90 and up, an envelope that rises to 85 and up within a reasonable attack,
+ * that releases), the pitch envelope, the operators' level 4 and the name stay. Returns what changed: bit k = OPk+1,
+ * bit 6 the algorithm or feedback, bit 7 the LFO. */
+static uint32_t syn_rnd(uint32_t *r) { *r = *r * 1664525u + 1013904223u; return *r >> 8; }
+static int32_t syn_jit(uint32_t *r, int32_t v, int32_t span, int32_t lo, int32_t hi)    /* v + -span..span */
+{
+    return syn_clamp(v + (int32_t)(syn_rnd(r) % (uint32_t)(2 * span + 1)) - span, lo, hi);
+}
+static uint32_t syn_mutate(uint8_t *v, uint32_t amt, uint32_t *r)
+{
+    static const uint8_t MOD_FC[14] = {0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9, 14}, CAR_FC[7] = {0, 1, 1, 1, 2, 2, 3};
+    static const uint8_t P_OP[3] = {40, 70, 100}, SPAN_L[3] = {4, 10, 25}, SPAN_E[3] = {3, 8, 20}, SPAN_D[3] = {1, 2, 4};
+    uint8_t before[FP_SIZE];
+    uint32_t chg = 0, alg, car, k, j, loud = 0;
+    amt = amt > 2u ? 2u : amt;
+    memcpy(before, v, FP_SIZE);
+    alg = v[FP_ALG] & 31u;
+    if (amt == 2u && syn_rnd(r) % 2u)
+        alg = syn_rnd(r) % 32u;
+    else if (amt == 1u && syn_rnd(r) % 100u < 15u)
+        alg = (uint32_t)syn_jit(r, (int32_t)alg, 1, 0, 31);
+    v[FP_ALG] = (uint8_t)alg;
+    if (amt == 2u)
+        v[FP_FB] = (uint8_t)(syn_rnd(r) % 8u);
+    else if (syn_rnd(r) % 100u < (amt ? 60u : 30u))
+        v[FP_FB] = (uint8_t)syn_jit(r, v[FP_FB], amt ? 2 : 1, 0, 7);
+    car = fm6_carriers(alg);
+    for (k = 0; k < 6u; k++) {                         /* k: OP1..OP6 (OP1 is the last block of the patch) */
+        uint8_t *op = v + (5u - k) * FP_OP;
+        int carrier = (car >> (5u - k)) & 1u;
+        if (syn_rnd(r) % 100u < P_OP[amt]) {
+            if (!op[FP_MODE] && amt && syn_rnd(r) % 100u < (amt == 2u ? 70u : 40u)) {     /* the ratio, on the grid */
+                op[FP_FC] = carrier ? CAR_FC[syn_rnd(r) % 7u] : MOD_FC[syn_rnd(r) % 14u];
+                op[FP_FF] = (uint8_t)(syn_rnd(r) % 4u == 0u ? 50u : 0u);                  /* x.0, sometimes x.5 */
+            }
+            op[FP_DET] = (uint8_t)syn_jit(r, op[FP_DET], SPAN_D[amt], 0, 14);
+            op[FP_OL] = (uint8_t)syn_jit(r, op[FP_OL], carrier ? SPAN_L[amt] / 2 : SPAN_L[amt], 0, 99);
+            for (j = 0; j < 4u; j++)
+                op[FP_R1 + j] = (uint8_t)syn_jit(r, op[FP_R1 + j], SPAN_E[amt], 0, 99);
+            for (j = 0; j < 3u; j++)
+                op[FP_L1 + j] = (uint8_t)syn_jit(r, op[FP_L1 + j], SPAN_E[amt], 0, 99);
+            if (amt == 2u)
+                op[FP_KVS] = (uint8_t)syn_jit(r, op[FP_KVS], 1, 0, 7);
+        }
+        if (carrier) {                                 /* audible: level, a rising envelope, an attack, a release */
+            uint32_t pk = op[FP_L1] > op[FP_L1 + 1] ? op[FP_L1] : op[FP_L1 + 1];
+            if (op[FP_OL] < 75u) op[FP_OL] = 75;
+            if (pk < 85u) op[FP_L1] = 85;
+            if (op[FP_R1] < 40u) op[FP_R1] = 40;
+            if (op[FP_R1 + 3] < 20u) op[FP_R1 + 3] = 20;
+            if (op[FP_OL] > loud) loud = op[FP_OL];
+        }
+    }
+    if (loud < 90u)                                    /* the loudest carrier at 90 and up */
+        for (k = 0; k < 6u; k++)
+            if ((car >> (5u - k)) & 1u) {
+                uint8_t *op = v + (5u - k) * FP_OP;
+                if (op[FP_OL] == loud) { op[FP_OL] = 90; break; }
+            }
+    if (amt && syn_rnd(r) % 100u < (amt == 2u ? 60u : 30u)) {   /* the LFO */
+        v[FP_LFS] = (uint8_t)(amt == 2u ? 10u + syn_rnd(r) % 81u : (uint32_t)syn_jit(r, v[FP_LFS], 10, 0, 99));
+        if (amt == 2u) {
+            v[FP_LPMD] = (uint8_t)(syn_rnd(r) % 16u);
+            v[FP_LAMD] = (uint8_t)(syn_rnd(r) % 16u);
+            v[FP_LFW] = (uint8_t)(syn_rnd(r) % 6u);
+        }
+    }
+    fp_sanitize(v);
+    for (k = 0; k < 6u; k++)
+        if (memcmp(before + (5u - k) * FP_OP, v + (5u - k) * FP_OP, FP_OP))
+            chg |= 1u << k;
+    if (before[FP_ALG] != v[FP_ALG] || before[FP_FB] != v[FP_FB])
+        chg |= 1u << 6;
+    if (before[FP_LFS] != v[FP_LFS] || before[FP_LPMD] != v[FP_LPMD] || before[FP_LAMD] != v[FP_LAMD] || before[FP_LFW] != v[FP_LFW])
+        chg |= 1u << 7;
+    return chg;
+}
+
 static void syn_init(void)
 {
     memset(syn_v, 0, sizeof syn_v);

@@ -169,7 +169,7 @@ static void tv_band(int full)
 static void tv_tile(int k)
 {
     cv_begin(59, 84, R4_BG);
-    row_tile(2, &PG->slot[k], hl_tile() == k);
+    row_tile(2, &PG->slot[k], hl_tile() == k, -1);
     cv_blit((uint32_t)(2 + 59 * k), 116);
 }
 /* ui_draw, the tape layout: the band whole (D_CLEAR, the big view or a toast gone: D_GAP / D_TBAND), or a live frame

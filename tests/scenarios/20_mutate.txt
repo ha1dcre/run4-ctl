@@ -1,0 +1,77 @@
+# MUTATE: SEL + EDIT makes a variation of the sounding voice (GLO's MUTATE amount: SMALL, MEDIUM, WILD), the toast says
+# what changed; SEL + SAVE swaps back to the voice before it and again (one level); another voice forgets it. The
+# voice slot is not touched until SAVE.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+expect mut_valid 0
+expect mut_amt 1
+expect patch_mark 0
+press SEL
+wait 20
+tap EDIT
+release SEL
+wait 60
+expect mut_valid 1
+expect patch_changed 1
+expect toast 1
+expect syn_page 0
+shot mutate.png
+# it plays
+key 7 down 100 0
+wait 300
+expect syn_voices >0
+key 7 up
+# undo, redo
+press SEL
+wait 20
+tap SAVE
+release SEL
+wait 60
+expect mut_undone 1
+expect patch_changed 0
+shot mutate_undo.png
+press SEL
+wait 20
+tap SAVE
+release SEL
+wait 60
+expect mut_undone 0
+expect patch_changed 1
+# WILD (GLO's second sub-page), on the EDIT page: the six operators show it
+tap GLO
+tap GLO
+wait 60
+turn K2 1
+wait 60
+expect mut_amt 2
+tap EDIT
+wait 60
+press SEL
+wait 20
+tap EDIT
+release SEL
+wait 60
+key 7 down 100 0
+key 11 down 100 0
+wait 300
+shot mutate_wild.png
+expect syn_voices >1
+key 7 up
+key 11 up
+# no user voice was written by it
+expect syn_bank_used 0
+# another voice (PRESETS): nothing to undo
+turn PRESET 1
+wait 60
+press SEL
+wait 20
+tap SAVE
+release SEL
+wait 60
+expect mut_valid 0

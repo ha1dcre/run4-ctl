@@ -1,0 +1,96 @@
+# The song: SEQ's fourth sub-page SONG edits the chain (ENTRY, PATTERN, REPEATS, SONG on / off; SAVE inserts a copy of
+# the entry, PATTERN turned below P01 arms DELETE and SAVE deletes). With the song on, PLAY plays the chain from its
+# first entry, each pattern to its end as a queued change does, and starts over; with MIDI clock in (AUTO) too.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+tap SEQ
+tap SEQ
+tap SEQ
+tap SEQ
+wait 100
+expect syn_page 73
+expect chain_len 0
+shot song_empty.png
+# entry 1: P02; entry 2: P03 x2; entry 3: P01
+turn K2 1
+wait 60
+expect chain_len 1
+turn K2 1
+turn K1 1
+turn K2 1
+turn K2 1
+turn K3 1
+turn K1 1
+turn K2 1
+turn K2 -2
+wait 100
+expect chain_len 3
+turn K4 1
+wait 60
+expect song_on 1
+shot song_chain.png
+# play: P02, P03, P03, P01, P02 ... (16 steps of 1/16 at 120 BPM: 2 s a pattern)
+tap PLAY
+wait 1000
+expect in_song 1
+expect seq_playing 2
+expect song_ci 1
+wait 2000
+expect seq_playing 3
+expect song_ci 2
+shot song_playing.png
+wait 2000
+expect seq_playing 3
+expect song_ci 2
+wait 2000
+expect seq_playing 1
+expect song_ci 3
+wait 2000
+expect seq_playing 2
+expect song_ci 1
+# the grid follows the pattern playing, its line says where the song is
+tap SEQ
+wait 100
+expect seq_pat 2
+shot song_grid.png
+tap PLAY
+wait 100
+expect syn_seq 0
+# delete entry 1 (PATTERN below P01, SAVE), insert a copy of the new entry 1 (SAVE)
+tap SEQ
+tap SEQ
+tap SEQ
+wait 60
+expect syn_page 73
+turn K1 -5
+turn K2 -1
+turn K2 -1
+wait 60
+tap SAVE
+wait 60
+expect chain_len 2
+tap SAVE
+wait 60
+expect chain_len 3
+shot song_edited.png
+# MIDI clock in (AUTO): START, then two patterns of clocks (2 x 96) and some: entry 1 (P03 x2) has played, entry 2 plays
+midi FA
+wait 20
+clock 200 21
+expect syn_seq 1
+expect song_ci 2
+midi FC
+wait 50
+expect syn_seq 0
+# kept over a power cycle (the chain with the patterns, SONG with the settings)
+wait 4500
+reboot
+wait 300
+expect chain_len 3
+expect song_on 1
