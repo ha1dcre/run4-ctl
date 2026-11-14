@@ -18,7 +18,9 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
   OCT- and OCT+ shift the keyboard by octaves (-3 to +3).
 * **Buttons, encoders and MASTER** are sent to RUN4, which decides what they do on the current page.
 * **Screen**: a header in the colour of the current RUN4 track, four tiles (name, value, bar), and a footer with the
-  page dots, tempo, bar and beat, transport and octave.
+  page dots, tempo, bar and beat, transport and octave. With a RUN4 that speaks protocol 1.2 the header shows where you
+  are (e.g. TAPE > WEAR), the parameter in focus has a frame and its position (5/12) is in the footer; turning K1 to K4
+  shows that parameter large for a moment (also when you change it in the app), then the four tiles come back.
 * **LEDs** show what RUN4 tells them to. Without the app, a held key lights itself.
 * Keys still play without the app. If the app is not there, the screen says NOT CONNECTED and the notes go on.
 

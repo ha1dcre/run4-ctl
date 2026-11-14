@@ -105,6 +105,19 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
             w14(&w, p->slot[i].value);
             wstr(&w, p->slot[i].text);
         }
+        if (p->v12) {                        /* protocol 1.2 trailer */
+            w8(&w, p->cursor); w14(&w, p->item_idx); w14(&w, p->item_count); wstr(&w, p->path);
+            if ((p->cursor >= R4P_NSLOTS && p->cursor != R4P_CURSOR_NONE) ||
+                (p->item_count ? p->item_idx >= p->item_count : p->item_idx != 0))
+                w.bad = 1;
+        }
+        break;
+    }
+    case R4P_FOCUS: {
+        const r4p_focus_t *f = &m->u.focus;
+        w8(&w, f->cursor); w14(&w, f->item_idx); w14(&w, f->item_count);
+        if ((f->cursor >= R4P_NSLOTS && f->cursor != R4P_CURSOR_NONE) || (f->item_count ? f->item_idx >= f->item_count : f->item_idx != 0))
+            w.bad = 1;
         break;
     }
     case R4P_VALUE:
@@ -113,6 +126,11 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
             w.bad = 1;
         w14(&w, m->u.value.value);
         wstr(&w, m->u.value.text);
+        if (m->u.value.flags) {              /* protocol 1.2 */
+            w8(&w, m->u.value.flags);
+            if (m->u.value.flags & ~R4P_VF_BIG)
+                w.bad = 1;
+        }
         break;
     case R4P_LEDS: {
         uint8_t pk[R4P_LED_BYTES];
@@ -251,6 +269,29 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
             g->slot[i].value = (uint16_t)r14(&r);
             rstr(&r, g->slot[i].text);
         }
+        g->v12 = 0;
+        g->cursor = R4P_CURSOR_NONE;
+        g->item_idx = g->item_count = 0;
+        g->path[0] = 0;
+        if (!r.bad && r.at < r.n) {          /* protocol 1.2 trailer: all of it */
+            g->v12 = 1;
+            g->cursor = (uint8_t)r8(&r);
+            g->item_idx = (uint16_t)r14(&r);
+            g->item_count = (uint16_t)r14(&r);
+            rstr(&r, g->path);
+            if ((g->cursor >= R4P_NSLOTS && g->cursor != R4P_CURSOR_NONE) ||
+                (g->item_count ? g->item_idx >= g->item_count : g->item_idx != 0))
+                r.bad = 1;
+        }
+        break;
+    }
+    case R4P_FOCUS: {
+        r4p_focus_t *f = &out->u.focus;
+        f->cursor = (uint8_t)r8(&r);
+        f->item_idx = (uint16_t)r14(&r);
+        f->item_count = (uint16_t)r14(&r);
+        if ((f->cursor >= R4P_NSLOTS && f->cursor != R4P_CURSOR_NONE) || (f->item_count ? f->item_idx >= f->item_count : f->item_idx != 0))
+            r.bad = 1;
         break;
     }
     case R4P_VALUE:
@@ -259,6 +300,9 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
             r.bad = 1;
         out->u.value.value = (uint16_t)r14(&r);
         rstr(&r, out->u.value.text);
+        out->u.value.flags = !r.bad && r.at < r.n ? (uint8_t)r8(&r) : 0u;     /* protocol 1.2 */
+        if (out->u.value.flags & ~R4P_VF_BIG)
+            r.bad = 1;
         break;
     case R4P_LEDS: {
         uint8_t pk[R4P_LED_BYTES];

@@ -7,7 +7,7 @@ USB-MIDI, and the app draws pages (four labelled values with bars, track colour,
 **Not affiliated with M-VAVE.** FM-1 is M-VAVE's product name; this is an independent project built on the community
 firmware platform [fm1-base](https://github.com/charlesvestal/fm1-base). See `NOTICE`.
 
-Status: **complete in the host simulator, not yet run on an FM-1.** RUN4 mode (protocol v1.1 in `docs/PROTOCOL.md`: codec,
+Status: **complete in the host simulator, not yet run on an FM-1.** RUN4 mode (protocol v1.2 in `docs/PROTOCOL.md`: codec,
 LIST, non-blocking output, SETUP page, touch velocity and aftertouch) and Synth mode (Felucca's FM6 engine, effects, DX7
 SysEx import, arpeggiator, sequencer, pages) are implemented and tested in fm1-base's host simulator and in native
 tests (`make test`). Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:

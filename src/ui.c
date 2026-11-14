@@ -13,6 +13,7 @@
 #define R4_RED    RGB(236, 70, 60)
 
 enum { D_HEAD = 1, D_TILE0 = 2, D_TILES = 2 | 4 | 8 | 16, D_FOOT = 32, D_TOAST = 64, D_CLEAR = 128, D_DOTS = 256,
+       D_BIG = 512, D_GAP = 1024,             /* protocol 1.2: the big value view; the strip between the tile rows */
        D_TOAST_UNDER = 2 | 4,                 /* the two tiles of the top row: the toast sits in y 84..113 */
        D_ALL = D_HEAD | D_TILES | D_FOOT | D_CLEAR | D_DOTS };
 
@@ -32,6 +33,11 @@ typedef struct {
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
     r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
+    /* protocol 1.2 (a host that said minor 2): the big value view */
+    uint8_t v12;                    /* the host speaks 1.2 */
+    uint8_t touch1;                 /* the tile of the knob turned last + 1 (framed until its VALUE), 0 = none */
+    uint8_t big1;                   /* the slot shown big + 1, 0 = the four tiles */
+    uint32_t touch_at, big_until;
 } ui_t;
 static ui_t ui;
 #define PG (ui.setup ? &ui.setup_page : &ui.page)   /* the page being drawn */
@@ -42,6 +48,8 @@ static void ui_reset_page(void)
     strcpy(ui.page.title, "RUN4");
     ui.page.r = 120; ui.page.g = 70; ui.page.b = 20;
     ui.page.page_count = 0;
+    ui.page.cursor = R4P_CURSOR_NONE;
+    ui.touch1 = ui.big1 = 0;
 }
 static void ui_connect(int on)
 {
@@ -54,6 +62,7 @@ static void ui_connect(int on)
     }
     ui_reset_page();
     ui.list_open = 0;
+    ui.big1 = ui.touch1 = 0;
     memset(&ui.st, 0, sizeof ui.st);
     ui.dirty = D_ALL;
 }
@@ -118,18 +127,38 @@ static uint16_t on_accent(void)                       /* text on the accent: bla
 }
 
 /* ------------------------------------------------------------- header --- */
+static int host_page(void) { return !ui.setup && !ui.local; }   /* the host's page (not SETUP, not Synth mode) */
+static void fit(char *t, const char *s, const felucca_font_t *f, int32_t w)   /* s cut to w pixels */
+{
+    size_t n = 0;
+    while (s[n] && n < R4P_STR_MAX)
+        t[n] = s[n], n++;
+    t[n] = 0;
+    while (n && pwidth(f, t) > w)
+        t[--n] = 0;
+}
 static void draw_head(void)
 {
-    int32_t w;
+    int32_t w = 0;
+    char t[R4P_STR_MAX + 1];
     cv_begin(240, 34, accent(100));
     cv_rect(0, 32, 240, 2, accent(55));
-    ptext(8, 8, &FONT_B, PG->title, on_accent());
     if (PG->track[0]) {                          /* the track in a dark pill, in the track colour */
         w = pwidth(&FONT_B, PG->track) + 14;
         cv_rect(232 - w, 5, w, 22, R4_BG);
         ptext(232 - w + 7, 8, &FONT_B, PG->track, accent(100));
     }
+    fit(t, host_page() && PG->path[0] ? PG->path : PG->title, &FONT_B, 232 - w - 14);   /* 1.2: the path, where given */
+    ptext(8, 8, &FONT_B, t, on_accent());
     cv_blit(0, 0);
+}
+static int hl_tile(void)                          /* the framed tile: the knob just turned, else the host's cursor */
+{
+    if (!host_page())
+        return -1;
+    if (ui.touch1)
+        return ui.touch1 - 1;
+    return PG->cursor < R4P_NSLOTS ? PG->cursor : -1;
 }
 
 /* -------------------------------------------------------------- tiles --- */
@@ -189,6 +218,10 @@ static void draw_tile(int i)
     } else {
         ptext(BAR_X, 6, &FONT_XS, s->name[0] ? s->name : "-", R4_DIM);
     }
+    if (hl_tile() == i) {                                       /* 1.2: in focus, a frame in the page colour */
+        cv_rect(0, 0, 116, 2, accent(100)); cv_rect(0, 74, 116, 2, accent(100));
+        cv_rect(114, 0, 2, 76, accent(100));
+    }
     cv_blit((uint32_t)x, (uint32_t)y);
 }
 
@@ -207,10 +240,17 @@ static void draw_foot(void)
         u_int((unsigned)PG->page_idx + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int((unsigned)n, u); u_cat(t, u);
         ptext(8, 5, &FONT_XS, t, R4_LABEL);
     }
+    x = 232;
+    if (host_page() && PG->item_count) {                   /* 1.2: the focused parameter's position, right-aligned */
+        t[0] = 0; u_int((unsigned)PG->item_idx + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int(PG->item_count, u); u_cat(t, u);
+        x -= pwidth(&FONT_XS, t);
+        ptext(x, 5, &FONT_XS, t, accent(100));
+        x -= 10;
+    }
     if (PG->bank_count > 1) {                              /* bank, right-aligned */
         t[0] = 0; u_cat(t, "BK "); u_int((unsigned)PG->bank_idx + 1u, u); u_cat(t, u); u_cat(t, "/");
         u_int((unsigned)PG->bank_count, u); u_cat(t, u);
-        ptext(232 - pwidth(&FONT_XS, t), 5, &FONT_XS, t, R4_LABEL);
+        ptext(x - pwidth(&FONT_XS, t), 5, &FONT_XS, t, R4_LABEL);
     }
     if (ui.shift) {
         cv_rect(160, 4, 38, 13, accent(100));
@@ -309,6 +349,87 @@ static void draw_list(void)
     cv_blit(0, 200);
 }
 
+/* ------------------------------------------------- big value (1.2) --- */
+/* the slot ui.big1 - 1 over the tile area (x 4..235, y 38..193), in two bands: where (path or title), name, the value
+ * large; then a wide bar and the position */
+static void draw_big(void)
+{
+    const r4p_slot_t *s = &PG->slot[(ui.big1 - 1u) & 3u];
+    char t[R4P_STR_MAX + 1], u[12];
+    const felucca_font_t *f = pwidth(&FONT_L, s->text) <= 212 ? &FONT_L : pwidth(&FONT_M, s->text) <= 212 ? &FONT_M : &FONT_B;
+    int32_t bw = 200, bx = 16, by = 14, fill, n, i, c;
+    cv_begin(232, 78, R4_TILE);
+    cv_rect(0, 0, 232, 2, accent(100));
+    cv_rect(0, 0, 3, 78, accent(100));
+    cv_rect(229, 0, 3, 78, accent(100));
+    fit(t, PG->path[0] ? PG->path : PG->title, &FONT_XS, 212);
+    ptext(12, 6, &FONT_XS, t, R4_LABEL);
+    fit(t, s->name, &FONT_B, 212);
+    ptext(12, 22, &FONT_B, t, accent(100));
+    ptext(12, f == &FONT_L ? 42 : f == &FONT_M ? 48 : 54, f, s->text, R4_TEXT);
+    cv_blit(4, 38);
+    cv_begin(232, 78, R4_TILE);
+    cv_rect(0, 0, 3, 78, accent(100));
+    cv_rect(229, 0, 3, 78, accent(100));
+    cv_rect(0, 76, 232, 2, accent(100));
+    switch (s->kind) {
+    case R4P_KIND_UNI:
+        cv_rect(bx, by, bw, 14, R4_EDGE);
+        cv_rect(bx, by, s->value * bw / R4P_V14_MAX, 14, accent(100));
+        break;
+    case R4P_KIND_BI:
+        cv_rect(bx, by, bw, 14, R4_EDGE);
+        c = bx + bw / 2;
+        fill = ((int32_t)s->value - 8192) * (bw / 2) / 8191;
+        if (fill >= 0) cv_rect(c, by, fill, 14, accent(100));
+        else cv_rect(c + fill, by, -fill, 14, accent(100));
+        cv_rect(c - 1, by - 3, 2, 20, R4_TEXT);
+        break;
+    case R4P_KIND_ENUM:
+        n = (s->value >> 7) & 0x7F;
+        n = n > 16 ? 16 : n < 2 ? 2 : n;
+        for (i = 0; i < n; i++) {
+            int32_t x0 = bx + i * bw / n, x1 = bx + (i + 1) * bw / n - 3;
+            cv_rect(x0, by, x1 - x0, 14, i == (s->value & 0x7F) ? accent(100) : R4_EDGE);
+        }
+        break;
+    case R4P_KIND_TOGGLE:
+        cv_rect(bx, by - 4, 60, 22, s->value ? accent(100) : R4_EDGE);
+        cv_rect(s->value ? bx + 40 : bx + 4, by, 16, 14, s->value ? on_accent() : R4_DIM);
+        break;
+    default:
+        break;
+    }
+    t[0] = 'K'; t[1] = (char)('1' + ((ui.big1 - 1u) & 3u)); t[2] = 0;
+    ptext(16, 44, &FONT_XS, t, R4_DIM);
+    if (PG->item_count) {
+        t[0] = 0; u_int((unsigned)PG->item_idx + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int(PG->item_count, u); u_cat(t, u);
+        ptext(216 - pwidth(&FONT_XS, t), 44, &FONT_XS, t, R4_LABEL);
+    }
+    cv_blit(4, 116);
+}
+/* a knob K1..K4 was turned (app.c; a 1.2 host, RUN4 mode): frame its tile until its VALUE comes */
+static void ui_touch(uint32_t slot)
+{
+    if (!ui.v12 || !host_page() || ui.list_open || !ui.connected)
+        return;
+    if (ui.touch1 && ui.touch1 != slot + 1u)
+        ui.dirty |= (uint16_t)(D_TILE0 << (ui.touch1 - 1u));
+    if (ui.touch1 != slot + 1u)
+        ui.dirty |= (uint16_t)(D_TILE0 << slot);
+    if (PG->cursor < R4P_NSLOTS && PG->cursor != slot)
+        ui.dirty |= (uint16_t)(D_TILE0 << PG->cursor);        /* the host's frame gives way meanwhile */
+    ui.touch1 = (uint8_t)(slot + 1u);
+    ui.touch_at = plat_ms();
+}
+static void big_end(void)
+{
+    if (!ui.big1)
+        return;
+    ui.big1 = 0;
+    ui.dirty |= D_TILES | D_GAP;
+}
+
 /* ---------------------------------------------------------------- draw --- */
 static void sq_draw_grid(void);             /* synth_ui.c: the SEQ page's body (D_TILE0 / 1: the grid, 2 / 3: the tiles) */
 static void sq_draw_tiles(void);
@@ -319,6 +440,16 @@ static void ui_draw(void)
     if (ui.toast_until && (int32_t)(now - ui.toast_until) >= 0) {
         ui.toast_until = 0;
         ui.dirty |= D_TOAST_UNDER;                             /* the band under the toast */
+    }
+    if (ui.big1 && (int32_t)(now - ui.big_until) >= 0) {       /* 1.2: the big value's time is up: the tiles again */
+        big_end();
+        ui.touch1 = 0;
+    }
+    if (ui.touch1 && !ui.big1 && now - ui.touch_at > 1500u) {  /* a turn whose VALUE never came */
+        ui.dirty |= (uint16_t)(D_TILE0 << (ui.touch1 - 1u));
+        if (PG->cursor < R4P_NSLOTS)
+            ui.dirty |= (uint16_t)(D_TILE0 << PG->cursor);
+        ui.touch1 = 0;
     }
     if (ui.list_open && ui.connected && !ui.setup) {
         if (ui.dirty & (D_ALL | D_TILES | D_FOOT | D_HEAD | D_TOAST))
@@ -352,7 +483,12 @@ static void ui_draw(void)
             sq_draw_grid();
         if (ui.dirty & (D_TILE0 << 2 | D_TILE0 << 3))
             sq_draw_tiles();
+    } else if (ui.big1 && host_page() && ui.connected) {      /* 1.2: the big value over the tiles */
+        if (ui.dirty & (D_BIG | D_TOAST_UNDER | D_CLEAR))
+            draw_big();
     } else {
+        if (ui.dirty & D_GAP)
+            lcd_fill(4, 114, 232, 4, R4_BG);
         for (i = 0; i < 4; i++)
             if (ui.dirty & (D_TILE0 << i))
                 draw_tile(i);
@@ -361,7 +497,7 @@ static void ui_draw(void)
         draw_foot();
     if ((ui.dirty & (D_TOAST | D_TOAST_UNDER)) && ui.toast_until)
         draw_toast();
-    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS);
+    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP);
 }
 
 /* --------------------------------------------- host frames into state --- */
@@ -384,15 +520,40 @@ static void ui_apply(const r4p_msg_t *m)
         break;
     case R4P_PAGE:
         ui.page = m->u.page;
+        big_end();                                             /* (1.2: a new page ends the big value) */
+        ui.touch1 = 0;
         ui.dirty |= D_HEAD | D_TILES | D_FOOT;
         break;
-    case R4P_VALUE:
+    case R4P_VALUE: {
+        uint32_t now = plat_ms();
         i = m->u.value.slot;
         if (ui.page.slot[i].value != m->u.value.value || strcmp(ui.page.slot[i].text, m->u.value.text)) {
             ui.page.slot[i].value = m->u.value.value;
             strcpy(ui.page.slot[i].text, m->u.value.text);
             ui.dirty |= (uint16_t)(D_TILE0 << i);
+            if (ui.big1 == (uint8_t)(i + 1))
+                ui.dirty |= D_BIG;
         }
+        /* 1.2: the big value for a slot just turned (its VALUE within 1.5 s) or flagged; a VALUE of the slot shown keeps it */
+        if (ui.v12 && host_page() && !ui.list_open &&
+            ((m->u.value.flags & R4P_VF_BIG) || (ui.touch1 == (uint8_t)(i + 1) && now - ui.touch_at <= 1500u) ||
+             ui.big1 == (uint8_t)(i + 1))) {
+            if (ui.big1 != (uint8_t)(i + 1))
+                ui.dirty |= D_BIG;
+            ui.big1 = (uint8_t)(i + 1);
+            ui.big_until = now + 1200u;
+        }
+        break;
+    }
+    case R4P_FOCUS:                                            /* 1.2: the focus moves; the tiles it leaves and enters */
+        if (ui.page.cursor < R4P_NSLOTS)
+            ui.dirty |= (uint16_t)(D_TILE0 << ui.page.cursor);
+        ui.page.cursor = m->u.focus.cursor;
+        ui.page.item_idx = m->u.focus.item_idx;
+        ui.page.item_count = m->u.focus.item_count;
+        if (ui.page.cursor < R4P_NSLOTS)
+            ui.dirty |= (uint16_t)(D_TILE0 << ui.page.cursor);
+        ui.dirty |= D_FOOT | (ui.big1 ? D_BIG : 0u);
         break;
     case R4P_STATUS:
         if (memcmp(&ui.st, &m->u.status, sizeof ui.st)) {

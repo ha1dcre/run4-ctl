@@ -1,0 +1,78 @@
+# Protocol 1.2: the path in the header, the focused tile framed, the position; FOCUS moves it; a turned knob frames its
+# tile and its VALUE shows it big for 1.2 s after the last one; a VALUE flagged big does the same; a 1.1 host sees none.
+@ACK12@
+wait 100
+expect host_minor 2
+expect_sysex @SYNC@
+sysex_out
+@WEAR@
+@STATUS@
+wait 100
+expect cursor 1
+shot v12_page.png
+@FOCUS2@
+wait 100
+expect cursor 2
+expect item_idx 5
+shot v12_focus.png
+# K2 turned: the ENC goes out and its tile is framed at once; its VALUE shows it big
+turn K2 1
+wait 30
+expect touch 2
+expect_sysex @ENC4_+1@
+shot v12_touch.png
+@V1_FAIL@
+wait 100
+expect big 2
+shot v12_big.png
+@V1_FAIL2@
+wait 900
+expect big 2
+shot v12_big2.png
+wait 600
+expect big 0
+expect touch 0
+shot v12_back.png
+# a VALUE flagged big (the parameter touched in the app)
+@V2_BIG@
+wait 100
+expect big 3
+shot v12_big_flag.png
+# another slot's plain VALUE leaves it; a PAGE ends it
+@V0@
+wait 100
+expect big 3
+@WEAR_NOCUR@
+wait 50
+expect big 0
+expect cursor 127
+shot v12_nocursor.png
+# a plain VALUE without a turn: no big view
+@V1_FAIL@
+wait 100
+expect big 0
+# a turn whose VALUE never comes: the frame goes after 1.5 s
+turn K1 1
+wait 30
+expect touch 1
+wait 1600
+expect touch 0
+# bad 1.2 frames are dropped
+expect frames_bad 0
+@FOCUS_BAD@
+@V1_BADFLAG@
+wait 50
+expect frames_bad 2
+# a 1.1 host: no big view, no frame
+@ACK@
+wait 100
+expect host_minor 1
+@TAPE@
+wait 50
+turn K2 1
+wait 30
+expect touch 0
+@V1_FAIL@
+wait 100
+expect big 0
+shot v12_host11.png

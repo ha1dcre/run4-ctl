@@ -92,9 +92,23 @@ def decode(frame):
         for _ in range(4):
             name, kind, val = r.string(), r.u8(), r.v14()
             d["slots"].append(dict(name=name, kind=KIND_NAMES[kind] if kind < 5 else "?%d" % kind, value=val, text=r.string()))
+        if r.i < len(r.b):                                   # protocol 1.2 trailer
+            d.update(cursor=r.u8(), item_idx=r.v14(), item_count=r.v14(), path=r.string())
+            if (d["cursor"] > 3 and d["cursor"] != 127) or (d["item_idx"] >= d["item_count"] if d["item_count"] else d["item_idx"]):
+                raise Bad("bad PAGE trailer")
+        if r.i != len(r.b):
+            raise Bad("trailing bytes")
         return d
     if cmd == 0x43:
-        return dict(cmd="VALUE", slot=r.u8(), value=r.v14(), text=r.string())
+        d = dict(cmd="VALUE", slot=r.u8(), value=r.v14(), text=r.string(), flags=r.u8() if r.i < len(r.b) else 0)
+        if d["flags"] & ~1:
+            raise Bad("VALUE flags")
+        return d
+    if cmd == 0x48:
+        d = dict(cmd="FOCUS", cursor=r.u8(), item_idx=r.v14(), item_count=r.v14())
+        if (d["cursor"] > 3 and d["cursor"] != 127) or (d["item_idx"] >= d["item_count"] if d["item_count"] else d["item_idx"]):
+            raise Bad("bad FOCUS")
+        return d
     if cmd == 0x44:
         e = []
         for byte in f[5:-1]:
@@ -120,10 +134,15 @@ def show(d):
                 v = t["value"]
                 if t["kind"] == "enum":
                     v = "%d of %d" % ((v & 0x7F) + 1, v >> 7)
-                s += "\n        K%d %-10s %-9s %s  (%s)" % (i + 1, t["name"], t["kind"], t["text"], v)
+                s += "\n        %sK%d %-10s %-9s %s  (%s)" % (">" if d.get("cursor") == i else " ", i + 1, t["name"], t["kind"], t["text"], v)
+        if "path" in d:
+            s += "\n        at %s  %s" % (d["path"] or "-", "%d/%d" % (d["item_idx"] + 1, d["item_count"]) if d["item_count"] else "")
         return s
     if c == "VALUE":
-        return "VALUE K%d = %s (%d)" % (d["slot"] + 1, d["text"], d["value"])
+        return "VALUE K%d = %s (%d)%s" % (d["slot"] + 1, d["text"], d["value"], "  BIG" if d["flags"] & 1 else "")
+    if c == "FOCUS":
+        return "FOCUS %s  %s" % ("K%d" % (d["cursor"] + 1) if d["cursor"] < 4 else "none",
+                                 "%d/%d" % (d["item_idx"] + 1, d["item_count"]) if d["item_count"] else "")
     if c == "LEDS":
         return "LEDS  buttons %s  keys %s" % (d["btn"] or "-", d["keys"] or "-")
     if c == "STATUS":
@@ -146,7 +165,7 @@ MODE_RUN4, FW = 0, (0, 4)
 
 
 def hello():
-    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4, 1])
+    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4, 2])      # protocol 1.2
 
 
 def btn(i, down):
@@ -345,7 +364,7 @@ def selftest():
 
     h = lambda s: [int(x, 16) for x in s.split()]  # noqa: E731
     # device -> host: the bytes the C codec produces (tests/r4p_test.c, tests/scenarios)
-    eq(hello(), h("F0 7D 52 34 01 01 00 04 00 01 F7"), "HELLO")
+    eq(hello(), h("F0 7D 52 34 01 01 00 04 00 02 F7"), "HELLO")
     eq(btn(0, True), h("F0 7D 52 34 02 00 01 F7"), "BTN down")
     eq(btn(13, False), h("F0 7D 52 34 02 0D 00 F7"), "BTN up")
     eq(enc(3, 1), h("F0 7D 52 34 03 03 41 F7"), "ENC +1")
@@ -365,7 +384,19 @@ def selftest():
     eq([(s["name"], s["kind"], s["value"], s["text"]) for s in p["slots"]],
        [("STEPS", "uni", 11000, "11/16"), ("DENSITY", "uni", 10200, "62%"), ("MODE", "enum", 5 << 7 | 2, "EUCLID"),
         ("GATE", "toggle", 1, "ON")], "PAGE slots")
-    eq(decode(h("F0 7D 52 34 43 02 43 28 03 31 30 78 F7")), dict(cmd="VALUE", slot=2, value=8616, text="10x"), "VALUE")
+    eq(decode(h("F0 7D 52 34 43 02 43 28 03 31 30 78 F7")), dict(cmd="VALUE", slot=2, value=8616, text="10x", flags=0), "VALUE")
+    # protocol 1.2: the PAGE trailer, FOCUS, VALUE flags
+    w = decode(f4.wear())
+    eq((w["cursor"], w["item_idx"], w["item_count"], w["path"]), (1, 4, 12, "TAPE > WEAR"), "PAGE 1.2 trailer")
+    eq("cursor" in p, False, "PAGE 1.1 has no trailer")
+    eq(decode(f4.focus(2, 5, 12)), dict(cmd="FOCUS", cursor=2, item_idx=5, item_count=12), "FOCUS")
+    eq(decode(f4.value(2, 12000, "0.73", 1))["flags"], 1, "VALUE flags")
+    for bad in (f4.frame("FOCUS", [5, 0, 0, 0, 0]), f4.frame("VALUE", [1, 0, 1, 1, 0x41, 2])):
+        try:
+            decode(bad)
+            eq("accepted", "Bad", "bad 1.2 frame")
+        except Bad:
+            n[0] += 1
     eq(decode(f4.status(1203, 12, 2, 1)), dict(cmd="STATUS", bpm=120.3, bar=12, beat=2, flags=1), "STATUS")
     eq(decode(f4.toast("SAVED", 12)), dict(cmd="TOAST", text="SAVED", seconds=1.2), "TOAST")
     eq(decode(f4.toast("X", 0))["seconds"], 1.5, "TOAST default")

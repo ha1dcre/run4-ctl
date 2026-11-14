@@ -204,4 +204,5 @@ the USB-only package. **Not verified on a device**: the simulator models the lin
 ## Versioning
 
 `proto_ver` is 1. A host should reject a HELLO with a `proto_ver` it does not know; unknown commands are ignored by
-the device.
+the device. Minors so far: 1.0 (no minor byte), 1.1 (LIST, LIST_PICK), 1.2 (PAGE trailer, FOCUS, VALUE flags, the big
+value view); the firmware's HELLO says 2. Both sides speak the lower of the two minors.

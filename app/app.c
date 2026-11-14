@@ -840,6 +840,8 @@ static void input(void)
         }
         if (d)
             r4p_enc_add(&ctl.enc, (uint8_t)k, d);
+        if (d && k >= 3)
+            ui_touch(k - 3u);                          /* 1.2: frame the tile; its VALUE shows it big */
         if (tx_ok(10u)) {
             int t = r4p_enc_take(&ctl.enc, (uint8_t)k);
             if (t)
@@ -900,6 +902,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
         ui_connect(1);
         ctl.leds = (r4p_leds_t){{0}, {0}};
         ctl.host_minor = m.u.ack.minor;
+        ui.v12 = m.u.ack.minor >= 2;                   /* protocol 1.2: the big value view (ui.c) */
         ctl.pot_sent = -1;
         ctl.want_sync = 1;
         ctl.want_pot = 1;
@@ -907,7 +910,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     case R4P_LEDS:
         ctl.leds = m.u.leds;
         break;
-    case R4P_PAGE: case R4P_VALUE: case R4P_STATUS: case R4P_TOAST: case R4P_LIST:
+    case R4P_PAGE: case R4P_VALUE: case R4P_STATUS: case R4P_TOAST: case R4P_LIST: case R4P_FOCUS:
         if (ui.connected && mode == MODE_RUN4)                              /* (frames before the ack are the previous session's) */
             ui_apply(&m);
         break;
@@ -1049,6 +1052,10 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "syn_arp")) *got = syn.arp_on;
     else if (!strcmp(what, "list")) *got = ui.list_open ? ui.list.sel + 1 : 0;
     else if (!strcmp(what, "host_minor")) *got = ctl.host_minor;
+    else if (!strcmp(what, "big")) *got = ui.big1;                         /* 1.2: the slot shown big + 1, 0 = none */
+    else if (!strcmp(what, "touch")) *got = ui.touch1;
+    else if (!strcmp(what, "cursor")) *got = ui.page.cursor;
+    else if (!strcmp(what, "item_idx")) *got = ui.page.item_idx;
     else if (!strcmp(what, "set_vel")) *got = setup.vel;
     else if (!strcmp(what, "set_at")) *got = setup.at;
     else if (!strcmp(what, "set_led")) *got = setup.led;

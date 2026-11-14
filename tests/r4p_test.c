@@ -84,7 +84,7 @@ static void t_page_value_status_toast(void)
     m.u.page.slot[0].kind = 5; CHECK(enc(&m) == 0);                    /* bad kind */
     m.u.page.slot[0].kind = 1; m.u.page.r = 128; CHECK(enc(&m) == 0);  /* colour is 7 bit */
 
-    m.cmd = R4P_VALUE; m.u.value.slot = 3; m.u.value.value = 16383; strcpy(m.u.value.text, "+12.0 dB");
+    m.cmd = R4P_VALUE; m.u.value.slot = 3; m.u.value.value = 16383; strcpy(m.u.value.text, "+12.0 dB"); m.u.value.flags = 0;
     CHECK(round_trip(&m, &b) == 1 && b.u.value.slot == 3 && b.u.value.value == 16383 && !strcmp(b.u.value.text, "+12.0 dB"));
     m.u.value.value = 0; CHECK(round_trip(&m, &b) == 1 && b.u.value.value == 0);
     m.u.value.slot = 4; CHECK(enc(&m) == 0);
@@ -301,6 +301,86 @@ static void t_v11(void)
     printf("  max LIST frame: %u bytes\n", (unsigned)n);
 }
 
+/* protocol 1.2: the PAGE trailer (cursor, position, path), FOCUS, VALUE flags; 1.1 frames unchanged */
+static void t_v12(void)
+{
+    r4p_msg_t m, b;
+    size_t n, n11, i;
+    uint8_t f[700];
+    m.cmd = R4P_PAGE; fill_page(&m.u.page);
+    n11 = enc(&m);
+    CHECK(r4p_parse(buf, n11, &b) == 1 && !b.u.page.v12 && b.u.page.cursor == R4P_CURSOR_NONE && b.u.page.item_count == 0 &&
+          b.u.page.path[0] == 0);
+    m.u.page.v12 = 1; m.u.page.cursor = 2; m.u.page.item_idx = 4; m.u.page.item_count = 12;
+    strcpy(m.u.page.path, "TAPE > WEAR");
+    n = enc(&m);
+    CHECK(n == n11 + 1 + 2 + 2 + 1 + 11);
+    /* the trailer's bytes: cursor, idx14, count14, path */
+    CHECK(buf[n11 - 1] == 2 && buf[n11] == 0 && buf[n11 + 1] == 4 && buf[n11 + 2] == 0 && buf[n11 + 3] == 12 && buf[n11 + 4] == 11 &&
+          buf[n11 + 5] == 'T');
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.page.v12 && b.u.page.cursor == 2 && b.u.page.item_idx == 4 && b.u.page.item_count == 12 &&
+          !strcmp(b.u.page.path, "TAPE > WEAR") && !strcmp(b.u.page.slot[3].text, m.u.page.slot[3].text));
+    memcpy(f, buf, n);
+    for (i = n11 + 1; i < n - 1; i++) {             /* a partial trailer is refused (a cut right at its start is a 1.1 page) */
+        uint8_t t[700];
+        memcpy(t, f, i); t[i] = 0xF7;
+        CHECK(r4p_parse(t, i + 1, &b) == -1);
+    }
+    m.u.page.cursor = R4P_CURSOR_NONE; m.u.page.item_idx = 0; m.u.page.item_count = 0; m.u.page.path[0] = 0;
+    CHECK(round_trip(&m, &b) == 1 && b.u.page.v12 && b.u.page.cursor == R4P_CURSOR_NONE && b.u.page.item_count == 0);
+    m.u.page.cursor = 4; CHECK(enc(&m) == 0);                        /* cursor 0..3 or 127 */
+    m.u.page.cursor = 0; m.u.page.item_idx = 12; m.u.page.item_count = 12; CHECK(enc(&m) == 0);    /* idx < count */
+    m.u.page.item_idx = 1; m.u.page.item_count = 0; CHECK(enc(&m) == 0);                          /* no count: idx 0 */
+    m.u.page.item_idx = 16383; m.u.page.item_count = 16383; CHECK(enc(&m) == 0);
+    m.u.page.item_idx = 16382; CHECK(round_trip(&m, &b) == 1 && b.u.page.item_idx == 16382 && b.u.page.item_count == 16383);
+    f[n11 - 1] = 5; CHECK(r4p_parse(f, n, &b) == -1);               /* the parser checks the same */
+    f[n11 - 1] = 2; f[n11 + 1] = 12; CHECK(r4p_parse(f, n, &b) == -1);
+    f[n11 + 1] = 4; CHECK(r4p_parse(f, n, &b) == 1);
+    /* the longest PAGE: every string 24 escaped characters, the path too */
+    {
+        int k, j;
+        memset(&m.u.page, 0, sizeof m.u.page);
+        for (k = 0; k < 24; k++) m.u.page.title[k] = m.u.page.track[k] = m.u.page.path[k] = '\xD3';
+        for (j = 0; j < 4; j++) {
+            for (k = 0; k < 24; k++) m.u.page.slot[j].name[k] = m.u.page.slot[j].text[k] = '\xE9';
+            m.u.page.slot[j].kind = 4; m.u.page.slot[j].value = 16383;
+        }
+        m.u.page.r = m.u.page.g = m.u.page.b = 127;
+        m.u.page.v12 = 1; m.u.page.cursor = 3; m.u.page.item_idx = 16382; m.u.page.item_count = 16383;
+        n = enc(&m);
+        printf("  max PAGE frame 1.2: %zu bytes (%zu between F0 and F7; limit %d)\n", n, n - 2, R4P_FRAME_MAX);
+        CHECK(n == 569 && n - 2 < R4P_FRAME_MAX && r4p_parse(buf, n, &b) == 1 && (unsigned char)b.u.page.path[23] == 0xD3);
+    }
+    /* FOCUS */
+    m.cmd = R4P_FOCUS; m.u.focus.cursor = 1; m.u.focus.item_idx = 7; m.u.focus.item_count = 9;
+    n = enc(&m);
+    CHECK(n == 11 && buf[4] == 0x48 && buf[5] == 1 && buf[6] == 0 && buf[7] == 7 && buf[8] == 0 && buf[9] == 9);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_FOCUS && b.u.focus.cursor == 1 && b.u.focus.item_idx == 7 && b.u.focus.item_count == 9);
+    m.u.focus.cursor = R4P_CURSOR_NONE; m.u.focus.item_idx = 0; m.u.focus.item_count = 0;
+    CHECK(round_trip(&m, &b) == 1 && b.u.focus.cursor == R4P_CURSOR_NONE);
+    m.u.focus.cursor = 9; CHECK(enc(&m) == 0);
+    m.u.focus.cursor = 0; m.u.focus.item_idx = 3; m.u.focus.item_count = 3; CHECK(enc(&m) == 0);
+    {
+        uint8_t g[] = {0xF0, 0x7D, 0x52, 0x34, R4P_FOCUS, 0, 0, 1, 0, 2, 0xF7}, h[] = {0xF0, 0x7D, 0x52, 0x34, R4P_FOCUS, 0, 0, 1, 0xF7};
+        CHECK(r4p_parse(g, sizeof g, &b) == 1 && b.u.focus.item_idx == 1 && b.u.focus.item_count == 2);
+        CHECK(r4p_parse(h, sizeof h, &b) == -1);                    /* short */
+        g[5] = 127; CHECK(r4p_parse(g, sizeof g, &b) == 1);
+        g[5] = 126; CHECK(r4p_parse(g, sizeof g, &b) == -1);
+    }
+    /* VALUE flags: absent = 0 (a 1.1 VALUE), bit 0 = big, other bits refused */
+    m.cmd = R4P_VALUE; m.u.value.slot = 1; m.u.value.value = 100; strcpy(m.u.value.text, "0.40"); m.u.value.flags = 0;
+    n11 = enc(&m);
+    CHECK(r4p_parse(buf, n11, &b) == 1 && b.u.value.flags == 0);
+    m.u.value.flags = R4P_VF_BIG;
+    n = enc(&m);
+    CHECK(n == n11 + 1 && buf[n - 2] == 1 && r4p_parse(buf, n, &b) == 1 && b.u.value.flags == R4P_VF_BIG && !strcmp(b.u.value.text, "0.40"));
+    m.u.value.flags = 2; CHECK(enc(&m) == 0);
+    buf[n - 2] = 2; CHECK(r4p_parse(buf, n, &b) == -1);
+    /* HELLO says minor 2 */
+    n = r4p_hello(buf, sizeof buf, 0, 4, R4P_MODE_RUN4);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == 2);
+}
+
 int main(void)
 {
     t_simple();
@@ -311,6 +391,7 @@ int main(void)
     t_enc_acc();
     t_leds();
     t_v11();
+    t_v12();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

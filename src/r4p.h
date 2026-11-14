@@ -7,7 +7,10 @@
 #include <stdint.h>
 
 #define R4P_VER 1
-#define R4P_MINOR 1               /* protocol 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK */
+#define R4P_MINOR 2               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
+                                   * trailer (cursor, position, path), FOCUS, VALUE flags */
+#define R4P_CURSOR_NONE 127
+#define R4P_VF_BIG 1              /* VALUE flags bit 0: show the big value view */
 #define R4P_LIST_ROWS 7           /* items in one LIST frame (the window) */
 #define R4P_STR_MAX 24            /* characters in a string */
 #define R4P_NSLOTS 4
@@ -15,12 +18,13 @@
 #define R4P_NKEY 27
 #define R4P_NENC 7                /* 0 SELECT, 1 ALGO, 2 PRESETS, 3..6 K1..K4 */
 #define R4P_V14_MAX 16383
-#define R4P_FRAME_MAX 640         /* the most a device takes between F0 and F7 (fm1-base); ours stay far below */
+#define R4P_FRAME_MAX 640         /* the most a device takes between F0 and F7 (fm1-base); ours stay below (PAGE 1.2: 569) */
 
 enum {                            /* device -> host */
     R4P_HELLO = 0x01, R4P_BTN = 0x02, R4P_ENC = 0x03, R4P_POT = 0x04, R4P_SYNC_REQ = 0x05, R4P_LIST_PICK = 0x06,
     /* host -> device */
-    R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46, R4P_LIST = 0x47
+    R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46, R4P_LIST = 0x47,
+    R4P_FOCUS = 0x48
 };
 enum { R4P_KIND_EMPTY, R4P_KIND_UNI, R4P_KIND_BI, R4P_KIND_ENUM, R4P_KIND_TOGGLE, R4P_KIND_COUNT };
 enum { R4P_LED_OFF, R4P_LED_DIM, R4P_LED_ON, R4P_LED_BLINK };
@@ -35,8 +39,14 @@ typedef struct {
     uint8_t r, g, b;              /* 0..127 on the wire; the display scales x2 */
     uint8_t page_idx, page_count, bank_idx, bank_count;
     r4p_slot_t slot[R4P_NSLOTS];
+    /* protocol 1.2, the trailer: v12 = 1 when present (encode writes it, parse says whether it came); without it the
+     * parser leaves cursor R4P_CURSOR_NONE, item_idx = item_count = 0, path empty */
+    uint8_t v12, cursor;
+    uint16_t item_idx, item_count;
+    char path[R4P_STR_MAX + 1];
 } r4p_page_t;
-typedef struct { uint8_t slot; uint16_t value; char text[R4P_STR_MAX + 1]; } r4p_value_t;
+typedef struct { uint8_t slot; uint16_t value; char text[R4P_STR_MAX + 1]; uint8_t flags; } r4p_value_t;   /* flags: 1.2, 0 = absent */
+typedef struct { uint8_t cursor; uint16_t item_idx, item_count; } r4p_focus_t;                            /* 1.2 */
 typedef struct { uint8_t btn[R4P_NBTN], key[R4P_NKEY]; } r4p_leds_t;      /* R4P_LED_* each */
 typedef struct { uint16_t bpm10, bar; uint8_t beat, flags; } r4p_status_t;
 typedef struct { char text[R4P_STR_MAX + 1]; uint8_t dur100ms; } r4p_toast_t;
@@ -65,6 +75,7 @@ typedef struct {
         r4p_toast_t toast;
         r4p_list_t list;
         r4p_pick_t pick;
+        r4p_focus_t focus;
     } u;
 } r4p_msg_t;
 
