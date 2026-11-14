@@ -6,7 +6,13 @@
  * r4_udiv64_32(n, d): n / d for a 64-bit n whose quotient fits 32 bits (n >> 32 < d); 0xFFFFFFFF when it does not
  * (or d = 0). Two 32-bit divides on 16-bit digits (Hacker's Delight, divlu), one when n fits 32 bits.
  * r4_muldiv_s32(v, c, d): (int64_t)v * c / d as the low 32 bits a cast to int32_t keeps, for a small d > 0 and
- * 0 <= c < 65536 (an effect's mix: d 100, 200): v = q d + m, so v c / d = q c + m c / d, the parts of one sign. */
+ * 0 <= c < 65536 (an effect's mix: d 100, 200): v = q d + m, so v c / d = q c + m c / d, the parts of one sign.
+ *
+ * r4_smul64 / r4_umul64 / r4_usmul64: a 32 x 32 -> 64-bit product in a function of its own (noinline), for the
+ * render's fixed-point code. Inlined among loads, the FM-1's 64-bit multiply now and then leaves a register a bit
+ * off (felucca-bsp docs/CPU.md; build.py's note "64-bit multiplies inlined beside loads"); out of line, the product
+ * is used at once. The caller shifts (by constants). Not for the voices' per-sample loops (fm6_op_run, its own
+ * noinline function already). */
 #pragma once
 #include <stdint.h>
 
@@ -54,3 +60,7 @@ static inline int32_t r4_muldiv_s32(int32_t v, uint32_t c, int32_t d)
     int32_t q = v / d, m = v % d;            /* m has v's sign, |m| < d */
     return (int32_t)((uint32_t)q * c + (uint32_t)(m * (int32_t)c / d));
 }
+
+static __attribute__((noinline)) int64_t r4_smul64(int32_t a, int32_t b) { return (int64_t)a * b; }
+static __attribute__((noinline)) uint64_t r4_umul64(uint32_t a, uint32_t b) { return (uint64_t)a * b; }
+static __attribute__((noinline)) int64_t r4_usmul64(uint32_t a, int32_t b) { return (int64_t)a * b; }

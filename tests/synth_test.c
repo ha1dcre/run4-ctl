@@ -907,6 +907,21 @@ int main(int argc, char **argv)
         }
         CHECK(bad == 0);
         CHECK(bad2 == 0);
+        /* the out-of-line multiplies (r4_div.h): the same products as the inline expressions they replace */
+        for (bad = 0, k = 0; k < 2000000u; k++) {
+            int32_t sa, sb, v;
+            uint32_t ua, ub;
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            sa = (int32_t)x; sb = (int32_t)(x >> 32); ua = (uint32_t)(x >> 16); ub = (uint32_t)(x >> 40) << (k % 9u);
+            if (r4_smul64(sa, sb) != (int64_t)sa * sb || r4_umul64(ua, ub) != (uint64_t)ua * ub ||
+                r4_usmul64(ua, sb) != (int64_t)ua * sb ||
+                ((r4_umul64(ua, ub) << 4) >> 28) != (((uint64_t)ua * ((uint64_t)ub << 4)) >> 28))
+                bad++;
+            v = (int32_t)(k * 8u % (1u << 24)) - (1 << 23) + (int32_t)(k % 8u);   /* fx_drive's cube over its whole range */
+            if ((r4_smul64((int32_t)(r4_smul64(v, v) >> 23), v) >> 23) != (((int64_t)v * v >> 23) * v >> 23))
+                bad++;
+        }
+        CHECK(bad == 0);
         CHECK(r4_udiv64_32(0xFFFFFFFEull << 32 | 0xFFFFFFFFu, 0xFFFFFFFFu) == 0xFFFFFFFFu);
         CHECK(r4_udiv64_32(1ull << 32, 1u) == 0xFFFFFFFFu && r4_udiv64_32(5, 0) == 0xFFFFFFFFu);
     }

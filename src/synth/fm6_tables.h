@@ -4,7 +4,7 @@
  * MIT, and the FM6_* tables); not edited. See NOTICE. */
 #pragma once
 #include <stdint.h>
-#define FS 44100
+#define FM6_FS 44100
 #define CTL 32
 
 static const int16_t SINE[1025] = {
@@ -97,7 +97,7 @@ static const int16_t SINE[1025] = {
 };
 #define FM6_LFO_UNIT 18279     /* msfa Lfo::unit_ */
 #define FM6_PENV_UNIT 572    /* msfa PitchEnv::unit_ */
-#define FM6_FREQ_R 24932236u   /* 2^40 / FS: the Q30 mantissa -> a Q24 phase increment (fm6_freq) */
+#define FM6_FREQ_R 24932236u   /* 2^40 / FM6_FS: the Q30 mantissa -> a Q24 phase increment (fm6_freq) */
 #define FM6_AMS_C0 295293757   /* log2(e^12.2), Q24 (the AMS curve) */
 #define FM6_AMS_K 6618      /* d/dsensamp of it, Q24 / 1024 */
 static const uint32_t FM6_EXP2[1025] = {

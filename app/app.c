@@ -1971,7 +1971,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         dt = plat_ticks24() - t0;
         ctl.rend_ticks += dt;
         ctl.rend_frames += n;
-        syn_shed_calm(n, r4_udiv64_32((uint64_t)dt * 44100u, PLAT_TICKS_PER_US * 1000u * n));
+        syn_shed_calm(n, r4_udiv64_32(r4_umul64(dt, 44100u), PLAT_TICKS_PER_US * 1000u * n));
         syn_timed_due(0, 0xFFFFu);
         return;
     }
@@ -1985,7 +1985,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         ctl.rend_ticks += dt;
         ctl.rend_frames += n;
         /* the overload guard: this block's share of its time (n frames at 44.1 kHz), per mille */
-        syn_shed_calm(n, r4_udiv64_32((uint64_t)dt * 44100u, PLAT_TICKS_PER_US * 1000u * n));
+        syn_shed_calm(n, r4_udiv64_32(r4_umul64(dt, 44100u), PLAT_TICKS_PER_US * 1000u * n));
         return;
     }
     syn_shed_calm(n, 0);

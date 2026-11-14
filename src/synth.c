@@ -403,7 +403,7 @@ static void syn_morph(uint32_t n)
     } else {
         uint32_t per = MO_SECS[syn.mo_mode - MO_DRIFT] * 44100u;
         if (syn_mo.was_mode < MO_DRIFT || syn_mo.rephase)       /* a drift starts (or the knob moved): from there, to B */
-            syn_mo.ph = r4_udiv64_32((uint64_t)(syn.mo_pos > 100u ? 100u : syn.mo_pos) * 0x7FFFFFFFu, 100u);
+            syn_mo.ph = r4_udiv64_32(r4_umul64(syn.mo_pos > 100u ? 100u : syn.mo_pos, 0x7FFFFFFFu), 100u);
         syn_mo.ph += r4_udiv64_32((uint64_t)n << 32, per);      /* (n, a block, is far below per: 10 s at least) */
         tgt = (int32_t)((syn_mo.ph < 0x80000000u ? syn_mo.ph : ~syn_mo.ph) >> 15);
     }
@@ -771,9 +771,9 @@ static int32_t fx_drive(int32_t x)           /* a cubic soft clip; the amount is
     int64_t v, c;
     if (!fxv.drive)
         return x;
-    v = (int64_t)x * (256 + fxv.drive * 1792 / 100) >> 8;
+    v = r4_smul64(x, 256 + fxv.drive * 1792 / 100) >> 8;
     v = v > (1 << 23) ? (1 << 23) : v < -(1 << 23) ? -(1 << 23) : v;
-    c = (v * v >> 23) * v >> 23;
+    c = r4_smul64((int32_t)(r4_smul64((int32_t)v, (int32_t)v) >> 23), (int32_t)v) >> 23;   /* (|v| <= 2^23) */
     /* the rails land at 1.0 again; |v|, |c| <= 2^23, so in 32 bits (the FM-1 has no 64-bit divide) */
     return ((int32_t)v - (int32_t)c / 3) * 3 / 2;
 }
@@ -840,7 +840,7 @@ static int32_t syn_limit(int32_t x)          /* a soft ceiling: linear to 0.7, t
     if (a <= k)
         return x;
     r = (uint32_t)(a - k);                   /* 0 .. 2^31: the part over the knee, squeezed asymptotically to 0.3 */
-    r = r4_udiv64_32((uint64_t)r * 2516582u, r + 2516582u);         /* 0.3 * r / (r + 0.3) */
+    r = r4_udiv64_32(r4_umul64(r, 2516582u), r + 2516582u);         /* 0.3 * r / (r + 0.3) */
     a = k + r;
     return (int32_t)(x < 0 ? -a : a);
 }
@@ -950,7 +950,7 @@ static uint32_t syn_midi_frame(uint32_t t24, uint32_t prev, uint32_t span, uint3
         return 0;
     if ((uint32_t)since >= span)
         return n - 1u;
-    return r4_udiv64_32((uint64_t)(uint32_t)since * n, span);     /* (below n: since < span) */
+    return r4_udiv64_32(r4_umul64((uint32_t)since, n), span);     /* (below n: since < span) */
 }
 /* USB stems (an app built with usb_audio_channels: app-stems/): each sub-block's dry voices (mono) and what the
  * effects add (stereo), at the master's gain, before the limiter; frame: its first frame in the render; 0 = none */
@@ -1049,12 +1049,12 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             }
             for (i = 0; i < FM6_N; i++) {
                 int32_t l = ol[i], r = orr[i], x = od[i];
-                lr[2 * (b + i)] = syn_limit((int32_t)((int64_t)l * gain >> 12));
-                lr[2 * (b + i) + 1] = syn_limit((int32_t)((int64_t)r * gain >> 12));
+                lr[2 * (b + i)] = syn_limit((int32_t)(r4_smul64(l, gain) >> 12));
+                lr[2 * (b + i) + 1] = syn_limit((int32_t)(r4_smul64(r, gain) >> 12));
                 if (syn_stem_out) {
-                    sd[i] = (int32_t)((int64_t)x * gain >> 12);
-                    sl[i] = (int32_t)((int64_t)(l - x) * gain >> 12);
-                    sr[i] = (int32_t)((int64_t)(r - x) * gain >> 12);
+                    sd[i] = (int32_t)(r4_smul64(x, gain) >> 12);
+                    sl[i] = (int32_t)(r4_smul64(l - x, gain) >> 12);
+                    sr[i] = (int32_t)(r4_smul64(r - x, gain) >> 12);
                 }
             }
             if (syn_stem_out)
