@@ -22,7 +22,12 @@ Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Fel
             the sine table comes from Felucca-Engines, MIT); not edited.
   src/synth/fm6_factory.h  Felucca's own FM6 factory voices, as written by its tools/gen_fm6_patches.py (GPL-3.0-only).
   src/synth.c   the patch pack / unpack routines follow Felucca's eng_fm6.c (fm6_unpack / fm6_pack, GPL-3.0-only);
-            the rest of the file (voices, effects, arpeggiator, sequencer, DX7 SysEx) is new.
+            the rest of the file (voices, effects, arpeggiator, DX7 SysEx) is new.
+  src/synth_seq.c   the sequencer's step model (four notes, NOTE / TIE, velocity, chance), its live recording (Felucca
+            seq.c rec_note / rec_hold / rec_release: nearest step, overdub, held notes as TIEs, an early release puts
+            the last TIE back, no double trigger) and step entry (ui_input.c seq_entry: a chord into the cursor step,
+            letting go moves on) are adapted from Felucca (GPL-3.0-only, Copyright (C) 2026 Leo Kuroshita); the rest
+            (patterns, clock, swing, MIDI clock, storage, the grid editing) is new.
   The DX7 voice and bank formats are Yamaha's; no factory ROM data of any instrument is included.
 
 Files from fm1-base and felucca-bsp stay under the Mozilla Public License 2.0, file by file; the source of those

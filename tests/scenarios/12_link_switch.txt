@@ -1,0 +1,59 @@
+# Seamless switching: RUN4 mode linked, SEL + HOME to Synth mode, the host answers; SEL + REC / SEL + PLAY then go to
+# RUN4 as BTN (the synth's own transport stays put); SEL + HOME back: the HELLO goes at once and the host resyncs.
+@ACK@
+wait 100
+expect connected 1
+sysex_out
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 100
+expect mode 1
+expect_sysex F0 7D 52 34 01 01 00 04 01 01 F7
+@ACK@
+wait 100
+expect connected 1
+sysex_out
+press SEL
+wait 40
+tap REC
+wait 40
+expect toast 1
+shot link_run4_rec.png
+tap PLAY
+wait 40
+release SEL
+wait 100
+expect_sysex @BTN11_1@
+expect_sysex @BTN11_0@
+expect_sysex @BTN10_1@
+expect_sysex @BTN10_0@
+expect seq_rec 0
+expect syn_seq 0
+sysex_out
+# REC alone stays the synth's
+tap REC
+wait 60
+expect seq_rec 1
+expect btn_pending 0
+tap REC
+sysex_out
+# back to RUN4 mode: the HELLO (mode 0) goes at once, the host answers, the firmware asks for a sync
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 100
+expect mode 0
+expect_sysex F0 7D 52 34 01 01 00 04 00 01 F7
+sysex_out
+@ACK@
+wait 100
+expect connected 1
+expect_sysex @SYNC@
+@TAPE@
+wait 50
+shot link_back_to_run4.png

@@ -134,12 +134,19 @@ While a list is open the firmware keeps the buttons and encoders local (nothing 
 **Modes.** The firmware has two: RUN4 mode (everything above) and **Synth mode**, a standalone six-operator FM synthesizer
 (docs/MANUAL.md). **SEL + HOME** switches (the HOME press is not sent). The mode the FM-1 was left in is kept and booted
 into. HELLO's `mode` byte says which: 0 = RUN4, 1 = SYNTH. After a switch the firmware sends a HELLO with the new mode
-every second until HELLO_ACK, in both directions. In Synth mode it sends **nothing else**: no BTN, ENC or POT, the keys
-do not send notes, and PAGE / VALUE / LEDS / STATUS / TOAST / LIST from the host are ignored; MASTER is the volume and
+every second until HELLO_ACK, in both directions (the first HELLO goes at once, so a host that answers resyncs
+immediately). In Synth mode it sends nothing else but two buttons: **SEL + REC** and **SEL + PLAY** go out as BTN
+REC and BTN PLAY (press and release, ids 11 and 10, no SEL) while a HELLO_ACK for mode 1 was received, so the host's
+transport can record the synth; REC and PLAY alone, and every other control, stay local: no other BTN, no ENC or POT,
+the keys do not send notes, and PAGE / VALUE / LEDS / STATUS / TOAST / LIST from the host are ignored; MASTER is the volume and
 the pages are drawn locally. A host should stop driving the screen when it sees mode 1 and start again (new HELLO_ACK)
 when it sees mode 0. In Synth mode the MIDI in (USB, Bluetooth, the jack) plays the synth, so the FM-1 also works as a
 sound module (note on/off, sustain, pitch bend, all notes off, on the channel set in GLOBAL; omni by default) and DX7
-SysEx dumps are imported (see the manual).
+SysEx dumps are imported (see the manual). MIDI clock (F8) and START / CONTINUE / STOP (FA / FB / FC) in drive its
+sequencer and arpeggiator (clock AUTO, the default; the internal tempo again half a second after the last F8); with
+clock OUT it sends them. **USB audio:** the firmware keeps fm1-base's defaults `usb_audio_in` and `usb_audio_out`
+(stated in `app/fm1.toml`): the FM-1 is a USB audio device in both modes, so the host can record Synth mode's output
+over the same cable.
 
 **Bluetooth MIDI.** The protocol runs unchanged over a Bluetooth MIDI link when no USB computer is connected (with a
 computer on USB, the frames go to both links). The firmware is built with `ble = true` and fm1-base's own Bluetooth

@@ -6,7 +6,7 @@ RUN4 CTL is a firmware for the M-VAVE FM-1 with two modes:
   and the MASTER knob are sent to the app over USB-MIDI or Bluetooth MIDI, and the app draws its pages and lights on
   the FM-1's 240 x 240 screen and LEDs. The FM-1 makes no sound in this mode.
 * **Synth mode** turns the FM-1 into a standalone six-operator FM synthesizer with effects, an arpeggiator and a
-  16-step sequencer. It also plays from MIDI in, so it works as a sound module for RUN4, TOLF or any MIDI source.
+  step sequencer (16 patterns of up to 64 steps, chords, ties, live and step recording). It also plays from MIDI in, so it works as a sound module for RUN4, TOLF or any MIDI source.
 
 Switch between them with **SEL + HOME**. The FM-1 remembers the mode it was left in.
 
@@ -39,12 +39,14 @@ delay and reverb (room, spring, hall).
 | Keys | play (OCT- / OCT+ shift them); velocity as set on the SETUP page |
 | ALGORITHM encoder | the algorithm of the voice (1 to 32) |
 | PRESETS encoder | the voice (F1 to F8, then the user voices that exist) |
-| SELECT encoder | the operator (OP1 to OP6) on EDIT and ENV; on those pages the six lowest black keys pick it too |
+| SELECT encoder | the operator (OP1 to OP6) on EDIT and ENV (the six lowest black keys pick it too); the step page on SEQ |
 | K1 to K4 | the four values on screen |
 | MASTER | volume |
 | HOME, EDIT, ENV, LFO, FX, GLO, ARP, SEQ | the pages; press the same button again for its second sub-page |
-| PLAY, REC | start / stop the sequencer; step recording |
-| SAVE | store the voice in its user slot, or in the first free one |
+| PLAY, REC | start / stop the sequencer; record into it (see Sequencer) |
+| SEL + a key | transpose the sequence: it plays from that key (C4 = no transpose) |
+| SEL + REC, SEL + PLAY | with RUN4 connected: RUN4's REC and PLAY (see RUN4 and Synth mode together) |
+| SAVE | store the voice in its user slot, or in the first free one (on SEQ: an armed COPY TO / CLEAR) |
 
 **Pages.**
 
@@ -57,14 +59,60 @@ delay and reverb (room, spring, hall).
 | FX | DRIVE, CHORUS, DELAY, REVERB (amounts) | DELAY TIME (1/8 to dotted 1/2), DELAY FEEDBACK, REVERB TYPE, REVERB SIZE |
 | GLO (GLOBAL) | TRANSPOSE, TUNE, MIDI CH (OMNI or 1 to 16), BEND RANGE | VELOCITY amount |
 | ARP | ARP on/off, MODE (up, down, up-down, random, played), RATE, OCTAVES | GATE |
-| SEQ (SEQUENCER) | STEP (cursor), NOTE, STEP on/off, TEMPO | LENGTH, GATE, VELOCITY |
+| SEQ (SEQUENCER) | three sub-pages and two more views: see Sequencer | |
 
 The delay is cut at 371 ms: at slow tempi the long divisions are shortened to it.
 
-**Sequencer.** 16 steps of 1/16 notes. PLAY starts and stops it; the footer counts bars and beats and the keys'
-LEDs show the steps (steps that are on are dim, the cursor and the playing step are lit). With REC on, a key played on
-the SEQ page writes its note into the cursor step and moves on. The arpeggiator turns held keys into an arpeggio and
-shares the tempo.
+**Arpeggiator.** It turns held keys into an arpeggio and shares the sequencer's tempo (and a MIDI clock coming in).
+
+### Sequencer
+
+16 patterns (P01 to P16) of 1 to 64 steps. A step holds up to four notes (a chord) or is a **TIE** (what the step
+before plays goes on through it), and has its own velocity, gate and chance. Each pattern has its own length, rate
+(1/8, 1/16, 1/16T, 1/32), swing, gate and velocity. PLAY starts and stops; the footer counts bars and beats.
+
+**The grid** (SEQ page, REC off). The 16 white keys are the steps of the step page shown; the four lowest black keys
+(or the SELECT encoder) show step page 1 to 4 (steps 1-16, 17-32, 33-48, 49-64).
+
+| Do | What happens |
+| --- | --- |
+| tap a white key | the step on / off (a step switched on with nothing in it gets the last note entered, C4 at first; off keeps its notes) |
+| hold a white key + play keys | the step gets those notes: the first replaces what it had, more keys while it is held make a chord (up to 4) |
+| hold a white key + K1 / K2 / K3 / K4 | its NOTE (the whole chord moves), VELOCITY, GATE, CHANCE; PAT = the pattern's value |
+| a black key (1 to 4) | that step page; while playing the page follows the playing step until you pick one |
+
+LEDs: a lit white key is a step that plays, a dim one is switched off with notes in it, the playing step is the other
+way round. The black keys show the step pages (the one shown lit). While a step is held its notes light on the keys.
+The screen shows the same: a cell per step with a tick for each note by pitch, a bar under the playing step (white)
+and the cursor (red), the four step pages below, and the pattern's length, rate and swing.
+
+**Step recording** (REC on, stopped, on the SEQ page). The keys play notes: the keys pressed together go into the
+cursor step, and when all are let go the cursor moves on. **EDIT** writes a rest, **GLO** a TIE (each moves on). K1
+moves the cursor, K2 moves the cursor step's notes, K3 is the length, K4 the tempo.
+
+**Live recording** (REC on while playing, any page). What you play goes into the nearest step (the playing one, or the
+next one when you are past its middle), with its velocity. Notes add up (overdub: up to four a step); a note held over
+the following steps writes TIEs there. With the arpeggiator on, what it plays is recorded.
+
+**The SEQ pages** (SEQ again for the next one):
+
+| Sub-page | K1 | K2 | K3 | K4 |
+| --- | --- | --- | --- | --- |
+| 1 | PATTERN | LENGTH (1-64) | SWING (50-75 %) | TEMPO |
+| 2 | RATE | GATE | VELOCITY | TRANSPOSE (-24 to +24) |
+| 3 | STEP (cursor) | COPY TO | CLEAR | CLOCK (AUTO, OUT, INT) |
+
+A pattern picked while another plays starts when that one comes to its end. **Copy:** turn COPY TO to the target
+pattern and press SAVE. **Clear:** turn CLEAR right and press SAVE (either is forgotten after 8 seconds or on another
+page). **Transpose** while playing: hold SEL and press a key (C4 = +0, F4 = +5).
+
+**Clock.** AUTO (the default): a MIDI clock coming in (USB, Bluetooth or the jack) drives the sequencer and the
+arpeggiator, its START and STOP start and stop the sequencer, and when the clock stops coming for half a second the
+FM-1's own tempo takes over again. OUT: the own tempo, and MIDI clock, START and STOP go out over USB and Bluetooth.
+INT: the own tempo, a clock coming in is ignored.
+
+**Kept.** The patterns are stored with the voices: a few seconds after the last edit, only while the sequencer is
+stopped (writing the flash stops the sound for a moment), and when you leave Synth mode or press SAVE.
 
 **MIDI in.** In Synth mode USB, Bluetooth and the TRS jack play the synth: notes, sustain pedal, pitch bend, all notes
 off, on the channel set in GLOBAL (OMNI by default). The notes of the keys are not sent anywhere in this mode.
@@ -76,6 +124,17 @@ cut dump imports nothing. The voices are kept when the FM-1 is switched off.
 
 **Not like a DX7.** The engine reads the patch parameters but has no DX7 operator switches, MIDI controllers other than
 those above, microtuning or portamento. The factory voices are Felucca's own, not a DX7 ROM.
+
+## RUN4 and Synth mode together
+
+Switching modes keeps the link: after SEL + HOME the FM-1 says hello to RUN4 at once, so RUN4 knows which mode it is in
+and takes over the screen again as soon as you are back in RUN4 mode. While RUN4 is connected in Synth mode:
+
+* **SEL + REC** and **SEL + PLAY** are RUN4's REC and PLAY (the screen says RUN4 REC / RUN4 PLAY); REC and PLAY alone
+  stay the synth's. So you can arm a RUN4 track and record the synth without touching the app.
+* The FM-1's sound reaches RUN4 over the USB cable: the firmware is a USB audio device (its output, recordable) and
+  plays the computer's audio, as fm1-base's default. Choose the FM-1 as the input in RUN4.
+* If RUN4 sends its MIDI clock to the FM-1, the sequencer and the arpeggiator follow it (clock AUTO).
 
 ## Bluetooth
 

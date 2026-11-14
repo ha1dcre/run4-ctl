@@ -20,7 +20,7 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 | `docs/PROTOCOL.md` | the wire protocol v1 |
 | `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats) |
 | `src/ui.c` | the display: state from host frames, redraw by region |
-| `src/synth.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, sequencer, DX7 import; its pages |
+| `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import; the step sequencer (16 x 64 steps, after Felucca's); its pages |
 | `app/` | the fm1-base app: `app.c` (input, local rules, host frames), `app.h`, `fm1.toml` |
 | `tests/r4p_test.c`, `tests/synth_test.c` | codec unit tests; native tests of the synth engine (levels, polyphony, DX7 import, CPU) |
 | `tests/scenarios/*.txt`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness) |
@@ -28,6 +28,10 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 | `tools/fake_fm1.py`, `tools/coremidi.py` | a Mac stand-in for the FM-1 (virtual CoreMIDI ports "FM-1", terminal panel); standard library only |
 | `tools/fake_run4.py` | stand-in for the RUN4 app (frames as hex, simulator scripts); standard library only |
 | `base/` | fm1-base (git submodule; it brings felucca-bsp) |
+
+Store (flash data area, two 4 KiB sectors per object, `app/app.h`): panel 0xDC000, SETUP 0xDA000, Synth settings
+0xD8000 (186 B), two user banks 0xD6000 / 0xD4000 (2056 B each), Bluetooth 0xDE000, and the sequencer's 16 patterns in
+four objects 0xD2000 / 0xD0000 / 0xCE000 / 0xCC000 (2088 B each, 8352 B; 32 KiB of flash). RAM for the patterns: 8.3 KB.
 
 ## Build and test (macOS or Linux, host only)
 
