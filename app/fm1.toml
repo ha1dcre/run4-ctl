@@ -6,14 +6,16 @@ usb_product = "RUN4 CTL FM-1"
 include = ["../src"]             # the shared protocol codec (src/r4p.[ch]) and the UI
 words = "words.tsv"
 font_full = ["M"]                # lower case in the value font: the host formats the text (dB, ms, x)
-# no radio in phase 0: USB-MIDI only
-# firmware.json (docs/FIRMWARE-JSON.md in fm1-base)
+# no radio yet: USB-MIDI only (see docs/MANUAL.md)
+
+# firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)
+author = "TODO-OWNER author name"                 # TODO-OWNER: your name or handle as it should appear
+licence = "GPL-3.0-only"
 tagline = "a terminal controller for RUN4"
-repo = "https://github.com/ha1dcre/run4-ctl"
-licence = "GPL-3.0"
+description = "Turns the M-VAVE FM-1 into a hardware controller for the iOS app RUN4: its keys, buttons, encoders and MASTER knob go to the app over USB-MIDI, and the app draws its pages and lights on the FM-1. The keys also play notes without the app. A local SETUP page sets key velocity, aftertouch, LED level and MIDI channel."
+tags = ["controller", "midi", "utility"]
+install = "https://todo-owner.example/run4-ctl/install/"   # TODO-OWNER: where the web installer will be published
+repo = "https://todo-owner.example/run4-ctl"              # TODO-OWNER: the public source repository
+site = "https://todo-owner.example/run4-ctl/"             # TODO-OWNER: the project site
+screenshot = "docs/img/screen.png"
 credits = "Built on fm1-base and felucca-bsp (MPL-2.0). Not affiliated with M-VAVE."
-author = "ha1dcre"
-description = "Turns the M-VAVE FM-1 into a thin hardware controller for the iOS app RUN4: keys, buttons, encoders and MASTER go to the app over USB-MIDI, the app draws the pages and lights on the FM-1."
-tags = ["utility"]
-install = "https://github.com/ha1dcre/run4-ctl"
-site = "https://github.com/ha1dcre/run4-ctl"
