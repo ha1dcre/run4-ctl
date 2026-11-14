@@ -33,6 +33,21 @@ void app_sysex_byte(uint8_t b);
 void app_overload(void);
 uint32_t app_gain(uint32_t m);
 
+/* fm1.toml backup = true: a backup over USB of everything stored but the panel's calibration (base/device/backup.c,
+ * tools/fm1_backup.py); its image: magic "R4CB", version 1, these objects in this order. The objects keep their own
+ * layout versions (an older RUN4 CTL's backup loads); a new object here needs APP_BACKUP_VERSION 2 */
+#define APP_BACKUP_OBJS {OBJ_SETUP, OBJ_SYNSET, OBJ_BANK_A, OBJ_BANK_B, OBJ_SEQ_A, OBJ_SEQ_B, OBJ_SEQ_C, OBJ_SEQ_D, OBJ_BLE}
+#define APP_BACKUP_MAGIC 0x42433452u     /* "R4CB" */
+#define APP_BACKUP_VERSION 1u
+#define APP_BACKUP_WHAT "settings, voices, patterns"
+#define APP_BACKUP_BUF r4_io             /* the store's scratch (synth_ui.c), 3840 B: no restore buffer of its own */
+int app_backup_playing(void);
+void app_backup_flush(void);
+void app_backup_hold(int on);
+void app_backup_restored(void);
+#define APP_REDRAW                       /* fm1.toml mirror = true: draw everything again */
+void app_redraw(void);
+
 #define APP_HOST_CMD                     /* the simulator's "blesx HEX": a SysEx frame in over Bluetooth, as USB-MIDI packets */
 int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, const char *d);
 #define APP_HOST_EXPECT                  /* the simulator's "expect WHAT N" checks */

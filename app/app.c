@@ -73,9 +73,10 @@ static struct {
     uint8_t setup_owed;                  /* the SETUP object changed outside the page (a learn): saved when it may be */
     uint32_t rend_ticks, rend_frames;    /* the render's time (host simulator: expect render_permille) */
     uint32_t overloads;                  /* app_overload calls (late renders) */
+    uint32_t redraws;                    /* app_redraw calls (the mirror) */
     uint8_t shed_told, shed_shown;       /* the overload guard's toast said; the step the AUDIO page shows */
 } ctl;
-static uint8_t bk_hold;                  /* a USB backup streams: nothing is saved meanwhile (app_backup_hold) */
+#define bk_hold sy_hold_store            /* a USB backup streams: nothing is saved meanwhile (synth_ui.c, app_backup_hold) */
 
 /* protocol 1.3, the host voice: RUN4 plays this engine in RUN4 mode (docs/PROTOCOL.md "Host voice"). Its settings
  * live in `syn` while RUN4 mode is on, in syn_alt while Synth mode is (synth.c syn_swap); RAM only. */
@@ -573,9 +574,10 @@ static void bk_write(void)                             /* the confirmed restore 
         syn_bank[b].used = (uint16_t)(bk.used >> (16u * b));
         for (i = 0; i < SYN_BANK_N; i++)
             memcpy(syn_bank[b].v[i], BK_STAGE + (b * SYN_BANK_N + i) * R4P_PACKED, R4P_PACKED);
-        plat_store_save(OBJ_BANK_A + b, &syn_bank[b], sizeof syn_bank[b]);
+        if (!bk_hold)
+            plat_store_save(OBJ_BANK_A + b, &syn_bank[b], sizeof syn_bank[b]);
     }
-    syn_bank_dirty = 0;
+    syn_bank_dirty = bk_hold ? 3u : 0u;                /* (a USB backup streams: saved after it) */
     u_int(bk_user_count(), u); u_cat(t, u); u_cat(t, " VOICES");
     bk_done(t);
 }
@@ -856,8 +858,12 @@ static void mode_switch(uint8_t to)
         sq.fill = 0;
         sq_ed.held = -1;
         sq_ed.entry_open = 0;
-        if (sui.dirty_set || syn_bank_dirty || sq_dirty)
+        if (sui.dirty_set || syn_bank_dirty || sq_dirty) {   /* (even under a backup's hold: the set is about to swap) */
+            uint8_t h = sy_hold_store;
+            sy_hold_store = 0;
             syn_save_all();
+            sy_hold_store = h;
+        }
     } else if (hv.on) {
         ctl.want_hvstate = 1;                      /* 1.3: the host voice is suspended while Synth mode plays */
     }
@@ -1754,7 +1760,7 @@ void app_init(void)
     ctl.names_next = 255;
     syn_host_defaults(&syn_alt);                       /* 1.3: the host voice's settings, parked */
     ml_init();
-    bk_hold = 0;
+    sy_hold_store = 0;
     local_off = 0;
     if (mode == MODE_RUN4)
         syn_swap();                                    /* RUN4 mode: they are the ones that sound */
@@ -1809,6 +1815,59 @@ void app_frame(void)
 }
 void app_input_only(void) { input(); }
 void app_say(const char *a, const char *b) { (void)a; (void)b; }
+
+/* ------------------------------------------- USB backup (fm1-base backup) --- */
+/* fm1.toml backup = true (base/device/backup.c, tools/fm1_backup.py): everything the store holds but the panel's
+ * calibration (the unit's own) as one image, app.h APP_BACKUP_*. Each object carries its own layout version and loads
+ * older ones (SETUP 1 / 2, settings 2 / 3 / 4, patterns 1 / 2), so a backup of an older RUN4 CTL restores. */
+int app_backup_playing(void) { return sq.run; }      /* the sequencer plays: STOP FIRST */
+void app_backup_flush(void)                            /* a backup starts: what is not saved yet, saved */
+{
+    if (mode == MODE_SYNTH && (sui.dirty_set || syn_bank_dirty || sq_dirty))
+        syn_save_all();                                /* (RUN4 mode: Synth mode's were saved when it was left) */
+    if (ctl.setup_dirty || ctl.setup_owed) {
+        plat_store_save(OBJ_SETUP, &setup, sizeof setup);
+        ctl.setup_dirty = ctl.setup_owed = 0;
+    }
+}
+void app_backup_hold(int on) { sy_hold_store = (uint8_t)(on != 0); }
+void app_backup_restored(void)                         /* a restore: everything from the store again, as at power-on */
+{
+    uint8_t m = mode;
+    syn_set_t hvs = syn;
+    setup_load();
+    setup.mode = m;                                    /* (the mode playing stays; the restored one is the next boot's) */
+    memset(syn_bank, 0, sizeof syn_bank);
+    syn_bank_dirty = 0;
+    sq_defaults();
+    syn_defaults();
+    syn_load_all();                                    /* Synth mode's settings, the banks, the patterns */
+    if (m == MODE_RUN4) {                              /* RUN4 mode: the host voice's set stays the sounding one */
+        syn_alt = syn;
+        syn = hvs;
+    }
+    syn_dirty = 1;
+    syn_event(6, 0, 0, 0);
+    ml_init();
+    sq.fill = 0;
+    sq_ed.held = -1;
+    sq_ed.more = 0;
+    sgu.valid = 0;
+    smu.valid = 0;
+    ctl.setup_dirty = ctl.setup_owed = 0;
+    ui.setup = 0;
+    setup_apply();
+    if (mode == MODE_SYNTH)
+        sp_build();
+    ui.dirty = D_ALL;
+    ui_toast("RESTORED", 20);
+}
+/* the screen mirror (fm1.toml mirror = true): a frame the link dropped is drawn again whole */
+void app_redraw(void)
+{
+    ui.dirty = D_ALL;
+    ctl.redraws++;
+}
 
 #ifdef PLAT_HOST
 static void run_ms(uint32_t ms);
@@ -1925,6 +1984,8 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "local_off")) *got = local_off;
     else if (!strcmp(what, "shed")) *got = syn_shed;
     else if (!strcmp(what, "overloads")) *got = (int)ctl.overloads;
+    else if (!strcmp(what, "redraws")) *got = (int)ctl.redraws;
+    else if (!strcmp(what, "user_bank")) *got = syn_bank[0].used;
     else if (!strcmp(what, "syn_bright")) *got = syn.bright;
     else if (!strcmp(what, "syn_rev")) *got = syn.rev_mix;
     else if (!strcmp(what, "syn_lfo_pmd")) *got = syn.cur[FP_LPMD];

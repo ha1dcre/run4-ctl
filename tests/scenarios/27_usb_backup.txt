@@ -1,0 +1,103 @@
+# USB backup (fm1.toml backup = true, fm1-base device/backup.c; tools/fm1_backup.py): one image of SETUP (with MIDI
+# learn), Synth mode's settings (with the morph), the two user banks, the four pattern objects (locks, chain) and the
+# Bluetooth record, magic "R4CB" version 1. Restored whole; refused while the sequencer plays (STOP FIRST) or damaged
+# (nothing changes). And the screen mirror (mirror = true): a lost frame is drawn again (app_redraw).
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+# things to keep: a user voice (SAVE), a generated pattern, a morph, a learned CC, VELOCITY HARD
+tap SAVE
+wait 100
+expect user_bank 1
+tap SEQ
+tap SEQ
+tap SEQ
+tap SEQ
+tap SEQ
+wait 60
+expect syn_page 74
+tap SAVE
+wait 100
+expect seq_on 4
+tap HOME
+tap HOME
+turn K3 1
+turn K4 1
+wait 60
+expect mo_cap 3
+press SEL
+turn K1 1
+wait 40
+release SEL
+midi B0 15 40
+wait 60
+expect ml_count 1
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 60
+turn K1 1
+wait 40
+tap HOME
+wait 4500
+expect set_vel 2
+backup out:r4ctl.bak
+wait 100
+# change everything, then restore
+tap SEQ
+wait 60
+tap SEQ
+tap SEQ
+wait 60
+expect syn_page 72
+turn K3 2
+wait 40
+tap SAVE
+wait 100
+expect seq_on 0
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 60
+turn K1 1
+wait 40
+tap HOME
+wait 4500
+expect set_vel 3
+tap PLAY
+wait 100
+restore out:r4ctl.bak
+expect restore_rc 10
+tap PLAY
+wait 100
+restore out:r4ctl.bak
+expect restore_rc 0
+wait 100
+expect seq_on 4
+expect set_vel 2
+expect ml_count 1
+expect mo_cap 3
+expect user_bank 1
+expect mode 1
+shot backup_restored.png
+# a damaged image changes nothing
+backup out:r4ctl2.bak
+backup_damage out:r4ctl2.bak
+restore out:r4ctl2.bak
+expect restore_rc >0
+expect seq_on 4
+# the mirror: a viewer asks, a refresh draws everything again
+mirror out:mirror.syx
+wait 200
+mirror refresh
+wait 100
+expect redraws >0
+mirror off
+wait 50

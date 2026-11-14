@@ -341,20 +341,27 @@ static void sp_toast(const char *a)
 {
     ui_toast(a, 12);
 }
-static void sq_save(void)                     /* the changed pattern objects (2088 bytes each) */
+/* the store's scratch: a pattern object on its way to or from the flash, and fm1-base's restore's buffer (app.h
+ * APP_BACKUP_BUF: lent while a restore runs with the app stopped; never used by an interrupt) */
+uint8_t r4_io[3840] __attribute__((aligned(4)));
+_Static_assert(sizeof(sq_obj_t) <= sizeof r4_io, "a pattern object fits the scratch");
+static uint8_t sy_hold_store;                 /* a USB backup streams (app_backup_hold): nothing is saved meanwhile */
+static void sq_save(void)                     /* the changed pattern objects (3724 bytes each) */
 {
-    static sq_obj_t ob;
+    sq_obj_t *ob = (sq_obj_t *)(void *)r4_io;
     uint32_t o;
     for (o = 0; o < SQ_OBJS; o++)
         if ((sq_dirty >> o) & 1u) {
-            sq_obj_fill(o, &ob);
-            if (plat_store_save(OBJ_SEQ_A + o, &ob, sizeof ob) == 0)
+            sq_obj_fill(o, ob);
+            if (plat_store_save(OBJ_SEQ_A + o, ob, sizeof *ob) == 0)
                 sq_dirty = (uint8_t)(sq_dirty & ~(1u << o));
         }
 }
 static void syn_save_all(void)                /* settings, the changed banks and patterns into the store */
 {
     uint32_t b;
+    if (sy_hold_store)                        /* (a backup streams: kept dirty, saved after it) */
+        return;
     plat_store_save(OBJ_SYNSET, &syn, sizeof syn);
     for (b = 0; b < 2u; b++)
         if ((syn_bank_dirty >> b) & 1u)
@@ -373,10 +380,10 @@ static void syn_load_all(void)
             syn_bank[b] = bk;
     }
     for (b = 0; b < SQ_OBJS; b++) {
-        static sq_obj_t ob;
-        int n = plat_store_load(OBJ_SEQ_A + b, &ob, sizeof ob);
+        sq_obj_t *ob = (sq_obj_t *)(void *)r4_io;
+        int n = plat_store_load(OBJ_SEQ_A + b, ob, sizeof *ob);
         if (n > 0)
-            sq_obj_take(b, &ob, (uint32_t)n);        /* (a version 1 object: the patterns, no locks, no chain) */
+            sq_obj_take(b, ob, (uint32_t)n);         /* (a version 1 object: the patterns, no locks, no chain) */
     }
     sq_dirty = 0;
     {
