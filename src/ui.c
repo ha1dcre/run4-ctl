@@ -28,6 +28,7 @@ typedef struct {
     uint16_t dirty;
     uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
     uint8_t local;                  /* Synth mode: the pages are ours, no host needed (synth_ui.c) */
+    uint8_t seqgrid;                /* ... the SEQ page: a step grid and four tiles in a row (synth_ui.c draws them) */
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
     r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
@@ -309,6 +310,8 @@ static void draw_list(void)
 }
 
 /* ---------------------------------------------------------------- draw --- */
+static void sq_draw_grid(void);             /* synth_ui.c: the SEQ page's body (D_TILE0 / 1: the grid, 2 / 3: the tiles) */
+static void sq_draw_tiles(void);
 static void ui_draw(void)
 {
     uint32_t now = plat_ms();
@@ -344,9 +347,16 @@ static void ui_draw(void)
         lcd_fill(0, 0, 240, 240, R4_BG);
     if (ui.dirty & D_HEAD)
         draw_head();
-    for (i = 0; i < 4; i++)
-        if (ui.dirty & (D_TILE0 << i))
-            draw_tile(i);
+    if (ui.local && ui.seqgrid && !ui.setup) {
+        if (ui.dirty & (D_TILE0 | D_TILE0 << 1))
+            sq_draw_grid();
+        if (ui.dirty & (D_TILE0 << 2 | D_TILE0 << 3))
+            sq_draw_tiles();
+    } else {
+        for (i = 0; i < 4; i++)
+            if (ui.dirty & (D_TILE0 << i))
+                draw_tile(i);
+    }
     if (ui.dirty & D_FOOT)
         draw_foot();
     if ((ui.dirty & (D_TOAST | D_TOAST_UNDER)) && ui.toast_until)

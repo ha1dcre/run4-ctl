@@ -14,8 +14,10 @@
 
 /* the store: the platform's panel calibration, our SETUP page (setup_t, app.c), and Synth mode's settings and its two
  * banks of 16 user voices (src/synth.c) */
-enum { OBJ_PANEL, OBJ_SETUP, OBJ_SYNSET, OBJ_BANK_A, OBJ_BANK_B, OBJ_BLE, OBJ_NOBJ };   /* OBJ_BLE: the radio's address and calibration */
-#define APP_STORE_MAP {0xDC000u, 0xDA000u, 0xD8000u, 0xD6000u, 0xD4000u, 0xDE000u}
+/* OBJ_SEQ_A..D: the sequencer's 16 patterns, four to an object (synth_seq.c sq_obj_t, 2088 bytes each) */
+enum { OBJ_PANEL, OBJ_SETUP, OBJ_SYNSET, OBJ_BANK_A, OBJ_BANK_B, OBJ_BLE, OBJ_SEQ_A, OBJ_SEQ_B, OBJ_SEQ_C, OBJ_SEQ_D,
+       OBJ_NOBJ };   /* OBJ_BLE: the radio's address and calibration */
+#define APP_STORE_MAP {0xDC000u, 0xDA000u, 0xD8000u, 0xD6000u, 0xD4000u, 0xDE000u, 0xD2000u, 0xD0000u, 0xCE000u, 0xCC000u}
 
 void app_init(void);
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12);

@@ -33,6 +33,7 @@ static struct {
     uint8_t prs[NKEYS];                  /* last pressure sent per key (poly aftertouch) */
     uint8_t chan_prs;                    /* last channel pressure sent */
     uint32_t suppress;                   /* buttons whose events stay local until released (the SETUP page's) */
+    uint32_t fwd;                        /* Synth mode: buttons pressed with SEL that go to the host (REC, PLAY) until released */
     int8_t setup_acc[4];
     uint8_t setup_dirty;             /* the note each held key started (255 = none), so a note-off always matches */
     int8_t octave;                       /* -3 .. +3, local */
@@ -290,8 +291,10 @@ static void mode_switch(uint8_t to)
     if (mode == MODE_SYNTH) {                      /* leaving: the sound stops, the settings are kept */
         syn_event(6, 0, 0, 0);
         syn_event(8, 0, 0, 0);
-        syn_sq.seq_rec = 0;
-        if (sui.dirty_set || syn_bank_dirty)
+        sq.rec = 0;
+        sq_ed.held = -1;
+        sq_ed.entry_open = 0;
+        if (sui.dirty_set || syn_bank_dirty || sq_dirty)
             syn_save_all();
     }
     mode = to;
@@ -310,8 +313,19 @@ static void mode_switch(uint8_t to)
     }
     ui.dirty = D_ALL;
 }
+static int synth_step_rec(void)                /* step recording: the SEQ page, REC armed, stopped */
+{
+    return sui.page == SP_SEQ && sq.rec && !sq.run && !ui.setup;
+}
 static void synth_button(uint32_t k)
 {
+    if (synth_step_rec() && (k == B_EDIT || k == B_GLO)) {   /* step recording: EDIT a rest, GLO a TIE */
+        if (k == B_EDIT) sq_ed_rest(); else sq_ed_tie();
+        sui.edit_at = plat_ms();
+        sp_toast(k == B_EDIT ? "REST" : "TIE");
+        sp_build();
+        return;
+    }
     switch (k) {
     case B_HOME: sp_page_press(SP_HOME); break;
     case B_EDIT: sp_page_press(SP_EDIT); break;
@@ -321,17 +335,37 @@ static void synth_button(uint32_t k)
     case B_GLO: sp_page_press(SP_GLO); break;
     case B_ARP: sp_page_press(SP_ARP); break;
     case B_SEQ: sp_page_press(SP_SEQ); break;
-    case B_PLAY: syn_event(8, (uint8_t)!syn_sq.seq_run, 0, 0); break;      /* the render owns the clock; its state is mirrored below */
-    case B_REC: syn_sq.seq_rec ^= 1u; sp_build(); break;
-    case B_SAVE: sp_save_patch(); break;
+    case B_PLAY:                                   /* the render owns the clock; its state is mirrored in sq.run */
+        sq_ed.follow = 1;
+        syn_event(8, (uint8_t)!sq.run, 0, 0);
+        break;
+    case B_REC:
+        sq.rec ^= 1u;
+        sq_ed.entry_open = 0;
+        if (sq.rec && !sq.run && sui.page == SP_SEQ)
+            sp_toast("EDIT REST  GLO TIE");
+        sp_build();
+        break;
+    case B_SAVE:
+        if (!sq_save_press())
+            sp_save_patch();
+        break;
     case B_OCTDN: octave_step(-1); break;
     case B_OCTUP: octave_step(1); break;
     default: break;
     }
 }
+static const uint8_t WHITE_KEYS[16] = PLAT_WHITE_KEYS, BLACK_KEYS[11] = PLAT_BLACK_KEYS;
+static int key_white(uint32_t k) { uint32_t i; for (i = 0; i < 16u; i++) if (WHITE_KEYS[i] == k) return (int)i; return -1; }
+static int key_black(uint32_t k) { uint32_t i; for (i = 0; i < 11u; i++) if (BLACK_KEYS[i] == k) return (int)i; return -1; }
+static int synth_grid(void)                    /* the SEQ page's grid: the white keys are steps, the black ones pages */
+{
+    return sui.page == SP_SEQ && !sq.rec && !ui.setup;
+}
 static void synth_keys(uint32_t keys)
 {
     uint32_t k;
+    int shift = (int)((ctl.btn >> B_SEL) & 1u);
     for (k = 0; k < NKEYS; k++) {
         uint32_t bit = 1u << k;
         if (!((keys ^ ctl.keys) & bit))
@@ -340,6 +374,23 @@ static void synth_keys(uint32_t keys)
             int32_t note = 53 + (int32_t)k + 12 * ctl.octave;
             uint32_t j;
             ctl.keys |= bit;
+            ctl.sounding[k] = 255;
+            if (shift && !ui.setup) {                            /* SEL + a key: the sequence's transpose (C4 = +0) */
+                sq_transpose_key(note);
+                continue;
+            }
+            if (synth_grid() && sq_ed.held < 0) {               /* the grid: a step held, or a step page */
+                int w = key_white(k), b = key_black(k);
+                if (w >= 0) {
+                    sq_ed_step_down(sq_ed.view * SQ_PAGE + (uint32_t)w, k);
+                    sq_ed.follow = 0;
+                } else if (b >= 0 && b < 4 && (uint32_t)b * SQ_PAGE < sq_ed_pat()->len) {
+                    sq_ed.view = (uint8_t)b;
+                    sq_ed.follow = 0;
+                }
+                sp_build();
+                continue;
+            }
             if (sp_op_page() && !ui.setup) {                    /* EDIT / ENV: the six lowest black keys pick the operator */
                 for (j = 0; j < 6u; j++)
                     if (SP_BLACK6[j] == k) {
@@ -357,22 +408,41 @@ static void synth_keys(uint32_t keys)
             }
             ctl.sounding[k] = (uint8_t)note;
             ctl.notes_on++;
-            if (syn_sq.seq_rec && sui.page == SP_SEQ) {         /* step recording: the key writes the cursor step */
-                syn.step[syn_sq.cursor & 15u].note = (uint8_t)note;
-                syn.step[syn_sq.cursor & 15u].on = 1;
-                syn_sq.cursor = (uint8_t)((syn_sq.cursor + 1u) % syn.seq_len);
-                sp_touch();
+            if (synth_grid() && sq_ed.held >= 0) {              /* a step held: the key is its note (a chord with more) */
+                sq_ed_note((uint8_t)note);
+                sui.edit_at = plat_ms();
                 sp_build();
+                syn_event(1, (uint8_t)note, key_velocity(k), 1);     /* (heard, not recorded, no arp) */
+                ctl.snd_ch[k] = 1;
+                continue;
+            }
+            if (synth_step_rec()) {                               /* step recording: the keys down together, one step */
+                sq_ed_entry((uint8_t)note, key_velocity(k));
+                sui.edit_at = plat_ms();
+                sp_build();
+                syn_event(1, (uint8_t)note, key_velocity(k), 1);
+                ctl.snd_ch[k] = 1;
+                continue;
             }
             syn_event(1, (uint8_t)note, key_velocity(k), 0);
+            ctl.snd_ch[k] = 0;                                    /* (Synth mode: the event's source, for its note-off) */
         } else {
             ctl.keys &= ~bit;
+            if (sq_ed.held >= 0 && sq_ed.held_key == k) {       /* the held step let go: a tap toggles it */
+                sq_ed_step_up();
+                sui.edit_at = plat_ms();
+                sp_build();
+            }
             if (ctl.sounding[k] != 255) {
                 ctl.notes_off++;
-                syn_event(2, ctl.sounding[k], 0, 0);
+                syn_event(2, ctl.sounding[k], 0, ctl.snd_ch[k]);
             }
             ctl.sounding[k] = 255;
         }
+    }
+    if (sq_ed.entry_open && !keys) {                   /* step recording: all keys up, the next step */
+        sq_ed_entry_done();
+        sp_build();
     }
 }
 static void synth_frame(uint32_t keys, uint32_t now)
@@ -391,6 +461,12 @@ static void synth_frame(uint32_t keys, uint32_t now)
         }
         if (k >= 3) {
             sp_turn(k - 3u, d);
+        } else if (k == 0 && sui.page == SP_SEQ) {       /* SELECT on the SEQ page: the step page */
+            int v = (int)sq_ed.view + (d > 0 ? 1 : -1);
+            uint32_t pages = (sq_ed_pat()->len + SQ_PAGE - 1u) / SQ_PAGE;
+            sq_ed.view = (uint8_t)(v < 0 ? 0 : v >= (int)pages ? (int)pages - 1 : v);
+            sq_ed.follow = 0;
+            ui.dirty |= D_TILE0;
         } else if (k == 0) {                             /* SELECT: the operator */
             sp_select_op((uint32_t)((int)sui.op + (d > 0 ? 1 : -1) < 0 ? 0 : (int)sui.op + (d > 0 ? 1 : -1)));
         } else if (k == 1) {                             /* ALGORITHM */
@@ -409,10 +485,10 @@ static void synth_frame(uint32_t keys, uint32_t now)
     /* the transport as the footer shows it */
     {
         r4p_status_t st;
-        st.bpm10 = syn.bpm10;
-        st.bar = (uint16_t)(syn_sq.seq_run ? syn_sq.seq_count / 16u + 1u : 1u);
-        st.beat = (uint8_t)(syn_sq.seq_run ? (syn_sq.seq_count % 16u) / 4u : 0u);
-        st.flags = (uint8_t)((syn_sq.seq_run ? R4P_ST_PLAY : 0u) | (syn_sq.seq_rec ? R4P_ST_REC : 0u));
+        st.bpm10 = (uint16_t)syn_bpm10_now();
+        st.bar = (uint16_t)(sq.run ? sq.ticks / (4u * SQ_PPQN) + 1u : 1u);
+        st.beat = (uint8_t)(sq.run ? (sq.ticks / SQ_PPQN) % 4u : 0u);
+        st.flags = (uint8_t)((sq.run ? R4P_ST_PLAY : 0u) | (sq.rec ? R4P_ST_REC : 0u));
         if (memcmp(&st, &ui.st, sizeof st)) {
             ui.st = st;
             ui.dirty |= D_FOOT;
@@ -432,28 +508,58 @@ static void synth_frame(uint32_t keys, uint32_t now)
         syn_save_all();
         sp_toast(t);
     }
-    if (sui.dirty_set && now - sui.edit_at > 4000u)      /* a few seconds after the last edit */
+    /* a few seconds after the last edit, and only while the sequencer is stopped: a flash write stops the sound */
+    if ((sui.dirty_set || sq_dirty) && !sq.run && sq_ed.held < 0 && now - sui.edit_at > 4000u)
         syn_save_all();
+    sq_frame(now);
 }
 static void synth_lights(uint32_t *lb, uint32_t *lk, uint32_t *db, uint32_t *dk)
 {
     static const uint8_t PB[SP_N] = {B_HOME, B_EDIT, B_ENV, B_LFO, B_FX, B_GLO, B_ARP, B_SEQ};
     uint32_t i;
     *lb |= 1u << PB[sui.page];
-    if (syn_sq.seq_run) *lb |= 1u << B_PLAY;
-    if (syn_sq.seq_rec) *lb |= ctl.blink ? 1u << B_REC : 0u;
+    if (sq.run) *lb |= 1u << B_PLAY;
+    if (sq.rec) *lb |= ctl.blink ? 1u << B_REC : 0u;
     if (sp_op_page()) {                                  /* the six operator keys */
         for (i = 0; i < 6u; i++)
             *(i == sui.op ? lk : dk) |= 1u << SP_BLACK6[i];
-    } else if (sui.page == SP_SEQ) {                     /* the steps along the lower keys */
-        for (i = 0; i < 16u && i < NKEYS; i++) {
-            if (i < syn.seq_len && syn.step[i].on)
-                *dk |= 1u << i;
-            if (i == syn_sq.cursor)
-                *lk |= 1u << i;
+    } else if (synth_grid()) {                           /* the grid: steps on the white keys, step pages on four black */
+        const sq_pat_t *pt = sq_ed_pat();
+        int playing = sq.run && sq.pat == sq_sel_pat();
+        for (i = 0; i < 16u; i++) {
+            uint32_t idx = sq_ed.view * SQ_PAGE + i, bit = 1u << WHITE_KEYS[i];
+            if (idx >= pt->len)
+                continue;
+            if (sq_plays(&pt->s[idx]))
+                *lk |= bit;                              /* set: lit */
+            else if (sq_has(&pt->s[idx]))
+                *dk |= bit;                              /* muted (notes kept): dim */
+            if (playing && sq.step == idx)
+                *lk ^= bit;                              /* the playing step: the other way round */
         }
-        if (syn_sq.seq_run && syn_sq.seq_step < NKEYS)
-            *lk |= 1u << syn_sq.seq_step;
+        for (i = 0; i < 4u; i++) {
+            uint32_t bit = 1u << BLACK_KEYS[i];
+            if (i * SQ_PAGE >= pt->len)
+                continue;
+            if (i == sq_ed.view) *lk |= bit; else *dk |= bit;
+            if (playing && sq.step / SQ_PAGE == i && ctl.blink && i != sq_ed.view)
+                *lk |= bit;
+        }
+        if (sq_ed.held >= 0) {                           /* a step held: its notes on the keys */
+            const sq_step_t *s = &pt->s[sq_ed.held];
+            for (i = 0; i < sq_n(s); i++) {
+                int32_t k = (int32_t)s->note[i] - 53 - 12 * ctl.octave;
+                if (k >= 0 && k < NKEYS)
+                    *lk |= 1u << k;
+            }
+        }
+    } else if (synth_step_rec()) {                       /* step recording: the cursor step's notes, dim */
+        const sq_step_t *s = &sq_ed_pat()->s[sq_ed.cursor % SQ_STEPS];
+        for (i = 0; i < sq_n(s); i++) {
+            int32_t k = (int32_t)s->note[i] - 53 - 12 * ctl.octave;
+            if (k >= 0 && k < NKEYS)
+                *dk |= 1u << k;
+        }
     }
     *lk |= ctl.keys;
 }
@@ -517,6 +623,10 @@ static void midi_pump(void)
             if (port == PORT_BLE)
                 for (i = 0; i < n; i++)
                     rx_byte((uint8_t)(pkt >> (8 + 8 * i)));
+            continue;
+        }
+        if (mode == MODE_SYNTH && (st == 0xF8u || st == 0xFAu || st == 0xFBu || st == 0xFCu)) {
+            sq_realtime((uint8_t)st);                  /* MIDI clock, start, stop: the sequencer and the arp follow */
             continue;
         }
         if (mode != MODE_SYNTH || st >= 0xF0u)
@@ -630,6 +740,7 @@ static void input(void)
         ctl.hello_at = now - HELLO_MS;
         ctl.pot_sent = -1;
         ctl.txq_n = 0;
+        ctl.fwd = 0;
         ctl.want_sync = ctl.want_pot = 0;
     }
     if (!ctl.session)
@@ -673,6 +784,12 @@ static void input(void)
                 mode_switch(mode == MODE_SYNTH ? MODE_RUN4 : MODE_SYNTH);
                 return;
             }
+            if (mode == MODE_SYNTH && shift && (k == B_REC || k == B_PLAY) && ui.connected) {
+                ctl.fwd |= bit;                        /* SEL + REC / PLAY with a host: RUN4's transport, not the synth's */
+                ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1 | 1u);
+                sp_toast(k == B_REC ? "RUN4 REC" : "RUN4 PLAY");
+                continue;
+            }
             if (mode == MODE_SYNTH) {                  /* Synth mode keeps every button to itself */
                 synth_button(k);
                 continue;
@@ -680,8 +797,13 @@ static void input(void)
             if (!shift && k == B_OCTDN) octave_step(-1);
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
-        if (mode == MODE_SYNTH)
+        if (mode == MODE_SYNTH) {
+            if (!(btn & bit) && (ctl.fwd & bit)) {     /* the release of a forwarded SEL + REC / PLAY */
+                ctl.fwd &= ~bit;
+                ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1);
+            }
             continue;
+        }
         ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1 | ((btn & bit) ? 1u : 0u));
     }
     if (shift != ui.shift) {
@@ -796,6 +918,11 @@ int app_sysex(const uint8_t *p, uint32_t n)
 }
 
 /* --------------------------------------------------------------- contract --- */
+static void sq_send_rt(uint8_t b)                      /* the sequencer's MIDI clock out (clock OUT): render context */
+{
+    if (plat_midi_out_room(TO_LINKS))
+        plat_midi_send(0x0Fu | (uint32_t)b << 8, TO_LINKS);
+}
 void app_init(void)
 {
     memset(&ctl, 0, sizeof ctl);
@@ -806,6 +933,7 @@ void app_init(void)
     setup_load();
     syn_init();
     syn_load_all();
+    sq_midi_out = sq_send_rt;
     memset(&sui, 0, sizeof sui);
     mode = setup.mode;
 }
@@ -894,7 +1022,29 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "syn_alg")) *got = (syn.cur[FP_ALG] & 31) + 1;
     else if (!strcmp(what, "syn_page")) *got = sui.page * 10 + sui.sub;
     else if (!strcmp(what, "syn_op")) *got = sui.op + 1;
-    else if (!strcmp(what, "syn_seq")) *got = syn_sq.seq_run;
+    else if (!strcmp(what, "syn_seq")) *got = sq.run;
+    else if (!strcmp(what, "seq_rec")) *got = sq.rec;
+    else if (!strcmp(what, "seq_pat")) *got = syn.seq_pat + 1;             /* the selected pattern, 1..16 */
+    else if (!strcmp(what, "seq_playing")) *got = sq.pat + 1;              /* the one playing */
+    else if (!strcmp(what, "seq_len")) *got = sq_ed_pat()->len;
+    else if (!strcmp(what, "seq_on")) *got = (int)sq_count_on(sq_ed_pat());  /* steps that play */
+    else if (!strcmp(what, "seq_cursor")) *got = sq_ed.cursor + 1;
+    else if (!strcmp(what, "seq_view")) *got = sq_ed.view + 1;
+    else if (!strcmp(what, "seq_step")) *got = sq.step + 1;
+    else if (!strcmp(what, "seq_trn")) *got = syn.seq_trn;
+    else if (!strcmp(what, "seq_clock_ext")) *got = sq_ext();
+    else if (!strcmp(what, "seq_dirty")) *got = sq_dirty;
+    else if (!strncmp(what, "seq_n", 5) && what[5] >= '0' && what[5] <= '9') *got = (int)sq_n(&sq_ed_pat()->s[(atoi(what + 5) - 1) & 63]);      /* seq_nS: notes in step S */
+    else if (!strncmp(what, "seq_note", 8) && what[8]) *got = sq_ed_pat()->s[(atoi(what + 8) - 1) & 63].note[0];     /* seq_noteS: its first */
+    else if (!strncmp(what, "seq_find", 8) && what[8]) {                   /* seq_findN: steps holding note N */
+        int i, j, c = 0, nt = atoi(what + 8);
+        for (i = 0; i < sq_ed_pat()->len; i++)
+            for (j = 0; j < (int)sq_n(&sq_ed_pat()->s[i]); j++)
+                c += sq_ed_pat()->s[i].note[j] == nt;
+        *got = c;
+    }
+    else if (!strncmp(what, "seq_tie", 7) && what[7]) *got = sq_is_tie(&sq_ed_pat()->s[(atoi(what + 7) - 1) & 63]);
+    else if (!strncmp(what, "seq_plays", 9) && what[9]) *got = sq_plays(&sq_ed_pat()->s[(atoi(what + 9) - 1) & 63]);
     else if (!strcmp(what, "syn_bank_used")) *got = syn_bank[0].used | (syn_bank[1].used << 16);
     else if (!strcmp(what, "syn_arp")) *got = syn.arp_on;
     else if (!strcmp(what, "list")) *got = ui.list_open ? ui.list.sel + 1 : 0;
