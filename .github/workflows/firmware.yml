@@ -15,8 +15,10 @@ jobs:
           submodules: recursive
       - name: Python packages
         run: python3 -m pip install --user pillow
-      - name: Cache the JieLi toolchain and SDK
-        uses: actions/cache@v4
+      # restore and save apart: the cache is kept once the download worked, even when the build then fails
+      - name: Restore the JieLi toolchain and SDK
+        id: jieli
+        uses: actions/cache/restore@v4
         with:
           path: ~/.jieli
           key: jieli-${{ hashFiles('base/tools/get_toolchain.sh', 'base/bsp/tools/get_sdk.sh') }}
@@ -26,8 +28,20 @@ jobs:
           # revision, and get_sdk.sh checks the files' SHA-256 either way.
           SDK_URL: https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK
         run: |
-          [ -e ~/.jieli/toolchain ] || sh base/tools/get_toolchain.sh
+          # JieLi's server sometimes resets the connection mid-download: up to three tries, from scratch each
+          for i in 1 2 3; do
+            [ -e ~/.jieli/toolchain ] && break
+            rm -rf ~/.jieli/jieli-linux-toolchains-*
+            sh base/tools/get_toolchain.sh || sleep 10
+          done
+          [ -e ~/.jieli/toolchain ]
           [ -d ~/.jieli/ac79-sdk/.git ] || sh base/bsp/tools/get_sdk.sh
+      - name: Save the JieLi toolchain and SDK
+        if: steps.jieli.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.jieli
+          key: ${{ steps.jieli.outputs.cache-primary-key }}
       - name: Build all packages
         env:
           JIELI_TOOLCHAIN: /home/runner/.jieli/toolchain
