@@ -2,10 +2,17 @@
 PY ?= .venv/bin/python
 B  := build
 
-test: unit sim tools
+test: unit synth sim tools
 
 unit: $(B)/r4p_test
 	$(B)/r4p_test
+
+synth: $(B)/synth_test
+	$(B)/synth_test
+
+$(B)/synth_test: tests/synth_test.c src/synth.c src/synth_ui.c src/synth/fm6_core.c
+	@mkdir -p $(B)
+	cc -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -o $@ tests/synth_test.c -lm
 
 $(B)/r4p_test: tests/r4p_test.c src/r4p.c src/r4p.h
 	@mkdir -p $(B)
@@ -20,4 +27,4 @@ tools:
 host:
 	$(PY) base/tools/build.py app --host
 
-.PHONY: test unit sim tools host
+.PHONY: test unit synth sim tools host

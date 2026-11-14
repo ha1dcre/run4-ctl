@@ -142,7 +142,7 @@ def show(d):
 
 
 # ------------------------------------------------------------------ the device ---
-MODE_RUN4, FW = 0, (0, 3)
+MODE_RUN4, FW = 0, (0, 4)
 
 
 def hello():
@@ -345,7 +345,7 @@ def selftest():
 
     h = lambda s: [int(x, 16) for x in s.split()]  # noqa: E731
     # device -> host: the bytes the C codec produces (tests/r4p_test.c, tests/scenarios)
-    eq(hello(), h("F0 7D 52 34 01 01 00 03 00 01 F7"), "HELLO")
+    eq(hello(), h("F0 7D 52 34 01 01 00 04 00 01 F7"), "HELLO")
     eq(btn(0, True), h("F0 7D 52 34 02 00 01 F7"), "BTN down")
     eq(btn(13, False), h("F0 7D 52 34 02 0D 00 F7"), "BTN up")
     eq(enc(3, 1), h("F0 7D 52 34 03 03 41 F7"), "ENC +1")

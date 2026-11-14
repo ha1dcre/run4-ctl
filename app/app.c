@@ -5,9 +5,12 @@
 #include <string.h>
 #include "r4p.c"
 #include "ui.c"
+#include "synth.c"
+#include "synth_ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 3
+#define FW_MINOR 4
+enum { MODE_RUN4 = 0, MODE_SYNTH = 1 };      /* SEL + HOME switches (docs/PROTOCOL.md); HELLO reports it */
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
 #define HELLO_MS 1000u
 #define POT_STEP 6                       /* 14-bit counts: the ADC's noise stays quiet */
@@ -17,10 +20,11 @@
 /* the SETUP page's settings (docs/PROTOCOL.md "Firmware-local"): kept in the store, so they survive a power cycle */
 enum { VEL_SOFT, VEL_NORMAL, VEL_HARD, VEL_FIXED, VEL_N };
 enum { AT_OFF, AT_POLY, AT_CHANNEL, AT_N };
-typedef struct { uint8_t ver, vel, at, led, chan; } setup_t;       /* chan 0..15 = MIDI channel 1..16; led 0 off, 1 low, 2 high */
+typedef struct { uint8_t ver, vel, at, led, chan, mode; } setup_t;   /* mode: the mode the FM-1 boots into */       /* chan 0..15 = MIDI channel 1..16; led 0 off, 1 low, 2 high */
 #define SETUP_VER 1
 static const int8_t VEL_CURVE[VEL_N] = {-3, 0, 3, 0};              /* touch_curve(): needs tuning on the device */
 static setup_t setup;
+static uint8_t mode;                                              /* MODE_RUN4 / MODE_SYNTH */
 
 static struct {
     uint32_t btn, keys;                  /* held at the last poll */
@@ -60,7 +64,7 @@ static uint8_t key_velocity(uint32_t k)
 /* ------------------------------------------------------------------ SETUP --- */
 static void setup_defaults(void)
 {
-    setup = (setup_t){SETUP_VER, VEL_NORMAL, AT_OFF, 2, 0};
+    setup = (setup_t){SETUP_VER, VEL_NORMAL, AT_OFF, 2, 0, MODE_RUN4};
 }
 static void setup_apply(void)
 {
@@ -71,7 +75,7 @@ static void setup_load(void)
     setup_t t;
     setup_defaults();
     if (plat_store_load(OBJ_SETUP, &t, sizeof t) == (int)sizeof t && t.ver == SETUP_VER && t.vel < VEL_N && t.at < AT_N &&
-        t.led <= 2 && t.chan < 16)
+        t.led <= 2 && t.chan < 16 && t.mode <= MODE_SYNTH)
         setup = t;
     setup_apply();
 }
@@ -149,7 +153,7 @@ static int send_frame(const uint8_t *f, size_t n)
 static void send_hello(void)
 {
     uint8_t f[16];
-    if (send_frame(f, r4p_hello(f, sizeof f, FW_MAJOR, FW_MINOR, R4P_MODE_RUN4)))
+    if (send_frame(f, r4p_hello(f, sizeof f, FW_MAJOR, FW_MINOR, mode == MODE_SYNTH ? R4P_MODE_SYNTH : R4P_MODE_RUN4)))
         ctl.hello_at = plat_ms();                      /* (no room: try again next frame, not every second) */
 }
 
@@ -205,6 +209,231 @@ static void list_move(int d)
     ui.dirty = D_ALL;
     if (s < l->first || s >= l->first + l->n)          /* outside what the host sent: ask for that window */
         ctl_queue((uint16_t)(0x8000u | (unsigned)R4P_PICK_MOVE << 8 | (unsigned)s));
+}
+
+static void octave_step(int d);
+/* ------------------------------------------------------------- Synth mode --- */
+static void synth_notes_off_keys(void)         /* held keys: the note-offs of the mode being left */
+{
+    uint32_t k;
+    for (k = 0; k < NKEYS; k++) {
+        if (ctl.sounding[k] != 255 && mode == MODE_RUN4 && plat_midi_out_room(TO_USB))
+            plat_midi_send(0x08u | (0x80u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16, TO_USB);
+        else if (ctl.sounding[k] != 255 && mode == MODE_SYNTH)
+            syn_event(2, ctl.sounding[k], 0, 0);
+        ctl.sounding[k] = 255;
+    }
+}
+static void mode_switch(uint8_t to)
+{
+    if (to == mode)
+        return;
+    synth_notes_off_keys();
+    if (mode == MODE_SYNTH) {                      /* leaving: the sound stops, the settings are kept */
+        syn_event(6, 0, 0, 0);
+        syn_event(8, 0, 0, 0);
+        syn_sq.seq_rec = 0;
+        if (sui.dirty_set || syn_bank_dirty)
+            syn_save_all();
+    }
+    mode = to;
+    setup.mode = to;
+    plat_store_save(OBJ_SETUP, &setup, sizeof setup);
+    ui.setup = 0;
+    ui.list_open = 0;
+    ui_connect(0);                                 /* a new HELLO, with the new mode, until the host answers */
+    ctl.hello_at = plat_ms() - HELLO_MS;
+    ui.local = to == MODE_SYNTH;
+    if (ui.local) {
+        syn_event(6, 0, 0, 0);
+        sp_build();
+    } else {
+        ui_reset_page();
+    }
+    ui.dirty = D_ALL;
+}
+static void synth_button(uint32_t k)
+{
+    switch (k) {
+    case B_HOME: sp_page_press(SP_HOME); break;
+    case B_EDIT: sp_page_press(SP_EDIT); break;
+    case B_ENV: sp_page_press(SP_ENV); break;
+    case B_LFO: sp_page_press(SP_LFO); break;
+    case B_FX: sp_page_press(SP_FX); break;
+    case B_GLO: sp_page_press(SP_GLO); break;
+    case B_ARP: sp_page_press(SP_ARP); break;
+    case B_SEQ: sp_page_press(SP_SEQ); break;
+    case B_PLAY: syn_event(8, (uint8_t)!syn_sq.seq_run, 0, 0); break;      /* the render owns the clock; its state is mirrored below */
+    case B_REC: syn_sq.seq_rec ^= 1u; sp_build(); break;
+    case B_SAVE: sp_save_patch(); break;
+    case B_OCTDN: octave_step(-1); break;
+    case B_OCTUP: octave_step(1); break;
+    default: break;
+    }
+}
+static void synth_keys(uint32_t keys)
+{
+    uint32_t k;
+    for (k = 0; k < NKEYS; k++) {
+        uint32_t bit = 1u << k;
+        if (!((keys ^ ctl.keys) & bit))
+            continue;
+        if (keys & bit) {
+            int32_t note = 53 + (int32_t)k + 12 * ctl.octave;
+            uint32_t j;
+            ctl.keys |= bit;
+            if (sp_op_page() && !ui.setup) {                    /* EDIT / ENV: the six lowest black keys pick the operator */
+                for (j = 0; j < 6u; j++)
+                    if (SP_BLACK6[j] == k) {
+                        sp_select_op(j);
+                        break;
+                    }
+                if (j < 6u) {
+                    ctl.sounding[k] = 255;
+                    continue;
+                }
+            }
+            if (note < 0 || note > 127) {
+                ctl.sounding[k] = 255;
+                continue;
+            }
+            ctl.sounding[k] = (uint8_t)note;
+            ctl.notes_on++;
+            if (syn_sq.seq_rec && sui.page == SP_SEQ) {         /* step recording: the key writes the cursor step */
+                syn.step[syn_sq.cursor & 15u].note = (uint8_t)note;
+                syn.step[syn_sq.cursor & 15u].on = 1;
+                syn_sq.cursor = (uint8_t)((syn_sq.cursor + 1u) % syn.seq_len);
+                sp_touch();
+                sp_build();
+            }
+            syn_event(1, (uint8_t)note, key_velocity(k), 0);
+        } else {
+            ctl.keys &= ~bit;
+            if (ctl.sounding[k] != 255) {
+                ctl.notes_off++;
+                syn_event(2, ctl.sounding[k], 0, 0);
+            }
+            ctl.sounding[k] = 255;
+        }
+    }
+}
+static void synth_frame(uint32_t keys, uint32_t now)
+{
+    uint32_t k;
+    synth_keys(keys);
+    for (k = 0; k < R4P_NENC; k++) {
+        int d = plat_enc((int)k);
+        if (!d)
+            continue;
+        if (ui.setup) {
+            if (k >= 3)
+                for (; d; d += d > 0 ? -1 : 1)
+                    setup_turn((int)k - 3, d > 0 ? 1 : -1);
+            continue;
+        }
+        if (k >= 3) {
+            sp_turn(k - 3u, d);
+        } else if (k == 0) {                             /* SELECT: the operator */
+            sp_select_op((uint32_t)((int)sui.op + (d > 0 ? 1 : -1) < 0 ? 0 : (int)sui.op + (d > 0 ? 1 : -1)));
+        } else if (k == 1) {                             /* ALGORITHM */
+            int a = (int)(syn.cur[FP_ALG] & 31u) + d;
+            char t[24] = "ALGORITHM ", u[12];
+            a = a < 0 ? 0 : a > 31 ? 31 : a;
+            syn.cur[FP_ALG] = (uint8_t)a;
+            sp_touch();
+            u_int((unsigned)a + 1u, u); u_cat(t, u);
+            sp_toast(t);
+            sp_build();
+        } else {
+            sp_patch_step(d);
+        }
+    }
+    /* the transport as the footer shows it */
+    {
+        r4p_status_t st;
+        st.bpm10 = syn.bpm10;
+        st.bar = (uint16_t)(syn_sq.seq_run ? syn_sq.seq_count / 16u + 1u : 1u);
+        st.beat = (uint8_t)(syn_sq.seq_run ? (syn_sq.seq_count % 16u) / 4u : 0u);
+        st.flags = (uint8_t)((syn_sq.seq_run ? R4P_ST_PLAY : 0u) | (syn_sq.seq_rec ? R4P_ST_REC : 0u));
+        if (memcmp(&st, &ui.st, sizeof st)) {
+            ui.st = st;
+            ui.dirty |= D_FOOT;
+        }
+    }
+    {
+        uint32_t i = syn.patch_idx < SYN_NFACTORY ? 0u : syn.patch_idx - SYN_NFACTORY;     /* where a single-voice dump goes */
+        if (syn.patch_idx < SYN_NFACTORY)
+            for (i = 0; i < 2u * SYN_BANK_N && syn_patch_used(SYN_NFACTORY + i); i++)
+                ;
+        syn_imp_slot = (uint8_t)(i < 2u * SYN_BANK_N ? i : 0u);
+    }
+    if (syn_imp_done) {                                  /* a DX7 dump arrived (app_sysex_byte): keep it */
+        char t[24] = "IMPORTED ", u[12];
+        u_int(syn_imp_done, u); u_cat(t, u); u_cat(t, syn_imp_done == 1u ? " VOICE" : " VOICES");
+        syn_imp_done = 0;
+        syn_save_all();
+        sp_toast(t);
+    }
+    if (sui.dirty_set && now - sui.edit_at > 4000u)      /* a few seconds after the last edit */
+        syn_save_all();
+}
+static void synth_lights(uint32_t *lb, uint32_t *lk, uint32_t *db, uint32_t *dk)
+{
+    static const uint8_t PB[SP_N] = {B_HOME, B_EDIT, B_ENV, B_LFO, B_FX, B_GLO, B_ARP, B_SEQ};
+    uint32_t i;
+    *lb |= 1u << PB[sui.page];
+    if (syn_sq.seq_run) *lb |= 1u << B_PLAY;
+    if (syn_sq.seq_rec) *lb |= ctl.blink ? 1u << B_REC : 0u;
+    if (sp_op_page()) {                                  /* the six operator keys */
+        for (i = 0; i < 6u; i++)
+            *(i == sui.op ? lk : dk) |= 1u << SP_BLACK6[i];
+    } else if (sui.page == SP_SEQ) {                     /* the steps along the lower keys */
+        for (i = 0; i < 16u && i < NKEYS; i++) {
+            if (i < syn.seq_len && syn.step[i].on)
+                *dk |= 1u << i;
+            if (i == syn_sq.cursor)
+                *lk |= 1u << i;
+        }
+        if (syn_sq.seq_run && syn_sq.seq_step < NKEYS)
+            *lk |= 1u << syn_sq.seq_step;
+    }
+    *lk |= ctl.keys;
+}
+
+/* the MIDI in (USB, Bluetooth, the jack) plays the synth: audio context, as the template reads it */
+static void synth_midi_in(void)
+{
+    uint32_t pkt;
+    int port;
+    while (plat_midi_in(&pkt, &port)) {
+        uint32_t st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu, ch = st & 0x0Fu;
+        if (st >= 0xF0u)
+            continue;
+        if (syn.chan && ch != (uint32_t)syn.chan - 1u)
+            continue;
+        switch (st & 0xF0u) {
+        case 0x90u:
+            if (d2) { syn_apply_event(&(syn_ev_t){1, (uint8_t)d1, (uint8_t)d2, 0}); break; }
+            /* fallthrough: velocity 0 is a note-off */
+        case 0x80u:
+            syn_apply_event(&(syn_ev_t){2, (uint8_t)d1, 0, 0});
+            break;
+        case 0xB0u:
+            if (d1 == 64u) syn_apply_event(&(syn_ev_t){5, (uint8_t)d2, 0, 0});
+            else if (d1 == 123u || d1 == 120u) syn_apply_event(&(syn_ev_t){3, 0, 0, 0});
+            break;
+        case 0xE0u:
+            syn_apply_event(&(syn_ev_t){4, (uint8_t)d1, (uint8_t)d2, 0});
+            break;
+        default:
+            break;
+        }
+    }
+}
+void app_sysex_byte(uint8_t b)
+{
+    if (mode == MODE_SYNTH)
+        syn_sysex_byte(b);
 }
 
 /* ------------------------------------------------------------------ input --- */
@@ -304,7 +533,7 @@ static void input(void)
             continue;
         }
         if (btn & bit) {
-            if (ui.list_open && !ui.setup) {           /* a host LIST: HOME / PLAY pick, any other page button or SAVE cancels */
+            if (ui.list_open && !ui.setup && mode == MODE_RUN4) {   /* a host LIST: HOME / PLAY pick, any other page button or SAVE cancels */
                 ctl.suppress |= bit;
                 if (k == B_HOME || k == B_PLAY)
                     list_pick(R4P_PICK_OK);
@@ -323,9 +552,20 @@ static void input(void)
                     setup_open(0);
                 continue;
             }
+            if (shift && k == B_HOME) {                /* SEL + HOME: the other mode */
+                ctl.suppress |= bit;
+                mode_switch(mode == MODE_SYNTH ? MODE_RUN4 : MODE_SYNTH);
+                return;
+            }
+            if (mode == MODE_SYNTH) {                  /* Synth mode keeps every button to itself */
+                synth_button(k);
+                continue;
+            }
             if (!shift && k == B_OCTDN) octave_step(-1);
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
+        if (mode == MODE_SYNTH)
+            continue;
         ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1 | ((btn & bit) ? 1u : 0u));
     }
     if (shift != ui.shift) {
@@ -334,6 +574,10 @@ static void input(void)
     }
     txq_flush();
 
+    if (mode == MODE_SYNTH) {
+        synth_frame(keys, now);
+        return;
+    }
     keys_poll(keys);
 
     if (ctl.txq_n)
@@ -379,17 +623,19 @@ static void lights(void)
         ctl.blink_at = now;
         ctl.blink ^= 1u;
     }
-    for (i = 0; i < NB; i++) {
+    for (i = 0; i < NB && mode == MODE_RUN4; i++) {
         uint8_t s = ctl.leds.btn[i];
         if (s == R4P_LED_ON || (s == R4P_LED_BLINK && ctl.blink)) lb |= 1u << i;
         else if (s == R4P_LED_DIM) db |= 1u << i;
     }
-    for (i = 0; i < NKEYS; i++) {
+    for (i = 0; i < NKEYS && mode == MODE_RUN4; i++) {
         uint8_t s = ctl.leds.key[i];
         if (s == R4P_LED_ON || (s == R4P_LED_BLINK && ctl.blink)) lk |= 1u << i;
         else if (s == R4P_LED_DIM) dk |= 1u << i;
     }
-    if (!ui.connected)
+    if (mode == MODE_SYNTH)
+        synth_lights(&lb, &lk, &db, &dk);
+    else if (!ui.connected)
         lk |= ctl.keys;
     plat_lights(lb, lk, db, dk, setup.led);
 }
@@ -408,6 +654,11 @@ int app_sysex(const uint8_t *p, uint32_t n)
     ctl.frames_in++;
     switch (m.cmd) {
     case R4P_HELLO_ACK:
+        if (mode == MODE_SYNTH) {                      /* the host knows we are a synth: nothing to draw or sync */
+            ui.connected = 1;
+            ctl.host_minor = m.u.ack.minor;
+            break;
+        }
         ui_connect(1);
         ctl.leds = (r4p_leds_t){{0}, {0}};
         ctl.host_minor = m.u.ack.minor;
@@ -419,7 +670,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
         ctl.leds = m.u.leds;
         break;
     case R4P_PAGE: case R4P_VALUE: case R4P_STATUS: case R4P_TOAST: case R4P_LIST:
-        if (ui.connected)                              /* (frames before the ack are the previous session's) */
+        if (ui.connected && mode == MODE_RUN4)                              /* (frames before the ack are the previous session's) */
             ui_apply(&m);
         break;
     default:
@@ -437,15 +688,26 @@ void app_init(void)
     memset(ctl.snd_ch, 0, sizeof ctl.snd_ch);
     ui.setup = 0;
     setup_load();
+    syn_init();
+    syn_load_all();
+    memset(&sui, 0, sizeof sui);
+    mode = setup.mode;
 }
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t i;
-    (void)master_q12;
-    for (i = 0; i < 2u * n; i++)                       /* a controller makes no sound */
+    if (mode == MODE_SYNTH) {                          /* Synth mode: the FM voices; MASTER is the volume */
+        synth_midi_in();
+        syn_render(lr, n, master_q12);
+        return;
+    }
+    for (i = 0; i < 2u * n; i++)                       /* RUN4 mode: a controller makes no sound */
         lr[i] = 0;
 }
-void app_panic(void) {}
+void app_panic(void)
+{
+    syn_event(6, 0, 0, 0);
+}
 void app_ui_init(void)
 {
     touch_on(1);                                       /* the keys' readings: velocity and pressure */
@@ -454,6 +716,9 @@ void app_ui_init(void)
     ctl.hello_at = plat_ms() - HELLO_MS;
     memset(&ui, 0, sizeof ui);
     ui_reset_page();
+    ui.local = mode == MODE_SYNTH;
+    if (ui.local)
+        sp_build();
     ui.dirty = D_ALL;
     lcd_fill(0, 0, 240, 240, R4_BG);
 }
@@ -474,6 +739,15 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "shift")) *got = ui.shift;
     else if (!strcmp(what, "page_idx")) *got = ui.page.page_idx;
     else if (!strcmp(what, "setup")) *got = ui.setup;
+    else if (!strcmp(what, "mode")) *got = mode;
+    else if (!strcmp(what, "syn_voices")) *got = (int)syn_active_voices;
+    else if (!strcmp(what, "syn_patch")) *got = syn.patch_idx;
+    else if (!strcmp(what, "syn_alg")) *got = (syn.cur[FP_ALG] & 31) + 1;
+    else if (!strcmp(what, "syn_page")) *got = sui.page * 10 + sui.sub;
+    else if (!strcmp(what, "syn_op")) *got = sui.op + 1;
+    else if (!strcmp(what, "syn_seq")) *got = syn_sq.seq_run;
+    else if (!strcmp(what, "syn_bank_used")) *got = syn_bank[0].used | (syn_bank[1].used << 16);
+    else if (!strcmp(what, "syn_arp")) *got = syn.arp_on;
     else if (!strcmp(what, "list")) *got = ui.list_open ? ui.list.sel + 1 : 0;
     else if (!strcmp(what, "host_minor")) *got = ctl.host_minor;
     else if (!strcmp(what, "set_vel")) *got = setup.vel;

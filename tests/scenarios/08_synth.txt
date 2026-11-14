@@ -1,0 +1,146 @@
+# Synth mode: SEL + HOME switches, HELLO reports mode 1, keys and MIDI in play the FM voices, pages, patches, sequencer.
+@ACK@
+wait 100
+@TAPE@
+wait 50
+expect mode 0
+sysex_out
+# SEL + HOME: Synth mode (nothing of it reaches the host as BTN HOME; the HELLO says mode 1)
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 1200
+expect mode 1
+shot synth_home.png
+expect_sysex F0 7D 52 34 01 01 00 04 01 01 F7
+sysex_out
+# the host acknowledges and stays quiet; its PAGE frames are ignored in Synth mode
+@ACK@
+wait 100
+@TAPE@
+wait 50
+shot synth_home_after_host.png
+expect syn_patch 0
+# keys play FM voices locally (no MIDI out) and the audio is not silence
+key 7 down 100 0
+wait 400
+expect syn_voices 1
+key 11 down 100 0
+key 14 down 100 0
+wait 600
+expect syn_voices 3
+key 7 up
+key 11 up
+key 14 up
+wait 1500
+expect syn_voices 0
+expect_no_out USB 90 3C 64
+# MIDI in (the USB port) plays it too: a note, then pitch bend and the sustain pedal
+midi 90 3C 64
+wait 300
+expect syn_voices 1
+midi 80 3C 00
+wait 1500
+expect syn_voices 0
+# PRESETS choose the patch, ALGORITHM changes the algorithm
+turn PRESET 1
+wait 100
+expect syn_patch 1
+shot synth_patch.png
+turn ALGO 2
+wait 100
+expect syn_alg 7
+# page buttons: EDIT shows the operator, black keys pick OP2, K1..K4 edit; the same button again = sub-page
+tap EDIT
+wait 100
+expect syn_page 10
+key 3 down 100 0
+wait 40
+key 3 up
+wait 100
+expect syn_op 2
+shot synth_edit.png
+turn K1 3
+tap EDIT
+wait 100
+expect syn_page 11
+tap ENV
+wait 100
+expect syn_page 20
+shot synth_env.png
+tap LFO
+wait 100
+shot synth_lfo.png
+tap FX
+wait 100
+turn K4 20
+wait 100
+shot synth_fx.png
+tap GLO
+wait 100
+shot synth_glo.png
+tap ARP
+wait 100
+shot synth_arp.png
+# the sequencer: PLAY starts, the footer runs, a sounding step makes voices
+tap SEQ
+wait 100
+shot synth_seq.png
+tap PLAY
+wait 1500
+expect syn_seq 1
+shot synth_seq_run.png
+expect_no_out USB 90 24 64
+tap PLAY
+wait 10000
+expect syn_seq 0
+expect syn_voices 0
+# a short listening file through the real chain: patch 1, a chord, the release into the reverb and delay (FX page)
+tap FX
+turn K3 25
+wait 100
+tap HOME
+wav synth_demo.wav
+key 3 down 100 0
+key 7 down 90 0
+key 10 down 90 0
+key 14 down 90 0
+wait 1200
+key 3 up
+key 7 up
+key 10 up
+key 14 up
+wait 1800
+turn PRESET 1
+key 7 down 100 0
+wait 700
+key 7 up
+wait 1500
+wavstop
+# SAVE stores the patch in the first user slot (U01); it is there after a power cycle
+tap HOME
+tap SAVE
+wait 100
+expect syn_bank_used 1
+reboot
+wait 100
+expect mode 1
+expect syn_bank_used 1
+# back: SEL + HOME, the HELLO says mode 0 and the host's PAGE draws again
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 1200
+expect mode 0
+sysex_out
+wait 1200
+expect_sysex F0 7D 52 34 01 01 00 04 00 01 F7
+@ACK@
+wait 100
+@TAPE@
+wait 50
+shot synth_back_to_run4.png

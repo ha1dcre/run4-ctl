@@ -138,7 +138,7 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 3, 0, 1]), "SYNC": frame("SYNC_REQ"),
+        "HELLO": frame("HELLO", [1, 0, 4, 0, 1]), "SYNC": frame("SYNC_REQ"),
         "POT_8192": frame("POT", v14(8192)), "POT_MAX": frame("POT", v14(16383)),
     }
     for i in range(14):

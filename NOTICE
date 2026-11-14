@@ -11,6 +11,20 @@ It is built on, and links at build time with:
   felucca-bsp  https://github.com/hugelton/felucca-bsp  (git submodule in base/bsp/, pulled in by fm1-base)
             Copyright (C) Leo Kuroshita (Hugelton Instruments) and contributors; MPL-2.0
 
+Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Felucca, the firmware by Leo Kuroshita
+(@kurogedelic), Hugelton Instruments, https://github.com/hugelton/Felucca (GPL-3.0-only, Felucca-Engines MIT):
+
+  src/synth/fm6_core.c   Felucca's FM6 core, a C port of the msfa engine of Dexed.
+            SPDX-License-Identifier: Apache-2.0. Copyright 2012 Google Inc.; Copyright 2016-2025 Pascal Gauthier;
+            C port for Felucca (integer only) 2026 Leo Kuroshita. Copied unchanged, header kept; the licence text is
+            in LICENSES/Apache-2.0.txt.
+  src/synth/fm6_tables.h  the tables fm6_core.c needs, as written by Felucca's tools/gen_tables.py (GPL-3.0-only;
+            the sine table comes from Felucca-Engines, MIT); not edited.
+  src/synth/fm6_factory.h  Felucca's own FM6 factory voices, as written by its tools/gen_fm6_patches.py (GPL-3.0-only).
+  src/synth.c   the patch pack / unpack routines follow Felucca's eng_fm6.c (fm6_unpack / fm6_pack, GPL-3.0-only);
+            the rest of the file (voices, effects, arpeggiator, sequencer, DX7 SysEx) is new.
+  The DX7 voice and bank formats are Yamaha's; no factory ROM data of any instrument is included.
+
 Files from fm1-base and felucca-bsp stay under the Mozilla Public License 2.0, file by file; the source of those
 files is the submodules at the commits recorded in this repository. MPL-2.0 is compatible with the GPL (its section
 3.3). The shape of app/ follows fm1-base's template (base/template/) and the way charlesvestal/fm1-ctl is built on it.

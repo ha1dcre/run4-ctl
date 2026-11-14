@@ -21,6 +21,8 @@ for s in tests/scenarios/*.txt; do
 done
 python3 -I tests/check_btn_order.py build/sim/05_stalled_host.log | tee -a build/sim/05_stalled_host.log || fail=1
 for p in build/sim/*.png; do python3 -I tools/pngpack.py "$p" tests/screens/$(basename "$p"); done
+mkdir -p tests/audio
+for w in build/sim/*.wav; do [ -f "$w" ] && case "$w" in *synth_demo.wav) cp "$w" tests/audio/;; esac; done
 ok=$(cat build/sim/*.log | grep -c '^  ok' || true)
 bad=$(cat build/sim/*.log | grep -c '^FAIL' || true)
 echo "sim: $ok checks ok, $bad failed"

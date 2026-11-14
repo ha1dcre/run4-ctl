@@ -27,6 +27,7 @@ typedef struct {
     uint8_t dots;                   /* the "not connected" screen's animation phase */
     uint16_t dirty;
     uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
+    uint8_t local;                  /* Synth mode: the pages are ours, no host needed (synth_ui.c) */
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
     r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
@@ -322,7 +323,7 @@ static void ui_draw(void)
         ui.dirty = 0;
         return;
     }
-    if (!ui.connected && !ui.setup) {
+    if (!ui.connected && !ui.local && !ui.setup) {
         uint8_t ph = (uint8_t)((now / 500u) & 3u);
         if (ph != ui.dots) {
             ui.dots = ph;
