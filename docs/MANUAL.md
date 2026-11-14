@@ -61,7 +61,7 @@ delay and reverb (room, spring, hall).
 
 | Control | Use |
 | --- | --- |
-| Keys | play (OCT- / OCT+ shift them); velocity as set on the SETUP page |
+| Keys | play (OCT- / OCT+ shift them); velocity as set on the SETUP page; in a scale and as chords if set (see Scale and chord keys) |
 | ALGORITHM encoder | the algorithm of the voice (1 to 32) |
 | PRESETS encoder | the voice (F1 to F8, then the user voices that exist) |
 | SELECT encoder | the operator (OP1 to OP6) on EDIT and ENV (the six lowest black keys pick it too); the step page on SEQ |
@@ -71,7 +71,9 @@ delay and reverb (room, spring, hall).
 | PLAY, REC | start / stop the sequencer; record into it (see Sequencer) |
 | SEL + a key | transpose the sequence: it plays from that key (C4 = no transpose) |
 | SEL + REC, SEL + PLAY | with RUN4 connected: RUN4's REC and PLAY (see RUN4 and Synth mode together) |
-| SAVE | store the voice in its user slot, or in the first free one (on SEQ: an armed COPY TO / CLEAR) |
+| SAVE | store the voice in its user slot, or in the first free one (on SEQ: an armed COPY TO / CLEAR; a held step: clear its locks; SONG: insert / delete an entry) |
+| SEL + EDIT | MUTATE: a random variation of the voice (see Mutate) |
+| SEL + SAVE | undo the last MUTATE (again: redo it) |
 
 **Pages.**
 
@@ -82,13 +84,43 @@ delay and reverb (room, spring, hall).
 | ENV (ENVELOPE n) | RATE 1 to 4 | LEVEL 1 to 4 |
 | LFO | SPEED, DELAY, PITCH MOD, AMP MOD | WAVE, PITCH SENS, LFO SYNC, OSC SYNC |
 | FX | DRIVE, CHORUS, DELAY, REVERB (amounts) | DELAY TIME (1/8 to dotted 1/2), DELAY FEEDBACK, REVERB TYPE, REVERB SIZE |
-| GLO (GLOBAL) | TRANSPOSE, TUNE, MIDI CH (OMNI or 1 to 16), BEND RANGE | VELOCITY amount |
-| ARP | ARP on/off, MODE (up, down, up-down, random, played), RATE, OCTAVES | GATE |
-| SEQ (SEQUENCER) | three sub-pages and two more views: see Sequencer | |
+| GLO (GLOBAL) | TRANSPOSE, TUNE, MIDI CH (OMNI or 1 to 16), BEND RANGE | VELOCITY amount, MUTATE amount (SMALL, MEDIUM, WILD); third sub-page KEYS: SCALE, ROOT, KEY MODE, MIDI IN |
+| ARP | ARP on/off, MODE (up, down, up-down, random, played), RATE, OCTAVES | GATE, CHORD, INVERSION, SPREAD |
+| SEQ (SEQUENCER) | four sub-pages (the fourth is SONG) and two more views: see Sequencer | |
 
 The delay is cut at 371 ms: at slow tempi the long divisions are shortened to it.
 
 **Arpeggiator.** It turns held keys into an arpeggio and shares the sequencer's tempo (and a MIDI clock coming in).
+
+### Scale and chord keys
+
+**Scale** (GLO, third sub-page KEYS). SCALE: OFF (every key as it is), MAJOR, MINOR, DORIAN, PHRYGIAN, LYDIAN,
+MIXOLYDIAN, HARMONIC MINOR, MAJOR and MINOR PENTATONIC, BLUES; ROOT: C to B. KEY MODE:
+
+* **SNAP** (the default, and the recommended one): every key plays the nearest note of the scale (between two, the
+  lower one). The keyboard keeps its layout, so chords and shapes you know still work; a key outside the scale doubles
+  its neighbour. The keys of the scale light dim.
+* **IN KEY**: the 16 white keys are the scale in a row, from the root in the third octave up (OCT- / OCT+ shift it); the
+  black keys are silent. Runs and pentatonics fall under the fingers; the roots light dim.
+
+MIDI IN: AS IS (the default: notes from USB, Bluetooth or the jack play as they come) or SCALE (snapped to the scale
+too; chords are not added to MIDI in).
+
+**Chords** (ARP, second sub-page). CHORD: OFF, MAJ, MIN, 7, MAJ7, MIN7, SUS2, SUS4, POWER, SCALE 3 and SCALE 4 (the
+triad / seventh of the scale on that key, so one finger plays in key; with the scale OFF they are MAJ and 7).
+INVERSION: ROOT, 1ST, 2ND, 3RD (the lowest notes go up an octave). SPREAD: CLOSE, OPEN (the second note up an
+octave), WIDE (the lowest note down an octave). One key plays the chord (up to four notes); the arpeggiator gets all
+of them, and live and step recording write all of them into the step.
+
+### Mutate
+
+**SEL + EDIT** makes a random variation of the sounding voice, by the MUTATE amount on GLO's second sub-page: SMALL
+(levels, envelopes and detune move a little), MEDIUM (some ratios too, now and then the algorithm), WILD (anything,
+the LFO too). It stays musical: ratios stay on whole and half numbers, the operators that you hear (carriers) stay
+loud, attack and release stay reasonable, so the result always sounds. The screen says what changed, e.g. MUTATE ALG
+OP235 LFO. **SEL + SAVE** goes back to the voice before it, and again forward (one step). Choosing another voice
+forgets it. Nothing is written into a voice slot until you press SAVE (like any edit, the sounding voice is kept when
+the FM-1 is switched off).
 
 ### Sequencer
 
@@ -102,6 +134,7 @@ before plays goes on through it), and has its own velocity, gate and chance. Eac
 | Do | What happens |
 | --- | --- |
 | tap a white key | the step on / off (a step switched on with nothing in it gets the last note entered, C4 at first; off keeps its notes) |
+| hold a white key + a page button | K1 to K4 lock that page's sound parameters on the step (see Parameter locks) |
 | hold a white key + play keys | the step gets those notes: the first replaces what it had, more keys while it is held make a chord (up to 4) |
 | hold a white key + K1 / K2 / K3 / K4 | its NOTE (the whole chord moves), VELOCITY, GATE, CHANCE; PAT = the pattern's value |
 | a black key (1 to 4) | that step page; while playing the page follows the playing step until you pick one |
@@ -126,10 +159,32 @@ the following steps writes TIEs there. With the arpeggiator on, what it plays is
 | 1 | PATTERN | LENGTH (1-64) | SWING (50-75 %) | TEMPO |
 | 2 | RATE | GATE | VELOCITY | TRANSPOSE (-24 to +24) |
 | 3 | STEP (cursor) | COPY TO | CLEAR | CLOCK (AUTO, OUT, INT) |
+| 4 SONG | ENTRY | PATTERN | REPEATS (1-16) | SONG (OFF, ON) |
 
 A pattern picked while another plays starts when that one comes to its end. **Copy:** turn COPY TO to the target
 pattern and press SAVE. **Clear:** turn CLEAR right and press SAVE (either is forgotten after 8 seconds or on another
 page). **Transpose** while playing: hold SEL and press a key (C4 = +0, F4 = +5).
+
+**Parameter locks.** Hold a step on the grid and press a page button: its four tiles show what you can lock on that
+step: **HOME** BRIGHT, FEEDBACK, ENV SPEED, LEVEL; **LFO** SPEED, DELAY, PITCH MOD, AMP MOD; **FX** DRIVE, CHORUS,
+DELAY, REVERB, and FX again DELAY TIME, DELAY FDBK, REVERB SIZE; **SEQ** the step's own NOTE, VELOCITY, GATE, CHANCE
+again. The ALGORITHM encoder locks the algorithm. Turning K1 to K4 locks the value on the step: the tile turns amber,
+a white tick on its bar shows the voice's own value, and the step gets an amber mark on the grid. Turn it back to the
+voice's own value and the lock goes; **SAVE** with the step held removes all its locks. Hold a step, then hold **SEL**
+and press more steps to lock them all at once. When a step plays, its locks sound with it and stay until the next step
+that plays (a step without locks plays the voice as it is); a TIE step's locks change the held note's sound; a step
+that does not play (off, chance) changes nothing; STOP ends them. Locks are part of the pattern: COPY TO copies them,
+CLEAR clears them. Up to six different parameters can be locked in one pattern (on any of its steps); a seventh says
+LOCK LANES FULL. The locks change the sound only while the sequencer plays: saving the voice saves the voice's own
+values. Notes you play on the keys while a locked step sounds have its sound too.
+
+**Song.** The fourth SEQ sub-page chains patterns: up to 32 entries, each a pattern and how often it plays (1 to 16).
+K1 moves through the entries (after the last one: NEW, where turning PATTERN adds one); K2 the entry's pattern; K3 its
+repeats; K4 SONG on or off. SAVE inserts a copy of the entry; turning PATTERN below P01 arms DELETE and SAVE removes the
+entry. The band shows the chain, the entry playing lit. With SONG on, PLAY (or a MIDI START with clock AUTO) plays the
+chain from its first entry, each pattern to its end as a queued pattern change does, and starts over after the last;
+with any clock (AUTO, OUT, INT). The grid shows the pattern playing (turn PATTERN to edit another one meanwhile) and
+says SONG 2/5 x1/2 (entry, loop). With SONG off, patterns play as before. The chain is kept with the patterns.
 
 **Clock.** AUTO (the default): a MIDI clock coming in (USB, Bluetooth or the jack) drives the sequencer and the
 arpeggiator, its START and STOP start and stop the sequencer, and when the clock stops coming for half a second the
@@ -140,7 +195,7 @@ INT: the own tempo, a clock coming in is ignored.
 stopped (writing the flash stops the sound for a moment), and when you leave Synth mode or press SAVE.
 
 **MIDI in.** In Synth mode USB, Bluetooth and the TRS jack play the synth: notes, sustain pedal, pitch bend, all notes
-off, on the channel set in GLOBAL (OMNI by default). The notes of the keys are not sent anywhere in this mode.
+off, on the channel set in GLOBAL (OMNI by default); snapped to the scale when MIDI IN is SCALE. The notes of the keys are not sent anywhere in this mode.
 
 **DX7 patches.** Send a DX7 **32-voice bank** (SysEx, 4104 bytes) or a **single voice** (163 bytes) to the FM-1 over USB or
 Bluetooth while it is in Synth mode, from a librarian or a DAW. A bank replaces the 32 user voices; a single voice goes

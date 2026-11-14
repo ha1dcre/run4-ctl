@@ -22,12 +22,13 @@ Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Fel
             the sine table comes from Felucca-Engines, MIT); not edited.
   src/synth/fm6_factory.h  Felucca's own FM6 factory voices, as written by its tools/gen_fm6_patches.py (GPL-3.0-only).
   src/synth.c   the patch pack / unpack routines follow Felucca's eng_fm6.c (fm6_unpack / fm6_pack, GPL-3.0-only);
-            the rest of the file (voices, effects, arpeggiator, DX7 SysEx) is new.
+            the rest of the file (voices, effects, arpeggiator, DX7 SysEx, parameter-lock overrides, scales and chords,
+            mutate, the host voice's settings swap) is new.
   src/synth_seq.c   the sequencer's step model (four notes, NOTE / TIE, velocity, chance), its live recording (Felucca
             seq.c rec_note / rec_hold / rec_release: nearest step, overdub, held notes as TIEs, an early release puts
             the last TIE back, no double trigger) and step entry (ui_input.c seq_entry: a chord into the cursor step,
             letting go moves on) are adapted from Felucca (GPL-3.0-only, Copyright (C) 2026 Leo Kuroshita); the rest
-            (patterns, clock, swing, MIDI clock, storage, the grid editing) is new.
+            (patterns, clock, swing, MIDI clock, storage, the grid editing, parameter locks, the song chain) is new.
   src/synth_ui.c   the scope follows Felucca's HOME scope (fx.c scope_buf, ui_graph.c graph_scope, GPL-3.0-only: a ring
             of every other output sample, a rising zero crossing as the trigger, an auto-scaled 2 px trace); the
             trigger's hysteresis, the slow release of the scale, the strip-wise sending and the other views are new.

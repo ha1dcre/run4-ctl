@@ -12,7 +12,8 @@ firmware platform [fm1-base](https://github.com/charlesvestal/fm1-base). See `NO
 Status: **complete in the host simulator, not yet run on an FM-1.** RUN4 mode (protocol v1.3 in `docs/PROTOCOL.md`: codec,
 LIST, non-blocking output, SETUP page, touch velocity and aftertouch, the host voice, the voice list, the tape view, the
 patch backup) and Synth mode (Felucca's FM6 engine, effects, DX7
-SysEx import, arpeggiator, sequencer, pages) are implemented and tested in fm1-base's host simulator and in native
+SysEx import, arpeggiator, sequencer with parameter locks and a song chain, scale and chord keys, mutate, pages) are
+implemented and tested in fm1-base's host simulator and in native
 tests (`make test`). Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
 the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
@@ -24,7 +25,7 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 | `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats) |
 | `src/ui.c` | the display: state from host frames, redraw by region |
 | `src/tape_ui.c` | RUN4 mode's tape view (protocol 1.3): waveform, loop region, playhead and meters in Synth mode's layout |
-| `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import; the step sequencer (16 x 64 steps, after Felucca's); its pages |
+| `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import, scales and chords, mutate; the step sequencer (16 x 64 steps, after Felucca's) with parameter locks and the song chain; its pages |
 | `app/` | the fm1-base app: `app.c` (input, local rules, host frames), `app.h`, `fm1.toml` |
 | `tests/r4p_test.c`, `tests/synth_test.c` | codec unit tests; native tests of the synth engine (levels, polyphony, DX7 import, CPU) |
 | `tests/scenarios/*.txt`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness) |
@@ -34,8 +35,12 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 | `base/` | fm1-base (git submodule; it brings felucca-bsp) |
 
 Store (flash data area, two 4 KiB sectors per object, `app/app.h`): panel 0xDC000, SETUP 0xDA000, Synth settings
-0xD8000 (186 B), two user banks 0xD6000 / 0xD4000 (2056 B each), Bluetooth 0xDE000, and the sequencer's 16 patterns in
-four objects 0xD2000 / 0xD0000 / 0xCE000 / 0xCC000 (2088 B each, 8352 B; 32 KiB of flash). RAM for the patterns: 8.3 KB.
+0xD8000 (198 B, layout 3; a layout-2 store of 186 B loads with the new fields at their defaults), two user banks
+0xD6000 / 0xD4000 (2056 B each), Bluetooth 0xDE000, and the sequencer's 16 patterns in four objects 0xD2000 / 0xD0000 /
+0xCE000 / 0xCC000 (layout 2: 3724 B each, 14896 B, still one object per sector pair, so no more flash than before; a
+layout-1 object of 2088 B loads unchanged, without locks and chain). Each object holds four patterns (520 B each),
+their parameter locks (6 lanes a pattern: a parameter id and a value per step, 392 B) and the song's chain (66 B,
+object 0's counts). RAM: patterns 8.3 KB, locks 6.1 KB (6272 B), chain 66 B.
 
 Display budget (Synth mode's live band, `src/synth_ui.c`): at most 25 frames a second, drawn in RAM and sent as 16 px
 strips only as tall as the old and new trace (measured in the simulator, scenario `14_synth_look`: ~18.5 KB a frame for
