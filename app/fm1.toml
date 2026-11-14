@@ -13,6 +13,7 @@ ble = true
 ble_stack = "own"
 usb_audio_in = true              # the FM-1's output recordable over USB (RUN4 records Synth mode); fm1-base's default, stated
 usb_audio_out = true             # a computer plays through the FM-1 (fm1-base's default)
+midi_stamp = true                # MIDI in stamped where it lands: notes and clock placed in the block (app.c midi_pump)
 emu = ["midi"]                   # browser emulator (build.py app --web): Web MIDI in/out with SysEx (keyboard, RUN4)
 
 # firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)

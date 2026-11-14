@@ -291,7 +291,9 @@ typedef struct {
     uint8_t note, key;                       /* the MIDI note it was started on; key: the key is still down */
     uint8_t held;                            /* kept sounding by the sustain pedal after its key came up */
     uint8_t at;                              /* its key's pressure (poly aftertouch), 0..127 */
+    uint8_t ofs;                             /* it started this many frames into a sub-block: its output that much later */
     uint32_t age;
+    int32_t carry[FM6_N];                    /* (ofs > 0) the last ofs frames of its sub-block, for the next one */
 } syn_voice_t;
 static syn_voice_t syn_v[SYN_VOICES] PLAT_POOL;
 static uint32_t syn_age;
@@ -479,10 +481,11 @@ static int32_t syn_vel(int32_t vel)
     int32_t s = syn.vel_sens;
     return syn_clamp(64 + (vel - 64) * s / 100, 1, 127);
 }
+static uint8_t syn_ev_ofs;                    /* a placed note-on's frame in the sub-block it falls in (syn_timed) */
 static void syn_note_on_now(uint8_t note, uint8_t vel)
 {
     syn_voice_t *v;
-    uint32_t i;
+    uint32_t i, k;
     int32_t t;
     if (syn_dirty)
         syn_sync();
@@ -490,6 +493,12 @@ static void syn_note_on_now(uint8_t note, uint8_t vel)
         if (syn_v[i].n.live && syn_v[i].note == note && syn_v[i].key)
             break;
     v = i < SYN_VOICES ? &syn_v[i] : syn_alloc();
+    if (!v->n.live)                             /* (sample-accurate starts: what it still owes from before, or nothing) */
+        memset(v->carry, 0, sizeof v->carry);
+    else
+        for (k = v->ofs; k < FM6_N; k++)
+            v->carry[k] = 0;
+    v->ofs = syn_ev_ofs;
     t = (int32_t)note + syn.transpose + syn_eff[FP_TRNSP] - 24;
     fm6_note_init(&v->n, syn_eff, t, syn_vel(vel), i == SYN_VOICES && !v->n.live);
     if (i == SYN_VOICES && v->n.live)           /* stolen: start from silence, not from the old note's phases */
@@ -872,6 +881,11 @@ static void syn_apply_event(const syn_ev_t *e)
     case 8:
         syn_seq_start(e->a);
         break;
+    case 11:                                 /* MIDI real-time (clock, start, stop) at its frame */
+        sq_rt_ofs = syn_ev_ofs;
+        sq_realtime(e->a);
+        sq_rt_ofs = 0;
+        break;
     case 6: {
         uint32_t i;
         for (i = 0; i < SYN_VOICES; i++)
@@ -886,6 +900,54 @@ static void syn_apply_event(const syn_ev_t *e)
     default:
         break;
     }
+}
+/* MIDI in placed in the block (fm1-base midi_stamp, app.c midi_pump): each message comes with its frame in the block
+ * about to be rendered, and syn_render applies it at the sub-block (FM6_N frames) it falls in; a note-on starts its
+ * voice at the very frame (syn_voice_t ofs: the voice's output delayed by 0..31 frames for its life), a note-off, a
+ * controller or a clock at that sub-block (within 0.73 ms), the clock's tempo measured to the frame. As in Mutable
+ * Dreams' md_block_begin / md_midi_at (Kid Bunka, MIT OR GPL-3.0-only): what came in during the last block plays at
+ * the same point of this one, a constant one-block latency instead of up to a block of jitter. Audio context. */
+#define SYN_TQ 32
+static struct { syn_ev_t e; uint16_t frame; } syn_tq[SYN_TQ];
+static uint8_t syn_tq_n;
+static void syn_apply_event(const syn_ev_t *e);
+static void syn_timed(const syn_ev_t *e, uint32_t frame)
+{
+    uint32_t i;
+    if (!frame || syn_tq_n >= SYN_TQ) {          /* (now: at the block's start; a full queue too) */
+        syn_apply_event(e);
+        return;
+    }
+    i = syn_tq_n++;
+    while (i && syn_tq[i - 1u].frame > frame) {  /* in order of their frames */
+        syn_tq[i] = syn_tq[i - 1u];
+        i--;
+    }
+    syn_tq[i].e = *e;
+    syn_tq[i].frame = (uint16_t)frame;
+}
+static void syn_timed_due(uint32_t b, uint32_t end)   /* the placed events before frame end, at sub-block b */
+{
+    while (syn_tq_n && syn_tq[0].frame < end) {
+        syn_ev_t e = syn_tq[0].e;
+        uint32_t f = syn_tq[0].frame;
+        syn_tq_n--;
+        memmove(syn_tq, syn_tq + 1, syn_tq_n * sizeof syn_tq[0]);
+        syn_ev_ofs = (uint8_t)(f > b && f < b + FM6_N ? f - b : 0u);
+        syn_apply_event(&e);
+        syn_ev_ofs = 0;
+    }
+}
+/* where in a block of n frames a message stamped t24 (plat_ticks24) lands: the block before this one started at prev
+ * and lasted span ticks; a message from before it comes first (0), one after it last (n - 1) */
+static uint32_t syn_midi_frame(uint32_t t24, uint32_t prev, uint32_t span, uint32_t n)
+{
+    int32_t since = (int32_t)(t24 - prev);
+    if (since <= 0 || !span || !n)
+        return 0;
+    if ((uint32_t)since >= span)
+        return n - 1u;
+    return (uint32_t)((uint64_t)(uint32_t)since * n / span);
 }
 /* the scope's tap (synth_ui.c draws it, after Felucca's HOME scope): every other output frame, mono, 16 bit, into a ring
  * the main loop copies; the render only stores (16 stores a 32-frame block) */
@@ -910,6 +972,7 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
     for (b = 0; b + FM6_N <= n; b += FM6_N) {
         int32_t mix[FM6_N], bus[FM6_N], lfo_v, lfo_d, lf_fine = syn.tune * 2366 / 1000, fb;
         uint32_t live = 0;
+        syn_timed_due(b, b + FM6_N);
         if (syn_dirty)
             syn_sync();
         syn_clock(FM6_N);
@@ -935,7 +998,19 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             for (i = 0; i < FM6_N; i++) {
                 int32_t x = bus[i] - v->n.dc;
                 v->n.dc += x >> 10;           /* the one-pole high-pass of eng_fm6.c: FM puts sidebands at 0 Hz */
-                mix[i] += x >> 4;
+                bus[i] = x >> 4;
+            }
+            if (!v->ofs) {
+                for (i = 0; i < FM6_N; i++)
+                    mix[i] += bus[i];
+            } else {                          /* started inside a sub-block: its output ofs frames later */
+                uint32_t o = v->ofs;
+                for (i = 0; i < o; i++)
+                    mix[i] += v->carry[i];
+                for (i = o; i < FM6_N; i++)
+                    mix[i] += bus[i - o];
+                for (i = 0; i < o; i++)
+                    v->carry[i] = bus[FM6_N - o + i];
             }
             if (fm6_note_done(&v->n, syn_eff, syn_eff_alg))
                 v->n.live = 0;
@@ -959,6 +1034,7 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             }
         }
     }
+    syn_timed_due(n, 0xFFFFu);               /* (a frame past this block: at the next one's start) */
 }
 
 static void syn_defaults(void)
@@ -1000,6 +1076,7 @@ static void syn_reset_sound(void)
     syn_chan_at = 0;
     syn_active_voices = 0;
     syn_lk.mask = 0;
+    syn_tq_n = 0;
     syn_mo.mask = 0;
     syn_mo.was_mode = 0;
 }

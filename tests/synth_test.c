@@ -631,6 +631,73 @@ static void morph_tests(void)
     syn_dirty = 1;
     run_small(256);
 }
+/* MIDI in placed in the block (midi_stamp): a note's onset in the output, against when it arrived. Before: every message
+ * of a block was taken at the next block's start (the jitter: up to a block); now at its frame (a constant latency) */
+static int32_t onset_after(uint32_t from)               /* the first output frame from `from` on that is not silent */
+{
+    uint32_t i;
+    for (i = from; i < pn; i++)
+        if (pcm[2 * i] > 2000 || pcm[2 * i] < -2000)
+            return (int32_t)(i - from);
+    return -1;
+}
+static void jitter_tests(void)
+{
+    uint32_t r = 12345u, t, k;
+    int32_t lo[2] = {1 << 30, 1 << 30}, hi[2] = {-(1 << 30), -(1 << 30)};
+    syn_set_t keep = syn;
+    syn.chorus = syn.dly_mix = syn.rev_mix = 0;
+    syn_load_patch(0);
+    for (k = 0; k < 2u; k++)                            /* k 0: as before (all at frame 0), 1: placed */
+        for (t = 0; t < 64u; t++) {
+            uint32_t arrive, blk;
+            int32_t on;
+            syn_event(6, 0, 0, 0);
+            pn = 0;
+            run(BLK * 2);
+            r = r * 1664525u + 1013904223u;
+            arrive = (r >> 8) % BLK;                    /* landed during block 2 at this frame */
+            blk = pn;                                   /* block 3 starts here */
+            syn_timed(&(syn_ev_t){1, 60, 100, 0}, k ? arrive : 0u);
+            run(BLK * 2);
+            syn_timed(&(syn_ev_t){2, 60, 0, 0}, 0);
+            on = onset_after(blk);
+            CHECK(on >= 0);
+            on += (int32_t)BLK - (int32_t)arrive;       /* the latency from its arrival (frames) */
+            if (on < lo[k]) lo[k] = on;
+            if (on > hi[k]) hi[k] = on;
+        }
+    printf("  MIDI in jitter over 64 notes: block start %d..%d frames (%.2f ms spread), placed %d..%d (%.2f ms)\n",
+           lo[0], hi[0], (hi[0] - lo[0]) / 44.1, lo[1], hi[1], (hi[1] - lo[1]) / 44.1);
+    CHECK(hi[0] - lo[0] > 200 && hi[1] - lo[1] <= 1);
+    /* placement: a stamp inside the last block lands at the same point of this one */
+    CHECK(syn_midi_frame(1000, 1000, 2400, 256) == 0 && syn_midi_frame(2200, 1000, 2400, 256) == 128);
+    CHECK(syn_midi_frame(500, 1000, 2400, 256) == 0 && syn_midi_frame(9000, 1000, 2400, 256) == 255);
+    CHECK(syn_midi_frame(0xFFFFFF00u + 1200u, 0xFFFFFF00u, 2400, 256) == 128);   /* (the tick counter wraps) */
+    /* the clock: F8s 551 frames apart (120 BPM); the tempo measured from them, block-quantized before, placed now */
+    syn.seq_clock = SQC_AUTO;
+    for (k = 0; k < 2u; k++) {
+        uint32_t mn = 1u << 30, mx = 0;
+        sq.ext_last = 0; sq.ext_dt = 0;
+        for (t = 0; t < 96u; t++) {
+            syn_timed(&(syn_ev_t){11, 0xF8, 0, 0}, k ? (t * 551u) % BLK : 0u);
+            run((((t + 1u) * 551u) / BLK - (t * 551u) / BLK) * BLK);
+            if (t >= 24u) {
+                if (sq.ext_dt < mn) mn = sq.ext_dt;
+                if (sq.ext_dt > mx) mx = sq.ext_dt;
+            }
+        }
+        printf("  MIDI clock, 551 frames apart: measured %u..%u (%s)\n", mn, mx, k ? "placed" : "block start");
+        if (k) CHECK(mn >= 550u && mx <= 552u);
+        else CHECK(mx - mn > 20u);
+    }
+    sq.ext_last = 0; sq.ext_dt = 0;
+    syn = keep;
+    syn_dirty = 1;
+    syn_event(6, 0, 0, 0);
+    pn = 0;
+    run(BLK);
+}
 /* MIDI learn's rules; the overload guard's steps */
 static void learn_shed_tests(void)
 {
@@ -941,6 +1008,7 @@ int main(int argc, char **argv)
     cond_gen_tests();
     morph_tests();
     learn_shed_tests();
+    jitter_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);

@@ -1,0 +1,47 @@
+# MIDI in placed in the block (fm1.toml midi_stamp): a message plays at the frame it landed at in the last block, a
+# note-on's voice starts at that very frame (its offset in the 32-frame sub-block). The simulator's plat_midi_in_t24 is
+# when a message was read, so "midiat FRAME .." stands in for a stamped arrival (synth_test measures the jitter).
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+midiat 100 90 3C 64
+wait 20
+expect syn_voices 1
+expect newest_note 60
+expect newest_ofs 4
+midiat 255 90 40 64
+wait 20
+expect newest_note 64
+expect newest_ofs 31
+midiat 7 80 3C 00
+midiat 200 80 40 00
+wait 300
+# unplaced (frame 0: Bluetooth, or the jack without stamps) starts at the sub-block
+midi 90 43 64
+wait 20
+expect newest_ofs 0
+midi 80 43 00
+wait 300
+# the host voice too (RUN4 mode, channel 16)
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 0
+@ACK13@
+wait 100
+@HV_ON16@
+wait 50
+midiat 33 9F 3C 64
+wait 20
+expect newest_ofs 1
+midiat 0 8F 3C 00
+wait 200

@@ -552,13 +552,14 @@ static void sq_start(int run)
     }
 }
 /* MIDI real-time in (audio context, before the render): F8 clocks the sequencer (clock AUTO), FA / FB start, FC stops */
+static uint32_t sq_rt_ofs;                   /* a placed F8's frame after sq.smp (synth.c syn_timed: midi_stamp) */
 static void sq_realtime(uint8_t b)
 {
     if (b == 0xF8u) {
-        uint32_t dt = sq.smp - sq.ext_last;
+        uint32_t at = sq.smp + sq_rt_ofs, dt = at - sq.ext_last;
         if (sq.ext_last && dt > 0u && dt < 44100u)
             sq.ext_dt = sq.ext_dt ? (sq.ext_dt * 3u + dt) / 4u : dt;
-        sq.ext_last = sq.smp ? sq.smp : 1u;
+        sq.ext_last = at ? at : 1u;
         if (sq_clock_mode() == SQC_AUTO && sq.run && sq.ext_ticks < 200u)
             sq.ext_ticks = (uint8_t)(sq.ext_ticks + SQ_PPQN / 24u);
         return;

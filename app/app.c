@@ -1264,12 +1264,51 @@ static void rx_byte(uint8_t c)
 
 /* the MIDI in (USB, Bluetooth, the jack): Bluetooth's SysEx packets feed the frame assembler; in Synth mode the channel
  * messages play the synth. Audio context, as the template reads it */
-static void midi_pump(void)
+#ifdef PLAT_HOST
+/* the simulator's "midiat FRAME B0 B1 B2": a message as if it had landed at that frame of the last block (the host's
+ * plat_midi_in_t24 is when it was read: no stamps to test with) */
+static struct { uint32_t pkt; uint16_t frame; } hq[16];
+static uint8_t hq_n;
+#endif
+static uint32_t midi_frame;                            /* the frame in this block of the message being taken */
+static void midi_pump(uint32_t n)
 {
     uint32_t pkt;
     int port;
-    while (plat_midi_in(&pkt, &port)) {
-        uint32_t cin = pkt & 0xFu, st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu, ch = st & 0x0Fu;
+#if FM1B_MIDI_STAMP && !defined(PLAT_HOST)
+    /* midi_stamp: USB's and the jack's messages carry when they landed; what landed during the last block plays at the
+     * same point of this one (synth.c syn_timed). Bluetooth's are stamped when read: at once, as before */
+    static uint32_t last_t24;
+    static uint8_t have_last;
+    uint32_t bt = plat_ticks24(), span = bt - last_t24;
+    int placed = have_last && span > 0u && span < 20000u * PLAT_TICKS_PER_US;
+    last_t24 = bt;
+    have_last = 1;
+#endif
+#ifdef PLAT_HOST
+    uint32_t hi = 0;
+#endif
+    for (;;) {
+        uint32_t cin, st, d1, d2, ch;
+#ifdef PLAT_HOST
+        if (hi < hq_n) {
+            pkt = hq[hi].pkt;
+            port = PORT_USB;
+            midi_frame = hq[hi].frame < n ? hq[hi].frame : n - 1u;
+            if (++hi == hq_n)
+                hq_n = 0;
+        } else
+#endif
+        if (plat_midi_in(&pkt, &port)) {
+            midi_frame = 0;
+#if FM1B_MIDI_STAMP && !defined(PLAT_HOST)
+            if (placed && port != PORT_BLE)
+                midi_frame = syn_midi_frame(plat_midi_in_t24(), bt - span, span, n);
+#endif
+        } else {
+            break;
+        }
+        cin = pkt & 0xFu; st = (pkt >> 8) & 0xFFu; d1 = (pkt >> 16) & 0x7Fu; d2 = (pkt >> 24) & 0x7Fu; ch = st & 0x0Fu;
         if (cin >= 4u && cin <= 7u) {                  /* SysEx packets: 4 = 3 bytes, more to come; 5, 6, 7 = the last 1, 2, 3 */
             uint32_t n = cin == 4u || cin == 7u ? 3u : cin == 6u ? 2u : 1u, i;
             if (port == PORT_BLE)
@@ -1278,7 +1317,7 @@ static void midi_pump(void)
             continue;
         }
         if (mode == MODE_SYNTH && (st == 0xF8u || st == 0xFAu || st == 0xFBu || st == 0xFCu)) {
-            sq_realtime((uint8_t)st);                  /* MIDI clock, start, stop: the sequencer and the arp follow */
+            syn_timed(&(syn_ev_t){11, (uint8_t)st, 0, 0}, midi_frame);   /* MIDI clock, start, stop: the sequencer and the arp follow */
             continue;
         }
         {   /* 1.3: in RUN4 mode the host voice plays its channel from the host's links (not the jack) */
@@ -1297,26 +1336,26 @@ static void midi_pump(void)
                 d1 = snapped[d1];
             }
         }
-        switch (st & 0xF0u) {
+        switch (st & 0xF0u) {                          /* (each at its frame in the block: syn_timed) */
         case 0x90u:
-            if (d2) { syn_apply_event(&(syn_ev_t){1, (uint8_t)d1, (uint8_t)d2, 0}); break; }
+            if (d2) { syn_timed(&(syn_ev_t){1, (uint8_t)d1, (uint8_t)d2, 0}, midi_frame); break; }
             /* fallthrough: velocity 0 is a note-off */
         case 0x80u:
-            syn_apply_event(&(syn_ev_t){2, (uint8_t)d1, 0, 0});
+            syn_timed(&(syn_ev_t){2, (uint8_t)d1, 0, 0}, midi_frame);
             break;
         case 0xB0u:
-            if (d1 == 64u) syn_apply_event(&(syn_ev_t){5, (uint8_t)d2, 0, 0});
-            else if (d1 == 123u || d1 == 120u) syn_apply_event(&(syn_ev_t){3, 0, 0, 0});
+            if (d1 == 64u) syn_timed(&(syn_ev_t){5, (uint8_t)d2, 0, 0}, midi_frame);
+            else if (d1 == 123u || d1 == 120u) syn_timed(&(syn_ev_t){3, 0, 0, 0}, midi_frame);
             else if (mode == MODE_SYNTH) ml_cc_in(ch, d1, d2);   /* MIDI learn and the default CCs (main loop) */
             break;
         case 0xE0u:
-            syn_apply_event(&(syn_ev_t){4, (uint8_t)d1, (uint8_t)d2, 0});
+            syn_timed(&(syn_ev_t){4, (uint8_t)d1, (uint8_t)d2, 0}, midi_frame);
             break;
         case 0xA0u:                                    /* pressure: into BRIGHT by at_depth (the host voice's; 0 in Synth mode) */
-            syn_apply_event(&(syn_ev_t){9, (uint8_t)d1, (uint8_t)d2, 0});
+            syn_timed(&(syn_ev_t){9, (uint8_t)d1, (uint8_t)d2, 0}, midi_frame);
             break;
         case 0xD0u:
-            syn_apply_event(&(syn_ev_t){10, (uint8_t)d1, 0, 0});
+            syn_timed(&(syn_ev_t){10, (uint8_t)d1, 0, 0}, midi_frame);
             break;
         default:
             break;
@@ -1723,7 +1762,7 @@ void app_init(void)
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t i;
-    midi_pump();
+    midi_pump(n);
     /* Synth mode: the FM voices; RUN4 mode: the host voice while it is on (and until its last note has rung out).
      * MASTER is the volume either way, as for the computer's own audio (base/device/uac_mix.h) */
     if (mode == MODE_SYNTH || hv.on || syn_active_voices) {
@@ -1737,6 +1776,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         return;
     }
     syn_shed_calm(n, 0);
+    syn_timed_due(0, 0xFFFFu);                         /* (nothing renders: what was placed is taken now) */
     for (i = 0; i < 2u * n; i++)                       /* RUN4 mode without it: a controller makes no sound */
         lr[i] = 0;
 }
@@ -1779,6 +1819,14 @@ int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, c
     static uint8_t by[8300];
     size_t n = 0, i;
     const char *p;
+    if (!strcmp(cmd, "midiat")) {                      /* midiat FRAME B0 B1 B2: a message placed at FRAME of the next block */
+        if (a && b && hq_n < 16u) {
+            uint32_t st = (uint32_t)strtoul(b, 0, 16), x = c ? (uint32_t)strtoul(c, 0, 16) : 0u, y = d ? (uint32_t)strtoul(d, 0, 16) : 0u;
+            hq[hq_n].pkt = (st >> 4) | st << 8 | x << 16 | y << 24;
+            hq[hq_n++].frame = (uint16_t)atoi(a);
+        }
+        return 1;
+    }
     if (!strcmp(cmd, "overload")) {                    /* overload N: N late renders (app_overload, as the device's) */
         int k, m = a ? atoi(a) : 1;
         for (k = 0; k < m; k++) {
@@ -1900,6 +1948,7 @@ int app_expect(const char *what, int *got)
     }
     else if (!strncmp(what, "keynote", 7)) *got = ctl.chord_n[atoi(what + 7) % NKEYS] ? ctl.chord[atoi(what + 7) % NKEYS][0] : -1;
     else if (!strcmp(what, "newest_note")) *got = sy_newest() ? sy_newest()->note : -1;
+    else if (!strcmp(what, "newest_ofs")) *got = sy_newest() ? sy_newest()->ofs : -1;     /* its frame in its sub-block */
     else if (!strcmp(what, "patch_mark") || !strcmp(what, "patch_changed")) {   /* the sounding voice: mark it, compare */
         static uint32_t mark;
         uint32_t i, c = 0;
