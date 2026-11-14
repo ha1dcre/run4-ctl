@@ -17,7 +17,8 @@ cross-check it.
   The device draws the glyph if its font has it, otherwise the base letter (the phase-0 fonts are ASCII only, so Ó
   is drawn as O). The device never formats values: all numbers shown arrive as text from the host.
 * Maximum frame size: PAGE with four slots and every string at 24 characters, all escaped: **515 bytes** including F0
-  and F7 (513 between them), below the 640 bytes fm1-base's USB-MIDI SysEx buffer takes (`HOST_SX_MAX`, the same as
+  and F7 (513 between them); with the protocol 1.2 trailer (a 24-character escaped path) **569 bytes** (567 between
+  them), below the 640 bytes fm1-base's USB-MIDI SysEx buffer takes (`HOST_SX_MAX`, the same as
   the device's). The codec test asserts it (`tests/r4p_test.c`, "max PAGE frame").
 * Coexistence: fm1-base reserves SysEx under `7D 4C ..` (sub-IDs `43` remote control, `47` crash log, `48` crash history,
   `53` debug stats, `57` WiFi, `41` Bluetooth audio, `44` Bluetooth devices) and `7D 53 52 ..` (fm1-reader's screen
@@ -68,6 +69,10 @@ while a key is held leaves no stuck note.
 | 0x45 | STATUS | `bpm10 (14 bit), bar (14 bit), beat (0..15), flags` |
 | 0x46 | TOAST | `text(str), duration (100 ms units)` |
 | 0x47 | LIST | `title(str) r g b total first sel n` then `n x item(str)` - protocol 1.1 |
+| 0x48 | FOCUS | `cursor item_idx14 item_count14` - protocol 1.2 |
+
+Protocol 1.2 adds optional trailers (see "Protocol 1.2: where you are"): PAGE may end with
+`cursor item_idx14 item_count14 path(str)`, VALUE with `flags`.
 
 * PAGE colour: r, g, b each 0..127; the device draws them x2. `kind`: 0 empty, 1 unipolar, 2 bipolar, 3 enum, 4 toggle.
   `value14` by kind: unipolar 0..16383 from the left; bipolar 8192 = centre; **enum: `(segment_count << 7) | index`**
@@ -102,6 +107,42 @@ While a list is open the firmware keeps the buttons and encoders local (nothing 
 * The host may send a LIST with total 0 at any time to close it. A new HELLO_ACK or a cable replug closes it.
 * Keys, MASTER and the SETUP page (SEL + GLO) keep working; the LIST_PICK frames go through the same ordered queue as
   BTN frames.
+
+## Protocol 1.2: where you are
+
+Version 1.2 lets the host show the player where a parameter lives (e.g. Tape > Wear > Failure), which one is in
+focus, and the value being set, large. It is backwards compatible: `proto_ver` stays 1, the firmware's HELLO says minor
+2, and a host that speaks 1.2 answers **HELLO_ACK `01 02`**. A host that answered 1.0 or 1.1 is never sent anything new
+and sees no change in behaviour (the firmware's big value view below is off for it too). The firmware parses the 1.2
+frames from any host.
+
+**PAGE trailer.** After the four slots a PAGE may carry, all together or not at all:
+
+| field | bytes | meaning |
+| --- | --- | --- |
+| `cursor` | 1 | the slot in focus, 0..3 (its tile gets a frame in the page colour); 127 = none |
+| `item_idx14` | 2 | the focused parameter's position in the host's list of the page's parameters, 0-based |
+| `item_count14` | 2 | that list's length; 0 = no position shown (then `item_idx14` must be 0) |
+| `path` | str | where you are, e.g. `TAPE > WEAR` (up to 24 characters); empty = the title is shown |
+
+Without the trailer (1.1) the page has no cursor, no position and no path. A PAGE is refused when the trailer is
+partial, `cursor` is neither 0..3 nor 127, or `item_idx14 >= item_count14` with a count above 0. The device shows the
+path in the header in place of the title (cut to fit the header beside the track pill) and the position as
+`5/12` (`item_idx14 + 1` / `item_count14`) at the right of the footer's first row.
+
+**FOCUS (0x48)** `cursor item_idx14 item_count14`: moves the focus without resending the page (same ranges as the PAGE
+trailer). The device redraws the old and new focused tiles and the position only. The path stays as the last PAGE set
+it.
+
+**VALUE trailer.** A VALUE may end with one `flags` byte (absent = 0): bit 0 = **show big** (the player touched this
+parameter in the app: the device shows the big value view for this slot). Other bits are 0.
+
+**Big value view** (firmware-local, only with a 1.2 host, RUN4 mode, no LIST or SETUP open). When K1..K4 is turned,
+the firmware frames that slot's tile at once (and sends the ENC as before). When a VALUE for that slot arrives within
+1.5 s of the turn, or any VALUE with flags bit 0 arrives, the tile area shows the slot enlarged: the path (or title),
+the slot's name, its value text in the large font and a wide bar of its kind. Each further VALUE for that slot
+redraws it; 1.2 s after the last one the four tiles come back. A PAGE ends the view at once; another slot's VALUE
+ends it and updates its tile. Everything is redrawn by region (no full-screen clear).
 
 ## Connection
 
