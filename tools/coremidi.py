@@ -111,3 +111,40 @@ class Client:
         _check(cm.MIDIOutputPortCreate(self.ref, s, ctypes.byref(port)), "output port")
         cf.CFRelease(s)
         _check(cm.MIDISend(port.value, dest_ref, _packet_list(data)), "midisend")
+
+
+# ---- finding other endpoints by name (the Network MIDI session's port, "Session 1") ----
+cm.MIDIGetNumberOfSources.restype = ctypes.c_ulong
+cm.MIDIGetNumberOfDestinations.restype = ctypes.c_ulong
+cm.MIDIGetSource.restype = U32
+cm.MIDIGetSource.argtypes = [ctypes.c_ulong]
+cm.MIDIGetDestination.restype = U32
+cm.MIDIGetDestination.argtypes = [ctypes.c_ulong]
+cm.MIDIObjectGetStringProperty.argtypes = [U32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+cf.CFStringGetCString.restype = ctypes.c_bool
+
+
+def endpoint_name(ref):
+    s = ctypes.c_void_p()
+    key = _cfstr("name")
+    rc = cm.MIDIObjectGetStringProperty(ref, key, ctypes.byref(s))
+    cf.CFRelease(key)
+    if rc or not s.value:
+        return ""
+    buf = ctypes.create_string_buffer(256)
+    cf.CFStringGetCString(s, buf, 256, K_UTF8)
+    cf.CFRelease(s)
+    return buf.value.decode("utf-8", "replace")
+
+
+def find(name, destinations):
+    """[(ref, name)] of the sources (destinations=False) or destinations whose name contains `name`"""
+    n = cm.MIDIGetNumberOfDestinations() if destinations else cm.MIDIGetNumberOfSources()
+    out = []
+    for i in range(n):
+        ref = cm.MIDIGetDestination(i) if destinations else cm.MIDIGetSource(i)
+        nm = endpoint_name(ref)
+        if name in nm:
+            out.append((ref, nm))
+    return out

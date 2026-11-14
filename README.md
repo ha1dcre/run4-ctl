@@ -47,17 +47,18 @@ firmware (HELLO every second until RUN4 answers, then SYNC_REQ) and turns the te
 keys; TAB is piano mode). It prints every PAGE / VALUE / LEDS / STATUS / TOAST that RUN4 sends. To reach an iPad or
 iPhone:
 
-1. Mac: Audio MIDI Setup -> Window -> Show MIDI Studio -> the Network icon (double-click) -> in "My Sessions" tick
-   **Enabled**, and note the session name.
-2. Start `tools/fake_fm1.py`, so that "FM-1" exists; in the session window press **+** under Directories if needed.
-   The session's inputs/outputs list the ports: the session sends and receives what the virtual "FM-1" ports carry.
-3. iPad: connect to the session (RUN4 shows Network MIDI sessions among its MIDI ports, or connect in another app
-   that lists them), then enable the FM-1 port in RUN4's settings.
+1. Mac: Audio MIDI Setup -> Window -> Show MIDI Studio -> double-click the Network icon -> under "My Sessions" tick
+   **Enabled** (the session's port is called like the session, "Session 1" by default).
+2. `python3 tools/fake_fm1.py --bridge` (or `--bridge "Session 1"`): besides the virtual "FM-1" ports it talks through
+   the session's port, so the iPad sees what the FM-1 would send and RUN4's frames reach the fake. A Mac running RUN4
+   needs no bridge: it sees the virtual port "FM-1".
+3. iPad: in Audio MIDI Setup on the Mac the iPad appears under Directories (same Wi-Fi): select it, **Connect**. On
+   the iPad, RUN4 lists the network session as a MIDI port; enable it as the FM-1 in RUN4's settings.
 
 Self-tests without MIDI: `python3 tools/fake_fm1.py --selftest` (part of `make test`); `--loopback` makes a CoreMIDI
 round trip in one process. python-rtmidi does not build here (RtMidi lacks `sem_timedwait` on this macOS), so
-`tools/coremidi.py` binds CoreMIDI through ctypes. The interactive mode was run only through a pseudo-terminal, not
-against RUN4.
+`tools/coremidi.py` binds CoreMIDI through ctypes. The interactive mode was run only through a pseudo-terminal, and the bridge
+was not tried against a real Network MIDI session; neither was run against RUN4.
 
 ## Device build (Apple silicon Mac with Docker) — not tried yet
 

@@ -4,6 +4,8 @@
 
   fake_fm1.py              open the virtual CoreMIDI ports "FM-1" (a source and a destination) and play the device:
                            HELLO every second until HELLO_ACK, then SYNC_REQ + POT; the terminal is the panel
+  fake_fm1.py --bridge [NAME]  the same, and also talk through the Mac's Network MIDI session port (name contains NAME,
+                           default "Session"), so an iPad that joined the session sees the FM-1 (see README)
   fake_fm1.py --selftest   no MIDI at all: encode / decode checks against the protocol's known bytes (make test)
   fake_fm1.py --loopback   a CoreMIDI round trip in this process (no app needed): a fake host answers the HELLO
 
@@ -230,14 +232,30 @@ class Device:
 
 
 # ------------------------------------------------------------------ modes ---
-def run_interactive():
+def run_interactive(bridge=None):
     import coremidi
     import termios
     import tty
     cl = coremidi.Client("RUN4 CTL fake FM-1")
     cl.virtual_source("FM-1")
     cl.virtual_destination("FM-1")
-    dev = Device(cl.send, cl.send, out=lambda s: (sys.stdout.write("\r" + s.replace("\n", "\r\n") + "\r\n"), sys.stdout.flush()))
+    sess_dst = []
+    if bridge:                                          # the session's port: what it brings in is the host's, what we send goes out
+        srcs, dsts = coremidi.find(bridge, False), coremidi.find(bridge, True)
+        srcs = [x for x in srcs if x[0] != cl.src]
+        dsts = [x for x in dsts if x[0] != cl.dst]
+        if not srcs or not dsts:
+            sys.exit("no Network MIDI session port containing %r (Audio MIDI Setup: enable the session first)" % bridge)
+        for ref, nm in srcs:
+            cl.listen_to(ref, cl.rx)
+        sess_dst = [d[0] for d in dsts]
+        print("bridged to:", ", ".join(n for _, n in srcs + dsts))
+
+    def to_host(data):
+        cl.send(data)
+        for d in sess_dst:
+            cl.send_to(d, data)
+    dev = Device(to_host, to_host, out=lambda s: (sys.stdout.write("\r" + s.replace("\n", "\r\n") + "\r\n"), sys.stdout.flush()))
     print("virtual MIDI ports \"FM-1\" open. ? = help, Q = quit. Waiting for RUN4 ...")
     old = termios.tcgetattr(0)
     tty.setcbreak(0)
@@ -352,5 +370,8 @@ if __name__ == "__main__":
         selftest()
     elif "--loopback" in sys.argv:
         run_loopback()
+    elif "--bridge" in sys.argv:
+        i = sys.argv.index("--bridge")
+        run_interactive(sys.argv[i + 1] if len(sys.argv) > i + 1 else "Session")
     else:
         run_interactive()
