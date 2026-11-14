@@ -40,6 +40,10 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 `tools/hostshim/` drops OpenType features when Pillow lacks libraqm ; it only affects the
 simulator's font generation (digit widths), never the device build.
 
+Browser emulator (play it with mouse, computer keyboard or a MIDI keyboard; needs Emscripten, e.g. emsdk in `~/emsdk`
+— not on an exFAT volume, it needs symlinks): `source ~/emsdk/emsdk_env.sh && python3 base/tools/build.py app --web`,
+then `cd app/build/emu && python3 -m http.server 8741` and open http://127.0.0.1:8741 in Chrome (Web MIDI with SysEx).
+
 Run a scenario by hand: `python3 tools/fake_run4.py sim tests/scenarios/02_connected_pages.txt > /tmp/s.txt &&
 app/build/host/run4ctl_host /tmp/s.txt /tmp/out` (screenshots land in `/tmp/out`). Frames as hex:
 `python3 tools/fake_run4.py hex`.

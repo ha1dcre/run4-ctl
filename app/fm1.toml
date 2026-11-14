@@ -11,6 +11,7 @@ font_full = ["M"]                # lower case in the value font: the host format
 # JieLi's library stack is not documented to. No pairing: macOS and iOS connect without it.
 ble = true
 ble_stack = "own"
+emu = ["midi"]                   # browser emulator (build.py app --web): Web MIDI in/out with SysEx (keyboard, RUN4)
 
 # firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)
 author = "TODO-OWNER author name"                 # TODO-OWNER: your name or handle as it should appear
