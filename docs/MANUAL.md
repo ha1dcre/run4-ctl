@@ -79,8 +79,8 @@ those above, microtuning or portamento. The factory voices are Felucca's own, no
 
 ## Bluetooth
 
-Bluetooth MIDI starts when the FM-1 is switched on. Connect from your computer or tablet (the FM-1 shows up as a
-Bluetooth MIDI device named like its USB name); no pairing is needed. In RUN4 mode the app talks to the FM-1 over
+Bluetooth MIDI starts when the FM-1 is switched on. Connect from your computer or tablet (it shows up as a
+Bluetooth MIDI device; the name comes from the stack and has not been checked on a device); no pairing is needed. In RUN4 mode the app talks to the FM-1 over
 Bluetooth exactly as over USB; in Synth mode the MIDI in and DX7 dumps work over it. A USB-only package (without
 Bluetooth) exists for those who want no radio. There is no switch for Bluetooth in the menus.
 
