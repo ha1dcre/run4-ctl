@@ -830,12 +830,14 @@ static void syn_shed_step(void)
 /* ---------------------------------------------------------- the render --- */
 static int32_t syn_limit(int32_t x)          /* a soft ceiling: linear to 0.7, then a smooth knee to 1.0 (2^23) */
 {
-    int64_t a = x < 0 ? -(int64_t)x : x, k = 5872025, r;            /* 0.7 */
+    int64_t a = x < 0 ? -(int64_t)x : x, k = 5872025;               /* 0.7 */
+    uint64_t r;
     if (a <= k)
         return x;
-    r = a - k;                               /* 0 .. : the part over the knee, squeezed asymptotically to 0.3 */
-    r = r * 2516582 / (r + 2516582);        /* 0.3 * r / (r + 0.3) */
-    a = k + r;
+    r = (uint64_t)(a - k);                   /* 0 .. : the part over the knee, squeezed asymptotically to 0.3 */
+    r = r * 2516582u / (r + 2516582u);       /* 0.3 * r / (r + 0.3); unsigned (r >= 0: the same quotient): the FM-1
+                                              * has no signed 64-bit divide (__divdi3) */
+    a = k + (int64_t)r;
     return (int32_t)(x < 0 ? -a : a);
 }
 static void syn_apply_event(const syn_ev_t *e)
