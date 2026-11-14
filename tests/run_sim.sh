@@ -19,6 +19,7 @@ for s in tests/scenarios/*.txt; do
   cat build/sim/$n.log
   if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
 done
+python3 -I tests/check_btn_order.py build/sim/05_stalled_host.log | tee -a build/sim/05_stalled_host.log || fail=1
 for p in build/sim/*.png; do python3 -I tools/pngpack.py "$p" tests/screens/$(basename "$p"); done
 ok=$(cat build/sim/*.log | grep -c '^  ok' || true)
 bad=$(cat build/sim/*.log | grep -c '^FAIL' || true)

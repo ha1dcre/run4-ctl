@@ -45,6 +45,11 @@ rest goes out in the next frame (`r4p_enc_add` / `r4p_enc_take`).
 POT: sent when MASTER moves by 6 counts of 14 bits or more (at most every 20 ms), when it reaches 0 or 16383, and once
 after HELLO_ACK.
 
+Sending never blocks the firmware: a frame goes out only when the SysEx ring has room for it whole. BTN events wait in a
+queue of 32 (oldest first; nothing is dropped, a change beyond 32 stays in the button state and is taken as soon as there
+is room), ENC and POT go out only behind them (ENC deltas keep adding up meanwhile), HELLO and SYNC_REQ wait for room. If
+the host stops reading, the keys still play and the screen still draws; when it reads again the frames arrive in order.
+
 Keys: plain Note On / Note Off, channel 1, `note = 53 + key + 12 * octave` (key 0 = F3), velocity fixed at 100 in
 phase 0 (`key_velocity()` in `app/app.c` is the hook for fm1-base's touch sensing, `APP_TOUCH`, off by default;
 poly pressure would go out as Poly Aftertouch). A note-off uses the note the key started with, so an octave change

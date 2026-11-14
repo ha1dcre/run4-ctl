@@ -131,7 +131,7 @@ def expand(name):
         table["BTN%d_1" % i] = frame("BTN", [i, 1])
         table["BTN%d_0" % i] = frame("BTN", [i, 0])
     for e in range(7):
-        for d in (1, -1, 5, 63, -63, -37):
+        for d in (1, -1, 3, 5, 63, -63, -37):
             table["ENC%d_%+d" % (e, d)] = frame("ENC", [e, 0x40 + d])
     out = []
     for line in open(name).read().splitlines():

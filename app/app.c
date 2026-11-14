@@ -13,18 +13,23 @@
 #define HELLO_MS 1000u
 #define POT_STEP 6                       /* 14-bit counts: the ADC's noise stays quiet */
 #define POT_MIN_MS 20u
+#define TXQ_N 32                         /* pending BTN events; beyond that a change waits in the button state itself */
 
 static struct {
     uint32_t btn, keys;                  /* held at the last poll */
     uint8_t sounding[NKEYS];             /* the note each held key started (255 = none), so a note-off always matches */
     int8_t octave;                       /* -3 .. +3, local */
     r4p_enc_acc_t enc;
+    uint8_t txq[TXQ_N];                  /* BTN events not yet sent: (id << 1) | down, oldest first (a stalled host) */
+    uint8_t txq_n;
+    uint8_t want_sync, want_pot;         /* owed after a HELLO_ACK */
     int32_t pot_sent;                    /* last 14-bit value sent, -1 = none yet */
     uint32_t pot_at, hello_at;
     uint32_t session;                    /* plat_usb_session at the last look: a new one is a new computer */
     r4p_leds_t leds;
     uint8_t blink;
     uint32_t blink_at;
+    uint32_t tx_deferred;                /* frames that found no room and waited (host-simulator check) */
     uint32_t notes_on, notes_off, frames_sent, frames_in, frames_bad;   /* host-simulator checks */
 } ctl;
 
@@ -35,27 +40,51 @@ static uint8_t key_velocity(uint32_t k)
     return KEY_VEL;
 }
 
-static void send_frame(const uint8_t *f, size_t n)
+/* Nothing here may wait: plat_sysex_send blocks up to 200 ms when the host stops reading, so a frame goes only when the
+ * ring has the room for it whole (plat_sysex_room). Returns 1 = queued, 0 = kept for later (the caller retries). */
+static int send_frame(const uint8_t *f, size_t n)
 {
-    if (n && plat_sysex_send(f, (uint32_t)n) == 0)
-        ctl.frames_sent++;
+    if (!n)
+        return 0;
+    if (plat_sysex_room() < (uint32_t)n) {
+        ctl.tx_deferred++;
+        return 0;
+    }
+    if (plat_sysex_send(f, (uint32_t)n) != 0)
+        return 0;
+    ctl.frames_sent++;
+    return 1;
 }
 
 static void send_hello(void)
 {
     uint8_t f[16];
-    send_frame(f, r4p_hello(f, sizeof f, FW_MAJOR, FW_MINOR, R4P_MODE_RUN4));
-    ctl.hello_at = plat_ms();
+    if (send_frame(f, r4p_hello(f, sizeof f, FW_MAJOR, FW_MINOR, R4P_MODE_RUN4)))
+        ctl.hello_at = plat_ms();                      /* (no room: try again next frame, not every second) */
 }
 
-static void send_pot(void)
+static int send_pot(void)
 {
     uint8_t f[16];
     uint32_t v = (plat_master() * (uint32_t)R4P_V14_MAX + 2048u) / 4096u;
     if (v > R4P_V14_MAX) v = R4P_V14_MAX;
+    if (!send_frame(f, r4p_pot(f, sizeof f, (uint16_t)v)))
+        return 0;
     ctl.pot_sent = (int32_t)v;
     ctl.pot_at = plat_ms();
-    send_frame(f, r4p_pot(f, sizeof f, (uint16_t)v));
+    return 1;
+}
+
+/* BTN events queue here and go out oldest first, none dropped; everything else waits behind them (order matters) */
+static void txq_flush(void)
+{
+    uint8_t f[16];
+    while (ctl.txq_n) {
+        uint8_t e = ctl.txq[0];
+        if (!send_frame(f, r4p_btn(f, sizeof f, (uint8_t)(e >> 1), e & 1u)))
+            return;
+        memmove(ctl.txq, ctl.txq + 1, --ctl.txq_n);
+    }
 }
 
 /* ------------------------------------------------------------------ input --- */
@@ -64,8 +93,13 @@ static void keys_poll(uint32_t keys)
     uint32_t k;
     for (k = 0; k < NKEYS; k++) {
         uint32_t bit = 1u << k;
-        if ((keys & bit) && !(ctl.keys & bit)) {
+        if (!((keys ^ ctl.keys) & bit))
+            continue;
+        if (ctl.session && plat_midi_out_room(TO_USB) == 0)
+            continue;                                  /* no room: the change stays unseen and is taken next frame */
+        if (keys & bit) {
             int32_t note = 53 + (int32_t)k + 12 * ctl.octave;     /* key 0 is F3 = MIDI 53 */
+            ctl.keys |= bit;
             if (note < 0 || note > 127) {
                 ctl.sounding[k] = 255;
                 continue;
@@ -73,7 +107,8 @@ static void keys_poll(uint32_t keys)
             ctl.sounding[k] = (uint8_t)note;
             ctl.notes_on++;
             plat_midi_send(0x09u | (0x90u | KEY_CHANNEL) << 8 | (uint32_t)note << 16 | (uint32_t)key_velocity(k) << 24, TO_USB);
-        } else if (!(keys & bit) && (ctl.keys & bit)) {
+        } else {
+            ctl.keys &= ~bit;
             if (ctl.sounding[k] != 255) {
                 ctl.notes_off++;
                 plat_midi_send(0x08u | (0x80u | KEY_CHANNEL) << 8 | (uint32_t)ctl.sounding[k] << 16, TO_USB);
@@ -81,7 +116,6 @@ static void keys_poll(uint32_t keys)
             ctl.sounding[k] = 255;
         }
     }
-    ctl.keys = keys;
 }
 
 static void octave_step(int d)
@@ -108,6 +142,8 @@ static void input(void)
         ui_connect(0);
         ctl.hello_at = now - HELLO_MS;
         ctl.pot_sent = -1;
+        ctl.txq_n = 0;
+        ctl.want_sync = ctl.want_pot = 0;
     }
     if (!ctl.session)
         ctl.hello_at = now - HELLO_MS;                 /* (nothing to send to yet; try at the first chance) */
@@ -118,32 +154,43 @@ static void input(void)
         uint32_t bit = 1u << k;
         if (!((btn ^ ctl.btn) & bit))
             continue;
+        if (ctl.txq_n >= TXQ_N)
+            break;                                     /* queue full: this change is seen again next frame */
+        ctl.btn = (ctl.btn & ~bit) | (btn & bit);
         if (btn & bit) {
             if (!shift && k == B_OCTDN) octave_step(-1);
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
-        send_frame(f, r4p_btn(f, sizeof f, (uint8_t)k, (btn & bit) ? 1u : 0u));
+        ctl.txq[ctl.txq_n++] = (uint8_t)(k << 1 | ((btn & bit) ? 1u : 0u));
     }
-    ctl.btn = btn;
     if (shift != ui.shift) {
         ui.shift = shift;
         ui.dirty |= D_FOOT;
     }
+    txq_flush();
 
     keys_poll(keys);
 
-    for (k = 0; k < R4P_NENC; k++) {                   /* encoders: the detents of this frame, one frame each */
+    if (ctl.txq_n)
+        return;                                        /* the rest waits behind the buttons */
+    if (ctl.want_sync && send_frame(f, r4p_sync_req(f, sizeof f)))
+        ctl.want_sync = 0;
+    if (!ctl.want_sync && ctl.want_pot && send_pot())
+        ctl.want_pot = 0;
+
+    for (k = 0; k < R4P_NENC; k++) {                   /* encoders: the detents of this frame, one frame each; coalesced while the ring is full */
         int d = plat_enc((int)k);
-        int t;
         if (d)
             r4p_enc_add(&ctl.enc, (uint8_t)k, d);
-        t = r4p_enc_take(&ctl.enc, (uint8_t)k);
-        if (t)
-            send_frame(f, r4p_enc(f, sizeof f, (uint8_t)k, t));
+        if (plat_sysex_room() >= 10u) {
+            int t = r4p_enc_take(&ctl.enc, (uint8_t)k);
+            if (t)
+                send_frame(f, r4p_enc(f, sizeof f, (uint8_t)k, t));
+        }
     }
 
     pot = (int32_t)((plat_master() * (uint32_t)R4P_V14_MAX + 2048u) / 4096u);   /* MASTER: only real movement goes out */
-    if (ctl.pot_sent >= 0 && now - ctl.pot_at >= POT_MIN_MS &&
+    if (ctl.pot_sent >= 0 && !ctl.want_pot && now - ctl.pot_at >= POT_MIN_MS &&
         (pot - ctl.pot_sent >= POT_STEP || ctl.pot_sent - pot >= POT_STEP || ((pot == 0 || pot == R4P_V14_MAX) && pot != ctl.pot_sent)))
         send_pot();
 }
@@ -176,7 +223,6 @@ int app_sysex(const uint8_t *p, uint32_t n)
 {
     r4p_msg_t m;
     int r = r4p_parse_body(p, n, &m);
-    uint8_t f[16];
     if (r == 0)
         return 0;                                      /* not ours */
     if (r < 0) {
@@ -188,9 +234,9 @@ int app_sysex(const uint8_t *p, uint32_t n)
     case R4P_HELLO_ACK:
         ui_connect(1);
         ctl.leds = (r4p_leds_t){{0}, {0}};
-        send_frame(f, r4p_sync_req(f, sizeof f));
         ctl.pot_sent = -1;
-        send_pot();
+        ctl.want_sync = 1;
+        ctl.want_pot = 1;
         break;
     case R4P_LEDS:
         ctl.leds = m.u.leds;
@@ -251,6 +297,8 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "frames_in")) *got = (int)ctl.frames_in;
     else if (!strcmp(what, "frames_bad")) *got = (int)ctl.frames_bad;
     else if (!strcmp(what, "frames_sent")) *got = (int)ctl.frames_sent;
+    else if (!strcmp(what, "btn_pending")) *got = ctl.txq_n;
+    else if (!strcmp(what, "tx_deferred")) *got = (int)ctl.tx_deferred;
     else return 0;
     return 1;
 }

@@ -1,0 +1,54 @@
+# The host stops reading: nothing blocks, keys keep sounding, BTN frames wait and arrive in order once it reads again.
+@ACK@
+wait 100
+sysex_out
+usb stall
+# 12 key taps while stalled: the notes are not SysEx and still go out
+tapkey 0
+tapkey 5
+expect notes_on 2
+expect_out USB 90 35 64
+expect_out USB 90 3A 64
+out
+# 24 button taps (48 BTN frames; the ring takes about 40 of them): ids 0..13, 0..9 in order
+tap FX
+tap SEL
+tap ENV
+tap LFO
+tap EDIT
+tap GLO
+tap HOME
+tap SAVE
+tap ARP
+tap SEQ
+tap PLAY
+tap REC
+tap OCT-
+tap OCT+
+tap FX
+tap SEL
+tap ENV
+tap LFO
+tap EDIT
+tap GLO
+tap HOME
+tap SAVE
+tap ARP
+tap SEQ
+# turning and MASTER while stalled must not stall the frame either
+spin K1 3
+master 100
+# a key press still sounds with the queue full
+tapkey 7
+expect notes_on 3
+expect notes_off 3
+expect btn_pending 6
+shot stalled.png
+# the host reads again
+usb read
+wait 500
+expect btn_pending 0
+expect_sysex @ENC3_+3@
+expect tx_deferred >1
+expect frames_sent 52
+sysex_out
