@@ -27,6 +27,8 @@ typedef struct {
     uint8_t dots;                   /* the "not connected" screen's animation phase */
     uint16_t dirty;
     uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
+    uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
+    r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
 } ui_t;
 static ui_t ui;
@@ -49,6 +51,7 @@ static void ui_connect(int on)
         ui.toast[0] = 0;
     }
     ui_reset_page();
+    ui.list_open = 0;
     memset(&ui.st, 0, sizeof ui.st);
     ui.dirty = D_ALL;
 }
@@ -272,6 +275,38 @@ static void draw_nc(int dots_only)
     cv_blit(100, 114);
 }
 
+/* --------------------------------------------------------------- list --- */
+#define LIST_ROW 23
+static void draw_list(void)
+{
+    const r4p_list_t *l = &ui.list;
+    char t[24], u[12];
+    uint16_t ac = scale(0, l->r * 2, l->g * 2, l->b * 2, 100);
+    uint16_t fg = (l->r * 299 + l->g * 587 + l->b * 114) / 1000 >= 56 ? RGB(10, 10, 14) : RGB(250, 250, 250);
+    int i;
+    cv_begin(240, 34, ac);
+    cv_rect(0, 32, 240, 2, scale(0, l->r * 2, l->g * 2, l->b * 2, 55));
+    ptext(8, 8, &FONT_B, l->title, fg);
+    t[0] = 0; u_int((unsigned)l->sel + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int((unsigned)l->total, u); u_cat(t, u);
+    ptext(232 - pwidth(&FONT_B, t), 8, &FONT_B, t, fg);
+    cv_blit(0, 0);
+    for (i = 0; i < R4P_LIST_ROWS; i++) {
+        int idx = l->first + i, has = i < l->n, sel = has && idx == l->sel;
+        cv_begin(240, LIST_ROW, R4_BG);
+        if (sel)
+            cv_rect(4, 1, 232, LIST_ROW - 2, ac);
+        else if (has)
+            cv_rect(4, LIST_ROW - 1, 232, 1, R4_TILE);
+        if (has)
+            ptext(14, 3, &FONT_B, l->item[i], sel ? fg : R4_TEXT);
+        cv_blit(0, (uint32_t)(36 + i * LIST_ROW));
+    }
+    cv_begin(240, 40, R4_BG);
+    cv_rect(0, 0, 240, 1, R4_EDGE);
+    ptext(8, 8, &FONT_XS, "SELECT MOVE   HOME OK   OTHER BACK", R4_LABEL);
+    cv_blit(0, 200);
+}
+
 /* ---------------------------------------------------------------- draw --- */
 static void ui_draw(void)
 {
@@ -280,6 +315,12 @@ static void ui_draw(void)
     if (ui.toast_until && (int32_t)(now - ui.toast_until) >= 0) {
         ui.toast_until = 0;
         ui.dirty |= D_TOAST_UNDER;                             /* the band under the toast */
+    }
+    if (ui.list_open && ui.connected && !ui.setup) {
+        if (ui.dirty & (D_ALL | D_TILES | D_FOOT | D_HEAD | D_TOAST))
+            draw_list();
+        ui.dirty = 0;
+        return;
     }
     if (!ui.connected && !ui.setup) {
         uint8_t ph = (uint8_t)((now / 500u) & 3u);
@@ -325,6 +366,11 @@ static void ui_apply(const r4p_msg_t *m)
 {
     int i;
     switch (m->cmd) {
+    case R4P_LIST:                                             /* total 0 closes the list */
+        ui.list = m->u.list;
+        ui.list_open = m->u.list.total > 0;
+        ui.dirty = D_ALL;
+        break;
     case R4P_PAGE:
         ui.page = m->u.page;
         ui.dirty |= D_HEAD | D_TILES | D_FOOT;

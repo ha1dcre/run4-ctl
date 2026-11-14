@@ -1,0 +1,64 @@
+# Protocol 1.1: a host LIST (the HOME double-tap mode list), picked and cancelled; a 1.0 host never gets one.
+@ACK@
+wait 100
+expect host_minor 1
+@TAPE@
+wait 50
+sysex_out
+@LIST@
+wait 100
+expect list 2
+shot list.png
+# the buttons stay local while the list is open: PLAY and ENV do not reach the host
+turn SELECT 1
+wait 100
+expect list 3
+turn SELECT -2
+wait 100
+expect list 1
+turn SELECT 1
+wait 100
+expect list 2
+# HOME picks: LIST_PICK index 1 (POLY), action OK
+tap HOME
+wait 100
+expect list 0
+expect_sysex @PICK1_0@
+sysex_out
+# a list again: ENV cancels (LIST_PICK, action CANCEL); PLAY / HOME presses never went out as BTN
+@LIST@
+wait 50
+tap ENV
+wait 100
+expect list 0
+expect_sysex @PICK1_1@
+sysex_out
+# a long list: moving past the window asks the host for it (MOVE), the host answers with the next window
+@LIST_LONG@
+wait 50
+expect list 7
+sysex_out
+spin SELECT 1
+wait 100
+expect list 8
+expect_sysex @PICK7_2@
+@LIST_LONG2@
+wait 50
+expect list 8
+shot list_long.png
+# the host closes a list itself (total 0), and the buttons work again
+@LIST_CLOSE@
+wait 50
+expect list 0
+sysex_out
+tap FX
+wait 100
+expect_sysex @BTN0_1@
+# a bad list frame is dropped and counted; a 1.0 host (ACK without a minor) is remembered as 0
+@LIST_BAD@
+wait 50
+expect frames_bad 1
+expect list 0
+@ACK10@
+wait 50
+expect host_minor 0

@@ -7,6 +7,8 @@
 #include <stdint.h>
 
 #define R4P_VER 1
+#define R4P_MINOR 1               /* protocol 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK */
+#define R4P_LIST_ROWS 7           /* items in one LIST frame (the window) */
 #define R4P_STR_MAX 24            /* characters in a string */
 #define R4P_NSLOTS 4
 #define R4P_NBTN 14               /* plat.h B_* order */
@@ -16,13 +18,14 @@
 #define R4P_FRAME_MAX 640         /* the most a device takes between F0 and F7 (fm1-base); ours stay far below */
 
 enum {                            /* device -> host */
-    R4P_HELLO = 0x01, R4P_BTN = 0x02, R4P_ENC = 0x03, R4P_POT = 0x04, R4P_SYNC_REQ = 0x05,
+    R4P_HELLO = 0x01, R4P_BTN = 0x02, R4P_ENC = 0x03, R4P_POT = 0x04, R4P_SYNC_REQ = 0x05, R4P_LIST_PICK = 0x06,
     /* host -> device */
-    R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46
+    R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46, R4P_LIST = 0x47
 };
 enum { R4P_KIND_EMPTY, R4P_KIND_UNI, R4P_KIND_BI, R4P_KIND_ENUM, R4P_KIND_TOGGLE, R4P_KIND_COUNT };
 enum { R4P_LED_OFF, R4P_LED_DIM, R4P_LED_ON, R4P_LED_BLINK };
 enum { R4P_MODE_RUN4, R4P_MODE_SYNTH };
+enum { R4P_PICK_OK, R4P_PICK_CANCEL, R4P_PICK_MOVE };     /* LIST_PICK actions */
 enum { R4P_ST_PLAY = 1, R4P_ST_REC = 2, R4P_ST_OVERDUB = 4 };
 
 /* Strings are Latin-1 bytes in memory (so "T\xD3" "LF" is TOLF with an acute O), NUL-terminated, at most 24 chars. */
@@ -37,12 +40,21 @@ typedef struct { uint8_t slot; uint16_t value; char text[R4P_STR_MAX + 1]; } r4p
 typedef struct { uint8_t btn[R4P_NBTN], key[R4P_NKEY]; } r4p_leds_t;      /* R4P_LED_* each */
 typedef struct { uint16_t bpm10, bar; uint8_t beat, flags; } r4p_status_t;
 typedef struct { char text[R4P_STR_MAX + 1]; uint8_t dur100ms; } r4p_toast_t;
+/* protocol 1.1: a scrollable list. total items 0..127 (0 closes the list); this frame carries items first .. first+n-1
+ * (n <= R4P_LIST_ROWS); sel is the selected index (absolute, < total) */
+typedef struct {
+    char title[R4P_STR_MAX + 1];
+    uint8_t r, g, b;
+    uint8_t total, first, sel, n;
+    char item[R4P_LIST_ROWS][R4P_STR_MAX + 1];
+} r4p_list_t;
+typedef struct { uint8_t index, action; } r4p_pick_t;
 
 typedef struct {
     uint8_t cmd;
     union {
-        struct { uint8_t proto, fw_major, fw_minor, mode; } hello;
-        struct { uint8_t proto; } ack;
+        struct { uint8_t proto, fw_major, fw_minor, mode, minor; } hello;   /* minor: protocol minor, 0 when absent */
+        struct { uint8_t proto, minor; } ack;
         struct { uint8_t id, state; } btn;
         struct { uint8_t id; int8_t delta; } enc;
         struct { uint16_t value; } pot;
@@ -51,6 +63,8 @@ typedef struct {
         r4p_leds_t leds;
         r4p_status_t status;
         r4p_toast_t toast;
+        r4p_list_t list;
+        r4p_pick_t pick;
     } u;
 } r4p_msg_t;
 
@@ -67,6 +81,7 @@ size_t r4p_btn(uint8_t *buf, size_t cap, uint8_t id, uint8_t down);
 size_t r4p_enc(uint8_t *buf, size_t cap, uint8_t id, int delta);          /* delta clamped to +-63 */
 size_t r4p_pot(uint8_t *buf, size_t cap, uint16_t v14);
 size_t r4p_sync_req(uint8_t *buf, size_t cap);
+size_t r4p_list_pick(uint8_t *buf, size_t cap, uint8_t index, uint8_t action);
 
 /* encoder detents coalesced per frame: add every detent seen, take once per frame; what clamping left over carries on */
 typedef struct { int16_t acc[R4P_NENC]; } r4p_enc_acc_t;

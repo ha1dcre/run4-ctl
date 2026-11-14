@@ -49,6 +49,7 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
     switch (m->cmd) {
     case R4P_HELLO:
         w8(&w, m->u.hello.proto); w8(&w, m->u.hello.fw_major); w8(&w, m->u.hello.fw_minor); w8(&w, m->u.hello.mode);
+        w8(&w, m->u.hello.minor);
         if (m->u.hello.mode > R4P_MODE_SYNTH)
             w.bad = 1;
         break;
@@ -72,7 +73,25 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
         break;
     case R4P_HELLO_ACK:
         w8(&w, m->u.ack.proto);
+        if (m->u.ack.minor)
+            w8(&w, m->u.ack.minor);
         break;
+    case R4P_LIST_PICK:
+        w8(&w, m->u.pick.index); w8(&w, m->u.pick.action);
+        if (m->u.pick.action > R4P_PICK_MOVE)
+            w.bad = 1;
+        break;
+    case R4P_LIST: {
+        const r4p_list_t *l = &m->u.list;
+        wstr(&w, l->title);
+        w8(&w, l->r); w8(&w, l->g); w8(&w, l->b);
+        w8(&w, l->total); w8(&w, l->first); w8(&w, l->sel); w8(&w, l->n);
+        if (l->n > R4P_LIST_ROWS || l->total > 127 || (unsigned)l->first + l->n > l->total || (l->total && l->sel >= l->total))
+            w.bad = 1;
+        for (i = 0; i < l->n && i < R4P_LIST_ROWS; i++)
+            wstr(&w, l->item[i]);
+        break;
+    }
     case R4P_PAGE: {
         const r4p_page_t *p = &m->u.page;
         wstr(&w, p->title); wstr(&w, p->track);
@@ -173,6 +192,7 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
     case R4P_HELLO:
         out->u.hello.proto = (uint8_t)r8(&r); out->u.hello.fw_major = (uint8_t)r8(&r);
         out->u.hello.fw_minor = (uint8_t)r8(&r); out->u.hello.mode = (uint8_t)r8(&r);
+        out->u.hello.minor = r.at < r.n ? (uint8_t)r8(&r) : 0u;       /* optional since protocol 1.1 */
         if (out->u.hello.mode > R4P_MODE_SYNTH)
             r.bad = 1;
         break;
@@ -197,7 +217,26 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
         break;
     case R4P_HELLO_ACK:
         out->u.ack.proto = (uint8_t)r8(&r);
+        out->u.ack.minor = r.at < r.n ? (uint8_t)r8(&r) : 0u;
         break;
+    case R4P_LIST_PICK:
+        out->u.pick.index = (uint8_t)r8(&r); out->u.pick.action = (uint8_t)r8(&r);
+        if (out->u.pick.action > R4P_PICK_MOVE)
+            r.bad = 1;
+        break;
+    case R4P_LIST: {
+        r4p_list_t *l = &out->u.list;
+        for (i = 0; i < sizeof *l; i++)
+            ((uint8_t *)l)[i] = 0;
+        rstr(&r, l->title);
+        l->r = (uint8_t)r8(&r); l->g = (uint8_t)r8(&r); l->b = (uint8_t)r8(&r);
+        l->total = (uint8_t)r8(&r); l->first = (uint8_t)r8(&r); l->sel = (uint8_t)r8(&r); l->n = (uint8_t)r8(&r);
+        if (l->n > R4P_LIST_ROWS || (unsigned)l->first + l->n > l->total || (l->total && l->sel >= l->total))
+            r.bad = 1;
+        for (i = 0; i < l->n && !r.bad; i++)
+            rstr(&r, l->item[i]);
+        break;
+    }
     case R4P_PAGE: {
         r4p_page_t *g = &out->u.page;
         rstr(&r, g->title); rstr(&r, g->track);
@@ -256,6 +295,7 @@ size_t r4p_hello(uint8_t *b, size_t c, uint8_t ma, uint8_t mi, uint8_t mode)
 {
     r4p_msg_t m;
     m.cmd = R4P_HELLO; m.u.hello.proto = R4P_VER; m.u.hello.fw_major = ma; m.u.hello.fw_minor = mi; m.u.hello.mode = mode;
+    m.u.hello.minor = R4P_MINOR;
     return r4p_encode(b, c, &m);
 }
 size_t r4p_btn(uint8_t *b, size_t c, uint8_t id, uint8_t down)
@@ -280,6 +320,13 @@ size_t r4p_sync_req(uint8_t *b, size_t c)
 {
     r4p_msg_t m;
     m.cmd = R4P_SYNC_REQ;
+    return r4p_encode(b, c, &m);
+}
+
+size_t r4p_list_pick(uint8_t *b, size_t c, uint8_t index, uint8_t action)
+{
+    r4p_msg_t m;
+    m.cmd = R4P_LIST_PICK; m.u.pick.index = index; m.u.pick.action = action;
     return r4p_encode(b, c, &m);
 }
 

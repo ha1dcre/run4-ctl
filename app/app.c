@@ -7,7 +7,7 @@
 #include "ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 2
+#define FW_MINOR 3
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
 #define HELLO_MS 1000u
 #define POT_STEP 6                       /* 14-bit counts: the ADC's noise stays quiet */
@@ -33,7 +33,9 @@ static struct {
     uint8_t setup_dirty;             /* the note each held key started (255 = none), so a note-off always matches */
     int8_t octave;                       /* -3 .. +3, local */
     r4p_enc_acc_t enc;
-    uint8_t txq[TXQ_N];                  /* BTN events not yet sent: (id << 1) | down, oldest first (a stalled host) */
+    uint16_t txq[TXQ_N];                 /* events not yet sent, oldest first (a stalled host): BTN (id << 1) | down,
+                                          * or LIST_PICK 0x8000 | action << 8 | index */
+    uint8_t host_minor;                  /* the host's protocol minor from its HELLO_ACK (0 = 1.0: no LIST) */
     uint8_t txq_n;
     uint8_t want_sync, want_pot;         /* owed after a HELLO_ACK */
     int32_t pot_sent;                    /* last 14-bit value sent, -1 = none yet */
@@ -168,11 +170,41 @@ static void txq_flush(void)
 {
     uint8_t f[16];
     while (ctl.txq_n) {
-        uint8_t e = ctl.txq[0];
-        if (!send_frame(f, r4p_btn(f, sizeof f, (uint8_t)(e >> 1), e & 1u)))
+        uint16_t e = ctl.txq[0];
+        size_t n = (e & 0x8000u) ? r4p_list_pick(f, sizeof f, (uint8_t)(e & 0x7Fu), (uint8_t)((e >> 8) & 3u))
+                                 : r4p_btn(f, sizeof f, (uint8_t)(e >> 1), e & 1u);
+        if (!send_frame(f, n))
             return;
-        memmove(ctl.txq, ctl.txq + 1, --ctl.txq_n);
+        ctl.txq_n--;
+        memmove(ctl.txq, ctl.txq + 1, ctl.txq_n * sizeof ctl.txq[0]);
     }
+}
+
+/* ----------------------------------------------------------- host LIST --- */
+static int ctl_queue(uint16_t e)
+{
+    if (ctl.txq_n >= TXQ_N)
+        return 0;
+    ctl.txq[ctl.txq_n++] = e;
+    return 1;
+}
+static void list_pick(int action)                      /* the list closes here; the host may open another */
+{
+    ctl_queue((uint16_t)(0x8000u | (unsigned)action << 8 | ui.list.sel));
+    ui.list_open = 0;
+    ui.dirty = D_ALL;
+}
+static void list_move(int d)
+{
+    r4p_list_t *l = &ui.list;
+    int s = (int)l->sel + d;
+    s = s < 0 ? 0 : s >= (int)l->total ? (int)l->total - 1 : s;
+    if (s == l->sel)
+        return;
+    l->sel = (uint8_t)s;
+    ui.dirty = D_ALL;
+    if (s < l->first || s >= l->first + l->n)          /* outside what the host sent: ask for that window */
+        ctl_queue((uint16_t)(0x8000u | (unsigned)R4P_PICK_MOVE << 8 | (unsigned)s));
 }
 
 /* ------------------------------------------------------------------ input --- */
@@ -272,6 +304,14 @@ static void input(void)
             continue;
         }
         if (btn & bit) {
+            if (ui.list_open && !ui.setup) {           /* a host LIST: HOME / PLAY pick, any other page button or SAVE cancels */
+                ctl.suppress |= bit;
+                if (k == B_HOME || k == B_PLAY)
+                    list_pick(R4P_PICK_OK);
+                else if (k == B_FX || k == B_ENV || k == B_LFO || k == B_EDIT || k == B_GLO || k == B_ARP || k == B_SEQ || k == B_SAVE)
+                    list_pick(R4P_PICK_CANCEL);
+                continue;
+            }
             if (shift && k == B_GLO && !ui.setup) {    /* SEL + GLO opens the SETUP page; the press stays local */
                 setup_open(1);
                 ctl.suppress |= bit;
@@ -286,7 +326,7 @@ static void input(void)
             if (!shift && k == B_OCTDN) octave_step(-1);
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
-        ctl.txq[ctl.txq_n++] = (uint8_t)(k << 1 | ((btn & bit) ? 1u : 0u));
+        ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1 | ((btn & bit) ? 1u : 0u));
     }
     if (shift != ui.shift) {
         ui.shift = shift;
@@ -305,6 +345,11 @@ static void input(void)
 
     for (k = 0; k < R4P_NENC; k++) {                   /* encoders: the detents of this frame, one frame each; coalesced while the ring is full */
         int d = plat_enc((int)k);
+        if (ui.list_open && !ui.setup) {               /* a host LIST: SELECT / PRESETS move the selection */
+            if ((k == 0 || k == 2) && d)
+                list_move(d);
+            continue;
+        }
         if (ui.setup) {                                /* SETUP: K1..K4 edit, the rest does nothing; none of it goes out */
             if (k >= 3 && d)
                 for (; d; d += d > 0 ? -1 : 1)
@@ -365,6 +410,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     case R4P_HELLO_ACK:
         ui_connect(1);
         ctl.leds = (r4p_leds_t){{0}, {0}};
+        ctl.host_minor = m.u.ack.minor;
         ctl.pot_sent = -1;
         ctl.want_sync = 1;
         ctl.want_pot = 1;
@@ -372,7 +418,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     case R4P_LEDS:
         ctl.leds = m.u.leds;
         break;
-    case R4P_PAGE: case R4P_VALUE: case R4P_STATUS: case R4P_TOAST:
+    case R4P_PAGE: case R4P_VALUE: case R4P_STATUS: case R4P_TOAST: case R4P_LIST:
         if (ui.connected)                              /* (frames before the ack are the previous session's) */
             ui_apply(&m);
         break;
@@ -428,6 +474,8 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "shift")) *got = ui.shift;
     else if (!strcmp(what, "page_idx")) *got = ui.page.page_idx;
     else if (!strcmp(what, "setup")) *got = ui.setup;
+    else if (!strcmp(what, "list")) *got = ui.list_open ? ui.list.sel + 1 : 0;
+    else if (!strcmp(what, "host_minor")) *got = ctl.host_minor;
     else if (!strcmp(what, "set_vel")) *got = setup.vel;
     else if (!strcmp(what, "set_at")) *got = setup.at;
     else if (!strcmp(what, "set_led")) *got = setup.led;

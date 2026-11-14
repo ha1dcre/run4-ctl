@@ -2,7 +2,7 @@
 wait 300
 shot nc_boot.png
 expect connected 0
-expect_sysex F0 7D 52 34 01 01 00 02 00 F7
+expect_sysex F0 7D 52 34 01 01 00 03 00 01 F7
 sysex_out
 wait 2100
 shot nc_later.png

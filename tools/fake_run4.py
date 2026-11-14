@@ -10,8 +10,8 @@ It does NOT share code with src/r4p.c, so the host simulator tests also cross-ch
 import sys
 
 HDR = [0xF0, 0x7D, 0x52, 0x34]
-CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05,
-           HELLO_ACK=0x41, PAGE=0x42, VALUE=0x43, LEDS=0x44, STATUS=0x45, TOAST=0x46)
+CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05, LIST_PICK=0x06,
+           HELLO_ACK=0x41, PAGE=0x42, VALUE=0x43, LEDS=0x44, STATUS=0x45, TOAST=0x46, LIST=0x47)
 KIND = dict(empty=0, uni=1, bi=2, enum=3, toggle=4)
 LED = dict(off=0, dim=1, on=2, blink=3)
 BTN = "FX SEL ENV LFO EDIT GLO HOME SAVE ARP SEQ PLAY REC OCT- OCT+".split()
@@ -81,6 +81,15 @@ def toast(text, tenths):
     return frame("TOAST", string(text) + [tenths])
 
 
+def list_frame(title, rgb, total, first, sel, items):
+    """protocol 1.1 LIST: this frame carries items first .. first+len-1 of total"""
+    assert len(items) <= 7 and first + len(items) <= total
+    p = string(title) + list(rgb) + [total, first, sel, len(items)]
+    for it in items:
+        p += string(it)
+    return frame("LIST", p)
+
+
 def value(slot_i, v, text):
     return frame("VALUE", [slot_i] + v14(v) + string(text))
 
@@ -118,18 +127,26 @@ def demo_frames(which):
 def expand(name):
     """a scenario with lines '@name@' replaced by 'sysex HEX'"""
     table = {
-        "ACK": frame("HELLO_ACK", [1]), "TAPE": tape(), "TOLF": tolf(),
+        "ACK": frame("HELLO_ACK", [1, 1]), "ACK10": frame("HELLO_ACK", [1]),
+        "LIST": list_frame("MODE", (127, 70, 20), 5, 0, 1, ["TAPE", "POLY", "DISC", "PERFORM", "T\u00d3LF"]),
+        "LIST_LONG": list_frame("KITS", (30, 105, 100), 40, 0, 6, ["KIT %02d" % i for i in range(7)]),
+        "LIST_LONG2": list_frame("KITS", (30, 105, 100), 40, 7, 7, ["KIT %02d" % i for i in range(7, 14)]),
+        "LIST_CLOSE": list_frame("", (0, 0, 0), 0, 0, 0, []),
+        "LIST_BAD": frame("LIST", string("X") + [0, 0, 0, 2, 0, 5, 0]), "TAPE": tape(), "TOLF": tolf(),
         "LEDS": leds({"PLAY": "on", "REC": "blink", "EDIT": "dim"}, {0: "dim", 12: "on"}),
         "STATUS": status(1203, 12, 2, 1), "STATUS2": status(980, 3, 15, 3), "VALUE": value(1, 9000, "1.10x"),
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 2, 0]), "SYNC": frame("SYNC_REQ"),
+        "HELLO": frame("HELLO", [1, 0, 3, 0, 1]), "SYNC": frame("SYNC_REQ"),
         "POT_8192": frame("POT", v14(8192)), "POT_MAX": frame("POT", v14(16383)),
     }
     for i in range(14):
         table["BTN%d_1" % i] = frame("BTN", [i, 1])
         table["BTN%d_0" % i] = frame("BTN", [i, 0])
+    for i in range(40):
+        for a in range(3):
+            table["PICK%d_%d" % (i, a)] = frame("LIST_PICK", [i, a])
     for e in range(7):
         for d in (1, -1, 3, 5, 63, -63, -37):
             table["ENC%d_%+d" % (e, d)] = frame("ENC", [e, 0x40 + d])

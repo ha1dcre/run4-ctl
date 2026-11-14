@@ -34,7 +34,7 @@ static void t_simple(void)
 {
     r4p_msg_t m, b;
     int i;
-    m.cmd = R4P_HELLO; m.u.hello.proto = 1; m.u.hello.fw_major = 0; m.u.hello.fw_minor = 1; m.u.hello.mode = 1;
+    m.cmd = R4P_HELLO; m.u.hello.proto = 1; m.u.hello.fw_major = 0; m.u.hello.fw_minor = 1; m.u.hello.mode = 1; m.u.hello.minor = 0;
     CHECK(round_trip(&m, &b) == 1 && b.cmd == R4P_HELLO && b.u.hello.proto == 1 && b.u.hello.fw_minor == 1 && b.u.hello.mode == 1);
     for (i = 0; i < R4P_NBTN; i++) {
         m.cmd = R4P_BTN; m.u.btn.id = (uint8_t)i; m.u.btn.state = (uint8_t)(i & 1);
@@ -64,7 +64,7 @@ static void t_simple(void)
     }
     m.u.pot.value = 16384; CHECK(enc(&m) == 0);
     m.cmd = R4P_SYNC_REQ; CHECK(round_trip(&m, &b) == 1 && b.cmd == R4P_SYNC_REQ);
-    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; CHECK(round_trip(&m, &b) == 1 && b.u.ack.proto == 1);
+    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 0; CHECK(round_trip(&m, &b) == 1 && b.u.ack.proto == 1);
     CHECK(r4p_sync_req(buf, sizeof buf) == 6);
 }
 
@@ -241,6 +241,66 @@ static void t_leds(void)
     for (i = 0; i < R4P_LED_BYTES; i++) CHECK(pk[i] < 0x80);
 }
 
+static void t_v11(void)
+{
+    r4p_msg_t m, b;
+    r4p_list_t *l = &m.u.list;
+    static const uint8_t V10_HELLO[] = {0xF0, 0x7D, 0x52, 0x34, 0x01, 0x01, 0x00, 0x01, 0x00, 0xF7};     /* a 1.0 device */
+    static const uint8_t V10_ACK[] = {0xF0, 0x7D, 0x52, 0x34, 0x41, 0x01, 0xF7};                          /* a 1.0 host */
+    size_t n;
+    int i;
+    /* the minor byte is optional in both directions: 1.0 frames still parse, with minor 0 */
+    CHECK(r4p_parse(V10_HELLO, sizeof V10_HELLO, &b) == 1 && b.u.hello.minor == 0 && b.u.hello.fw_minor == 1);
+    CHECK(r4p_parse(V10_ACK, sizeof V10_ACK, &b) == 1 && b.u.ack.proto == 1 && b.u.ack.minor == 0);
+    n = r4p_hello(buf, sizeof buf, 0, 2, R4P_MODE_RUN4);
+    CHECK(n == 11 && buf[9] == R4P_MINOR && buf[10] == 0xF7);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == R4P_MINOR);
+    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 1;
+    CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 1);
+    /* LIST */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_LIST;
+    strcpy(l->title, "MODE"); l->r = 127; l->g = 70; l->b = 20;
+    l->total = 5; l->first = 0; l->sel = 2; l->n = 5;
+    strcpy(l->item[0], "TAPE"); strcpy(l->item[1], "POLY"); strcpy(l->item[2], "DISC"); strcpy(l->item[3], "PERFORM");
+    strcpy(l->item[4], "T\xD3LF");
+    CHECK(round_trip(&m, &b) == 1 && b.cmd == R4P_LIST && !strcmp(b.u.list.title, "MODE") && b.u.list.total == 5 &&
+          b.u.list.sel == 2 && b.u.list.n == 5 && !strcmp(b.u.list.item[4], "T\xD3LF") && !strcmp(b.u.list.item[3], "PERFORM"));
+    /* a scrolled window of a long list */
+    l->total = 100; l->first = 40; l->sel = 43; l->n = R4P_LIST_ROWS;
+    for (i = 0; i < R4P_LIST_ROWS; i++) { strcpy(l->item[i], "KIT 00"); l->item[i][5] = (char)('0' + i); }
+    CHECK(round_trip(&m, &b) == 1 && b.u.list.first == 40 && b.u.list.sel == 43 && !strcmp(b.u.list.item[6], "KIT 06"));
+    l->total = 0; l->first = 0; l->sel = 0; l->n = 0;                                 /* total 0 closes the list */
+    CHECK(round_trip(&m, &b) == 1 && b.u.list.total == 0 && b.u.list.n == 0);
+    /* refused: too many rows, window past the end, selection outside, total over 127 */
+    l->total = 20; l->first = 0; l->sel = 0; l->n = R4P_LIST_ROWS + 1; CHECK(enc(&m) == 0);
+    l->total = 5; l->first = 3; l->n = 3; CHECK(enc(&m) == 0);
+    l->total = 5; l->first = 0; l->n = 5; l->sel = 5; CHECK(enc(&m) == 0);
+    l->total = 128; l->n = 0; l->sel = 0; CHECK(enc(&m) == 0);
+    /* a damaged LIST: parse refuses bad windows and truncated frames, and ones with trailing bytes */
+    l->total = 3; l->first = 0; l->sel = 1; l->n = 3; strcpy(l->item[0], "A"); strcpy(l->item[1], "B"); strcpy(l->item[2], "C");
+    n = enc(&m);
+    CHECK(n > 0 && r4p_parse(buf, n, &b) == 1);
+    CHECK(r4p_parse(buf, n - 1, &b) == -1);                                            /* the F7 gone */
+    buf[n - 1] = 0x00; buf[n] = 0xF7; CHECK(r4p_parse(buf, n + 1, &b) == -1);          /* trailing byte */
+    buf[n - 1] = 0xF7;
+    buf[5 + 5 + 3 + 2] = 9; CHECK(r4p_parse(buf, n, &b) == -1);                        /* sel (here byte 15) beyond total */
+    /* LIST_PICK */
+    n = r4p_list_pick(buf, sizeof buf, 7, R4P_PICK_OK);
+    CHECK(n == 8 && buf[4] == 0x06 && buf[5] == 7 && buf[6] == 0);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_LIST_PICK && b.u.pick.index == 7 && b.u.pick.action == R4P_PICK_OK);
+    CHECK(r4p_list_pick(buf, sizeof buf, 3, R4P_PICK_CANCEL) == 8 && r4p_list_pick(buf, sizeof buf, 3, R4P_PICK_MOVE) == 8);
+    CHECK(r4p_list_pick(buf, sizeof buf, 3, 3) == 0 && r4p_list_pick(buf, sizeof buf, 128, 0) == 0);
+    /* the longest LIST frame fits the device's buffer */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_LIST; l->total = 127; l->first = 100; l->sel = 100; l->n = R4P_LIST_ROWS;
+    for (i = 0; i < 24; i++) l->title[i] = '\xD3';
+    for (i = 0; i < R4P_LIST_ROWS; i++) { int k; for (k = 0; k < 24; k++) l->item[i][k] = '\xE9'; }
+    n = enc(&m);
+    CHECK(n > 0 && n <= 520 && n < R4P_FRAME_MAX);
+    printf("  max LIST frame: %u bytes\n", (unsigned)n);
+}
+
 int main(void)
 {
     t_simple();
@@ -250,6 +310,7 @@ int main(void)
     t_malformed();
     t_enc_acc();
     t_leds();
+    t_v11();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

@@ -78,7 +78,14 @@ def decode(frame):
         raise Bad("byte >= 0x80 inside")
     cmd, r = f[4], Rd(f[5:-1])
     if cmd == 0x41:
-        return dict(cmd="HELLO_ACK", proto=r.u8())
+        return dict(cmd="HELLO_ACK", proto=r.u8(), minor=r.u8() if r.i < len(r.b) else 0)
+    if cmd == 0x47:
+        d = dict(cmd="LIST", title=r.string(), rgb=(r.u8(), r.u8(), r.u8()), total=r.u8(), first=r.u8(), sel=r.u8())
+        n = r.u8()
+        if n > 7 or d["first"] + n > d["total"] or (d["total"] and d["sel"] >= d["total"]):
+            raise Bad("bad LIST window")
+        d["items"] = [r.string() for _ in range(n)]
+        return d
     if cmd == 0x42:
         d = dict(cmd="PAGE", title=r.string(), track=r.string(), rgb=(r.u8(), r.u8(), r.u8()), page_idx=r.u8(),
                  page_count=r.u8(), bank_idx=r.u8(), bank_count=r.u8(), slots=[])
@@ -125,16 +132,21 @@ def show(d):
     if c == "TOAST":
         return "TOAST \"%s\" %.1f s" % (d["text"], d["seconds"])
     if c == "HELLO_ACK":
-        return "HELLO_ACK proto %d" % d["proto"]
+        return "HELLO_ACK proto %d.%d" % (d["proto"], d["minor"])
+    if c == "LIST":
+        if not d["total"]:
+            return "LIST closed"
+        rows = ["%s%2d %s" % (">" if d["first"] + i == d["sel"] else " ", d["first"] + i + 1, t) for i, t in enumerate(d["items"])]
+        return "LIST  %s  (%d items, window from %d)  selected %d\n        %s" % (d["title"], d["total"], d["first"] + 1, d["sel"] + 1, "\n        ".join(rows))
     return c
 
 
 # ------------------------------------------------------------------ the device ---
-MODE_RUN4, FW = 0, (0, 2)
+MODE_RUN4, FW = 0, (0, 3)
 
 
 def hello():
-    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4])
+    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4, 1])
 
 
 def btn(i, down):
@@ -167,6 +179,7 @@ class Device:
         self.acked, self.hello_at, self.master = False, 0.0, 8192
         self.sel, self.octave, self.piano = False, 0, False
         self.page = None
+        self.list, self.sel = None, 0
         self.lock = threading.Lock()
 
     def tick(self, now):
@@ -191,6 +204,9 @@ class Device:
             self.out("-> SYNC_REQ, POT %d" % self.master)
         elif d["cmd"] == "PAGE":
             self.page = d
+        elif d["cmd"] == "LIST":
+            self.list = d if d["total"] else None
+            self.sel = d["sel"]
 
     def key(self, ch):
         if ch == "\t":
@@ -206,6 +222,18 @@ class Device:
         if self.piano and ch in "-+":
             self.octave = max(-3, min(3, self.octave + (1 if ch == "+" else -1)))
             return self.out("(octave %+d)" % self.octave)
+        if self.list:                                   # a LIST is open: SELECT moves, HOME / PLAY pick, others cancel
+            total, first, n = self.list["total"], self.list["first"], len(self.list["items"])
+            if ch in ",.":
+                self.sel = max(0, min(total - 1, self.sel + (1 if ch == "." else -1)))
+                if not first <= self.sel < first + n:
+                    self.send(f4.frame("LIST_PICK", [self.sel, 2]))
+                return self.out("(list: selected %d)" % (self.sel + 1))
+            if ch in BUTTON_KEYS:
+                ok = BUTTON_KEYS[ch] in ("HOME", "PLAY")
+                self.send(f4.frame("LIST_PICK", [self.sel, 0 if ok else 1]))
+                self.list = None
+                return self.out("-> LIST_PICK %d %s" % (self.sel, "OK" if ok else "CANCEL"))
         if ch == "x":                                   # SEL = SHIFT, a toggle
             self.sel = not self.sel
             self.send(btn(1, self.sel))
@@ -317,7 +345,7 @@ def selftest():
 
     h = lambda s: [int(x, 16) for x in s.split()]  # noqa: E731
     # device -> host: the bytes the C codec produces (tests/r4p_test.c, tests/scenarios)
-    eq(hello(), h("F0 7D 52 34 01 01 00 02 00 F7"), "HELLO")
+    eq(hello(), h("F0 7D 52 34 01 01 00 03 00 01 F7"), "HELLO")
     eq(btn(0, True), h("F0 7D 52 34 02 00 01 F7"), "BTN down")
     eq(btn(13, False), h("F0 7D 52 34 02 0D 00 F7"), "BTN up")
     eq(enc(3, 1), h("F0 7D 52 34 03 03 41 F7"), "ENC +1")
@@ -326,7 +354,11 @@ def selftest():
     eq(pot(8192), h("F0 7D 52 34 04 40 00 F7"), "POT")
     eq(f4.frame("SYNC_REQ"), h("F0 7D 52 34 05 F7"), "SYNC_REQ")
     # host -> device: decode what fake_run4 builds, and a hand-written frame
-    eq(decode(f4.frame("HELLO_ACK", [1])), dict(cmd="HELLO_ACK", proto=1), "ACK")
+    eq(decode(f4.frame("HELLO_ACK", [1])), dict(cmd="HELLO_ACK", proto=1, minor=0), "ACK 1.0")
+    eq(decode(f4.frame("HELLO_ACK", [1, 1]))["minor"], 1, "ACK 1.1")
+    lst = decode(f4.list_frame("MODE", (127, 70, 20), 5, 0, 1, ["TAPE", "POLY", "DISC", "PERFORM", "T\u00d3LF"]))
+    eq((lst["total"], lst["sel"], lst["items"][4]), (5, 1, "T\u00d3LF"), "LIST")
+    eq(f4.frame("LIST_PICK", [7, 0]), h("F0 7D 52 34 06 07 00 F7"), "LIST_PICK")
     p = decode(f4.tolf())
     eq((p["title"], p["track"], p["rgb"], p["page_idx"], p["page_count"], p["bank_idx"], p["bank_count"]),
        ("CREATE", "T\u00d3LF 3", (30, 105, 100), 1 + 1, 5, 1, 4), "PAGE head")

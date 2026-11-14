@@ -29,11 +29,12 @@ cross-check it.
 
 | cmd | name | payload |
 | --- | --- | --- |
-| 0x01 | HELLO | `proto_ver, fw_major, fw_minor, mode` (mode 0 = RUN4, 1 = SYNTH, reserved) |
+| 0x01 | HELLO | `proto_ver, fw_major, fw_minor, mode, [proto_minor]` (mode 0 = RUN4, 1 = SYNTH; `proto_minor` since 1.1, absent = 0) |
 | 0x02 | BTN | `id (0..13), state (1 down / 0 up)` |
 | 0x03 | ENC | `id (0..6), delta` |
 | 0x04 | POT | `value14` (MASTER) |
 | 0x05 | SYNC_REQ | none: "send me everything" |
+| 0x06 | LIST_PICK | `index, action` (action 0 = OK, 1 = CANCEL, 2 = MOVE) - protocol 1.1 |
 
 Button ids follow fm1-base `plat.h`: 0 FX, 1 SEL, 2 ENV, 3 LFO, 4 EDIT, 5 GLO, 6 HOME, 7 SAVE, 8 ARP, 9 SEQ, 10 PLAY,
 11 REC, 12 OCT-, 13 OCT+. Encoder ids: 0 SELECT, 1 ALGO, 2 PRESETS, 3..6 K1..K4.
@@ -60,12 +61,13 @@ while a key is held leaves no stuck note.
 
 | cmd | name | payload |
 | --- | --- | --- |
-| 0x41 | HELLO_ACK | `proto_ver` |
+| 0x41 | HELLO_ACK | `proto_ver, [proto_minor]` (the minor since 1.1; absent = a 1.0 host) |
 | 0x42 | PAGE | `title(str) track(str) r g b page_idx page_count bank_idx bank_count` then 4 x `name(str) kind value14 text(str)` |
 | 0x43 | VALUE | `slot (0..3) value14 text(str)` |
 | 0x44 | LEDS | 41 states, 2 bits each, packed 3 per byte LSB first, 14 bytes |
 | 0x45 | STATUS | `bpm10 (14 bit), bar (14 bit), beat (0..15), flags` |
 | 0x46 | TOAST | `text(str), duration (100 ms units)` |
+| 0x47 | LIST | `title(str) r g b total first sel n` then `n x item(str)` - protocol 1.1 |
 
 * PAGE colour: r, g, b each 0..127; the device draws them x2. `kind`: 0 empty, 1 unipolar, 2 bipolar, 3 enum, 4 toggle.
   `value14` by kind: unipolar 0..16383 from the left; bipolar 8192 = centre; **enum: `(segment_count << 7) | index`**
@@ -76,6 +78,30 @@ while a key is held leaves no stuck note.
   Entry 41, the padding in the last byte, is ignored.
 * STATUS flags: bit 0 playing, bit 1 recording, bit 2 overdub. `beat` is 0-based; the device shows `bar.(beat+1)`.
 * TOAST duration 0 means 1.5 s.
+
+## Protocol 1.1: LIST
+
+Version 1.1 is backwards compatible: `proto_ver` stays 1; the minor is one optional trailing byte of HELLO (what the
+firmware speaks) and of HELLO_ACK (what the host speaks). A firmware only needs it to tell hosts apart (a host that
+sent no minor is 1.0 and must not be sent a LIST); a 1.0 host that sees the extra HELLO byte ignores it if it reads
+by the layout, and the 1.0 frames of the host are still parsed here (`tests/r4p_test.c`, "t_v11").
+
+LIST shows a scrollable single-choice list on the whole screen (used for the HOME double-tap mode list: Tape, Poly,
+Disc, Perform, TOLF; later kit and preset browsing). `title` is drawn in the header in the colour `r g b` (0..127, x2).
+`total` is the number of items (0..127; **0 closes the list**), `sel` the selected index, and the frame carries the
+window: the items `first .. first+n-1` (`n` at most 7, the rows the screen has). A frame is refused when `n > 7`,
+`first + n > total` or `sel >= total` (total > 0); the longest is 405 bytes.
+
+While a list is open the firmware keeps the buttons and encoders local (nothing is sent as BTN / ENC):
+
+* SELECT or PRESETS turn: moves the selection (clamped, no wrap) and draws it at once. If the new index lies outside
+  the window the host sent, the firmware sends `LIST_PICK index, MOVE` and expects a LIST frame for that window (until
+  it arrives the selection is shown only when it is in the window).
+* HOME or PLAY: `LIST_PICK sel, OK`, the list closes on the device.
+* SAVE, ENV, LFO, FX, EDIT, GLO, ARP or SEQ: `LIST_PICK sel, CANCEL`, the list closes.
+* The host may send a LIST with total 0 at any time to close it. A new HELLO_ACK or a cable replug closes it.
+* Keys, MASTER and the SETUP page (SEL + GLO) keep working; the LIST_PICK frames go through the same ordered queue as
+  BTN frames.
 
 ## Connection
 
