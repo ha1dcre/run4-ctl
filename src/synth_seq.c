@@ -361,7 +361,7 @@ static uint32_t sq_spt_internal(void)        /* samples per tick, Q8, at the tem
 {
     uint32_t b = sq_bpm10();
     b = b < 400u ? 400u : b > 2400u ? 2400u : b;
-    return (uint32_t)(44100ull * 600ull * 256ull / ((uint64_t)b * SQ_PPQN));
+    return r4_udiv64_32(44100ull * 600ull * 256ull, b * SQ_PPQN);
 }
 static int sq_ext(void)                      /* a MIDI clock is coming in and the sequencer follows it */
 {
@@ -721,9 +721,14 @@ static void sq_ed_step_up(void)
     sq_ed.held = -1;
     sq_ed.more = 0;
 }
+static uint64_t sq_bit64(uint32_t i)         /* 1 << i (i < 64) by 32-bit shifts: no 64-bit shift by a variable, which
+                                              * the compiler may hand to its runtime (none on the FM-1) */
+{
+    return i < 32u ? (uint64_t)(1u << i) : (uint64_t)(1u << (i - 32u)) << 32;
+}
 static int sq_ed_is_held(uint32_t i)         /* step i is the held one or one of the steps held with it */
 {
-    return sq_ed.held >= 0 && (i == (uint32_t)sq_ed.held || ((sq_ed.more >> (i % SQ_STEPS)) & 1u));
+    return sq_ed.held >= 0 && (i == (uint32_t)sq_ed.held || (sq_ed.more & sq_bit64(i % SQ_STEPS)) != 0u);
 }
 static uint32_t sq_ed_held_n(void)
 {

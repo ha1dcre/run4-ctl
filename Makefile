@@ -10,7 +10,7 @@ unit: $(B)/r4p_test
 synth: $(B)/synth_test
 	$(B)/synth_test
 
-$(B)/synth_test: tests/synth_test.c tests/reverb_ab.c tests/reverb_ref.c src/synth.c src/synth_ui.c src/synth/fm6_core.c src/plate.c src/plate.h
+$(B)/synth_test: tests/synth_test.c tests/reverb_ab.c tests/reverb_ref.c src/synth.c src/synth_ui.c src/synth/fm6_core.c src/plate.c src/plate.h src/r4_div.h src/r4_libc.h
 	@mkdir -p $(B)
 	cc -std=gnu11 -O2 -g -ffp-contract=off -DR4_NATIVE -Ibase/include -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -o $@ tests/synth_test.c -lm
 

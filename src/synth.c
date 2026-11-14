@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "r4_libc.h"                     /* the C library: the system's on the host, its own on the device */
+#include "r4_div.h"                      /* 64-bit divides without the compiler's runtime (none on the FM-1) */
 #include "synth/fm6_tables.h"
 #include "synth/fm6_core.c"
 #include "synth/fm6_factory.h"
@@ -402,8 +403,8 @@ static void syn_morph(uint32_t n)
     } else {
         uint32_t per = MO_SECS[syn.mo_mode - MO_DRIFT] * 44100u;
         if (syn_mo.was_mode < MO_DRIFT || syn_mo.rephase)       /* a drift starts (or the knob moved): from there, to B */
-            syn_mo.ph = (uint32_t)((uint64_t)(syn.mo_pos > 100u ? 100u : syn.mo_pos) * 0x7FFFFFFFu / 100u);
-        syn_mo.ph += (uint32_t)(((uint64_t)n << 32) / per);
+            syn_mo.ph = r4_udiv64_32((uint64_t)(syn.mo_pos > 100u ? 100u : syn.mo_pos) * 0x7FFFFFFFu, 100u);
+        syn_mo.ph += r4_udiv64_32((uint64_t)n << 32, per);      /* (n, a block, is far below per: 10 s at least) */
         tgt = (int32_t)((syn_mo.ph < 0x80000000u ? syn_mo.ph : ~syn_mo.ph) >> 15);
     }
     syn_mo.rephase = 0;
@@ -589,7 +590,7 @@ static struct {
 static uint32_t syn_step_samples(uint32_t rate)    /* samples per step: rate 0 = 1/8, 1 = 1/16, 2 = 1/16 triplet */
 {
     uint32_t bpm10 = syn_bpm10_now();
-    uint32_t beat = (uint32_t)(44100ull * 600ull / bpm10);     /* samples per quarter note */
+    uint32_t beat = 44100u * 600u / bpm10;                     /* samples per quarter note (26460000: 32 bits) */
     return rate == 0u ? beat / 2u : rate == 1u ? beat / 4u : beat / 6u;
 }
 static void syn_arp_clear(void) { syn_sq.n_held = 0; }
@@ -773,7 +774,8 @@ static int32_t fx_drive(int32_t x)           /* a cubic soft clip; the amount is
     v = (int64_t)x * (256 + fxv.drive * 1792 / 100) >> 8;
     v = v > (1 << 23) ? (1 << 23) : v < -(1 << 23) ? -(1 << 23) : v;
     c = (v * v >> 23) * v >> 23;
-    return (int32_t)((v - c / 3) * 3 / 2);       /* the rails land at 1.0 again */
+    /* the rails land at 1.0 again; |v|, |c| <= 2^23, so in 32 bits (the FM-1 has no 64-bit divide) */
+    return ((int32_t)v - (int32_t)c / 3) * 3 / 2;
 }
 /* one frame: mono in -> stereo out (Q23-ish); the chorus and the delay are mixed here, the reverb a sub-block at a time
  * after (syn_render); *dry: the voices after the drive (the stems' dry part: out - dry is what the chorus, the delay and
@@ -795,8 +797,8 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
         a = fx_cho[(fx_st.cw - (uint32_t)t1) % CHO_N] << 8;
         b = fx_cho[(fx_st.cw - (uint32_t)t2) % CHO_N] << 8;
         fx_st.cw++;
-        l = x + (int32_t)((int64_t)(a - x) * fxv.chorus / 200);
-        r = x + (int32_t)((int64_t)(b - x) * fxv.chorus / 200);
+        l = x + r4_muldiv_s32(a - x, fxv.chorus, 200);
+        r = x + r4_muldiv_s32(b - x, fxv.chorus, 200);
     }
     if (fxv.dly_mix) {                         /* a ping-pong: L feeds R, R feeds L */
         uint32_t div16 = DLY_DIV16[(uint32_t)fxv.dly_div % 6u], tn = syn_step_samples(1) * div16 / 1u;
@@ -806,8 +808,8 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
         fx_dly[0][fx_st.dw % DLY_N] = (int16_t)((l + (int32_t)((int64_t)dr * fb >> 10)) >> 8);
         fx_dly[1][fx_st.dw % DLY_N] = (int16_t)((r + (int32_t)((int64_t)dl * fb >> 10)) >> 8);
         fx_st.dw++;
-        l += (int32_t)((int64_t)dl * fxv.dly_mix / 100);
-        r += (int32_t)((int64_t)dr * fxv.dly_mix / 100);
+        l += r4_muldiv_s32(dl, fxv.dly_mix, 100);
+        r += r4_muldiv_s32(dr, fxv.dly_mix, 100);
     }
     *outl = l;
     *outr = r;
@@ -831,13 +833,12 @@ static void syn_shed_step(void)
 static int32_t syn_limit(int32_t x)          /* a soft ceiling: linear to 0.7, then a smooth knee to 1.0 (2^23) */
 {
     int64_t a = x < 0 ? -(int64_t)x : x, k = 5872025;               /* 0.7 */
-    uint64_t r;
+    uint32_t r;
     if (a <= k)
         return x;
-    r = (uint64_t)(a - k);                   /* 0 .. : the part over the knee, squeezed asymptotically to 0.3 */
-    r = r * 2516582u / (r + 2516582u);       /* 0.3 * r / (r + 0.3); unsigned (r >= 0: the same quotient): the FM-1
-                                              * has no signed 64-bit divide (__divdi3) */
-    a = k + (int64_t)r;
+    r = (uint32_t)(a - k);                   /* 0 .. 2^31: the part over the knee, squeezed asymptotically to 0.3 */
+    r = r4_udiv64_32((uint64_t)r * 2516582u, r + 2516582u);         /* 0.3 * r / (r + 0.3) */
+    a = k + r;
     return (int32_t)(x < 0 ? -a : a);
 }
 static void syn_apply_event(const syn_ev_t *e)
@@ -946,7 +947,7 @@ static uint32_t syn_midi_frame(uint32_t t24, uint32_t prev, uint32_t span, uint3
         return 0;
     if ((uint32_t)since >= span)
         return n - 1u;
-    return (uint32_t)((uint64_t)(uint32_t)since * n / span);
+    return r4_udiv64_32((uint64_t)(uint32_t)since * n, span);     /* (below n: since < span) */
 }
 /* USB stems (an app built with usb_audio_channels: app-stems/): each sub-block's dry voices (mono) and what the
  * effects add (stereo), at the master's gain, before the limiter; frame: its first frame in the render; 0 = none */

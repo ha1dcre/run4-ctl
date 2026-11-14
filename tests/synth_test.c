@@ -882,6 +882,34 @@ int main(int argc, char **argv)
     uint32_t t0, i;
     struct timespec c0, c1;
     syn_init();
+    /* the device's divides (src/r4_div.h: no 64-bit divide on the FM-1) against the host's 64-bit ones */
+    {
+        uint64_t x = 88172645463325252ull, n;
+        uint32_t bad = 0, bad2 = 0, k, c;
+        for (k = 0; k < 2000000u; k++) {
+            uint32_t d;
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            d = (uint32_t)(x >> 32) >> (k % 33u == 32u ? 0u : k % 33u);
+            d = d ? d : 1u;
+            n = k & 1u ? (uint64_t)d * (uint32_t)x + (k & 2u ? d - 1u : 0u) : x >> (k % 64u);
+            if (n / d <= 0xFFFFFFFFu ? r4_udiv64_32(n, d) != n / d : r4_udiv64_32(n, d) != 0xFFFFFFFFu)
+                bad++;
+            c = (uint32_t)x % 256u;
+            if (r4_muldiv_s32((int32_t)(x >> 7), c, k & 4u ? 200 : 100) != (int32_t)((int64_t)(int32_t)(x >> 7) * c / (k & 4u ? 200 : 100)))
+                bad2++;
+        }
+        for (c = 0; c < 256u; c++) {
+            static const int32_t E[] = {INT32_MIN, INT32_MAX, -1, 0, 1, -199, 199, -200, 200, -201, 8388608, -8388608};
+            for (k = 0; k < sizeof E / sizeof E[0]; k++)
+                if (r4_muldiv_s32(E[k], c, 200) != (int32_t)((int64_t)E[k] * c / 200) ||
+                    r4_muldiv_s32(E[k], c, 100) != (int32_t)((int64_t)E[k] * c / 100))
+                    bad2++;
+        }
+        CHECK(bad == 0);
+        CHECK(bad2 == 0);
+        CHECK(r4_udiv64_32(0xFFFFFFFEull << 32 | 0xFFFFFFFFu, 0xFFFFFFFFu) == 0xFFFFFFFFu);
+        CHECK(r4_udiv64_32(1ull << 32, 1u) == 0xFFFFFFFFu && r4_udiv64_32(5, 0) == 0xFFFFFFFFu);
+    }
     /* patch formats: pack / unpack is lossless on every factory voice, names are readable */
     for (i = 0; i < SYN_NFACTORY; i++) {
         uint8_t v[FP_SIZE + 1], p[128];

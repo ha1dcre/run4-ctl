@@ -1103,7 +1103,7 @@ static void synth_keys(uint32_t keys)
             if (shift && synth_grid() && sq_ed.held >= 0 && key_white(k) >= 0) {   /* SEL + another step: held with it */
                 uint32_t i = sq_ed.view * SQ_PAGE + (uint32_t)key_white(k);
                 if (i < sq_ed_pat()->len && i != (uint32_t)sq_ed.held) {
-                    sq_ed.more |= 1ull << i;
+                    sq_ed.more |= sq_bit64(i);
                     ctl.more_key[k] = (uint8_t)i;
                 }
                 sp_build();
@@ -1173,7 +1173,7 @@ static void synth_keys(uint32_t keys)
                 sui.edit_at = plat_ms();
                 sp_build();
             } else if (ctl.more_key[k] != 255) {                /* a step held with it let go */
-                sq_ed.more &= ~(1ull << ctl.more_key[k]);
+                sq_ed.more &= ~sq_bit64(ctl.more_key[k]);
                 ctl.more_key[k] = 255;
                 sp_build();
             }
@@ -1971,7 +1971,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         dt = plat_ticks24() - t0;
         ctl.rend_ticks += dt;
         ctl.rend_frames += n;
-        syn_shed_calm(n, (uint32_t)((uint64_t)dt * 44100u / PLAT_TICKS_PER_US / 1000u / n));
+        syn_shed_calm(n, r4_udiv64_32((uint64_t)dt * 44100u, PLAT_TICKS_PER_US * 1000u * n));
         syn_timed_due(0, 0xFFFFu);
         return;
     }
@@ -1985,7 +1985,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         ctl.rend_ticks += dt;
         ctl.rend_frames += n;
         /* the overload guard: this block's share of its time (n frames at 44.1 kHz), per mille */
-        syn_shed_calm(n, (uint32_t)((uint64_t)dt * 44100u / PLAT_TICKS_PER_US / 1000u / n));
+        syn_shed_calm(n, r4_udiv64_32((uint64_t)dt * 44100u, PLAT_TICKS_PER_US * 1000u * n));
         return;
     }
     syn_shed_calm(n, 0);
