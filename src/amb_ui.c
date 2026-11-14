@@ -7,6 +7,7 @@
 #include "amb/amb.h"
 
 enum { AV_GARDEN, AV_PAD, AV_BELLS, AV_BASS, AV_PULSE, AV_SPACE, AV_KEY, AV_N };
+static volatile uint8_t am_clk_run;                  /* a MIDI clock's START / CONTINUE came, no STOP since (app.c midi_pump) */
 static const char *const AV_NAME[AV_N] = {"GARDEN", "PAD", "BELLS", "BASS", "PULSE", "SPACE", "KEY"};
 static const uint8_t AV_BTN[AV_N] = {B_HOME, B_ENV, B_ARP, B_LFO, B_SEQ, B_FX, B_GLO};
 #define AK_SCALE 100                         /* the KEY page's fourth knob: the scale (ALGORITHM does the same) */
@@ -352,6 +353,17 @@ static void am_note_in(uint8_t note)          /* audio context */
         am_nqh = h;
     }
 }
+static void am_reset_piece(void)             /* the piece back to its recipe (SAVE held; protocol 1.4 RESET PIECE) */
+{
+    char t[32] = "RECIPE: ";
+    am_recipe(am.piece, AM_CUR);
+    am_apply();
+    en_regrow();
+    am_touch();
+    am_upper(t + strlen(t), en_piece_name(am.piece), 20);
+    sp_toast(t);
+    am_build();
+}
 static int enc_get(int k);
 static void am_frame(uint32_t keys, uint32_t btn, uint32_t now)
 {
@@ -387,15 +399,8 @@ static void am_frame(uint32_t keys, uint32_t btn, uint32_t now)
         }
     }
     if ((btn >> B_SAVE & 1u) && !amr.reset_done && now - amr.save_at >= AM_RESET_MS) {
-        char t[32] = "RECIPE: ";
         amr.reset_done = 1;                  /* held: the piece back to its recipe (not saved until the next save) */
-        am_recipe(am.piece, AM_CUR);
-        am_apply();
-        en_regrow();
-        am_touch();
-        am_upper(t + strlen(t), en_piece_name(am.piece), 20);
-        sp_toast(t);
-        am_build();
+        am_reset_piece();
         ctl_card_off();
     }
     if (amr.grow_at && (int32_t)(now - amr.grow_at) >= 0) {
@@ -467,6 +472,18 @@ static void am_draw_head(void)
  * the chord's name inside); the four bell loops (13, 17, 23, 29 beats) as rows of beats, a note a block, the playhead
  * in the accent; the three pulse rings (16, 12, 7) under them; the layers' levels (pad, bells, bass, pulse); the way to
  * the next chord as a line at the foot */
+static void am_chord_name(char *nm)          /* the chord playing, its root first ("Em7"); nm: 16 bytes */
+{
+    int pcs[4], n = 0, j;
+    uint32_t i;
+    pcs[n++] = en_chord_root % 12;
+    for (i = 0; i < EN_NPAD; i++) {
+        int pc = en_chord[i] % 12, dup = 0;
+        for (j = 0; j < n; j++) dup |= pcs[j] == pc;
+        if (!dup && n < 4) pcs[n++] = pc;
+    }
+    en_chord_name(pcs, n, nm);
+}
 static const int8_t AM_RING[12][2] = {{0, -32}, {16, -28}, {28, -16}, {32, 0}, {28, 16}, {16, 28}, {0, 32}, {-16, 28},
                                       {-28, 16}, {-32, 0}, {-28, -16}, {-16, -28}};
 static uint32_t am_band_sig(void)
@@ -514,14 +531,7 @@ static void am_draw_band(int full)
         else cv_rect(x - 1, y - 1, 2, 2, R4_EDGE);
     }
     {   /* the chord's name, its root first */
-        int pcs[4], n = 0, j;
-        pcs[n++] = en_chord_root % 12;
-        for (i = 0; i < EN_NPAD; i++) {
-            int pc = en_chord[i] % 12, dup = 0;
-            for (j = 0; j < n; j++) dup |= pcs[j] == pc;
-            if (!dup && n < 4) pcs[n++] = pc;
-        }
-        en_chord_name(pcs, n, nm);
+        am_chord_name(nm);
         ptext(cx - pwidth(&FONT_B, nm) / 2, cy - 14, &FONT_B, nm, R4_TEXT);
         k = amr.grow_at ? 4u : en_frozen ? 2u : en_ext ? 3u : en_playing ? 1u : 0u;
         ptext(cx - pwidth(&FONT_T, STATE[k]) / 2, cy + 6, &FONT_T, STATE[k], k == 1u ? R4_LABEL : sy_accent(100));

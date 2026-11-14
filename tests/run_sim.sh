@@ -47,6 +47,15 @@ for s in tests/scenarios_noamb/*.txt tests/scenarios_cross/*.txt; do
   if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
 done
 python3 -I tests/check_btn_order.py build/sim/05_stalled_host.log | tee -a build/sim/05_stalled_host.log || fail=1
+# protocol 1.4: the descriptions the scenarios logged, decoded and checked by the independent host side
+for d in "lm_amb amb 31_modes" "lm_synth synth 31_modes" "lm_noamb_synth synth noamb_02_noamb_modes"; do
+  set -- $d
+  if python3 -I tools/fake_run4.py desc build/sim/$1.bin $2 > build/sim/$1.desc 2>&1; then
+    tail -1 build/sim/$1.desc | sed 's/^/  ok /' | tee -a build/sim/$3.log
+  else
+    cat build/sim/$1.desc; echo "FAIL desc $1" | tee -a build/sim/$3.log; fail=1
+  fi
+done
 for p in build/sim/*.png; do python3 -I tools/pngpack.py "$p" tests/screens/$(basename "$p"); done
 mkdir -p tests/audio
 for w in build/sim/*.wav; do [ -f "$w" ] && case "$w" in *synth_demo.wav) cp "$w" tests/audio/;; esac; done

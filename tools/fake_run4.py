@@ -6,6 +6,9 @@ It does NOT share code with src/r4p.c, so the host simulator tests also cross-ch
   fake_run4.py hex [DEMO]        print every frame of a demo (tape | tolf | all) as hex, with a label
   fake_run4.py sim SCENARIO      print a host-simulator script (tests/scenarios/*.txt with @NAME@ lines expanded)
   fake_run4.py expect KIND ...   print the hex of one device->host frame: btn ID 0|1, enc ID DELTA, pot V, hello, sync
+  fake_run4.py desc LOG [amb|synth]  protocol 1.4: read a device's raw SysEx (a simulator "sysex_log"), check every
+                                 description in it (frames, labels, counts, the hash) and print it; amb / synth: also
+                                 check it against the parameters docs/PROTOCOL.md lists for that mode
 """
 import sys
 
@@ -14,7 +17,10 @@ CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05, LIST_PICK=0x
            HV_STATE=0x07, VOICE_NAMES=0x08, VOICE_DATA=0x09, BK_PART=0x0A, BK_END=0x0B, BK_GET=0x0C,     # 1.3
            HELLO_ACK=0x41, PAGE=0x42, VALUE=0x43, LEDS=0x44, STATUS=0x45, TOAST=0x46, LIST=0x47, FOCUS=0x48,
            HV_ON=0x49, HV_VOICE=0x4A, HV_PARAM=0x4B, NAMES_REQ=0x4C, VOICE_GET=0x4D,                     # 1.3
-           TAPE_WAVE=0x4E, TAPE_POS=0x4F, METERS=0x50, BK_ACK=0x51, BK_INFO=0x52, BK_DATA=0x53)
+           TAPE_WAVE=0x4E, TAPE_POS=0x4F, METERS=0x50, BK_ACK=0x51, BK_INFO=0x52, BK_DATA=0x53,
+           MODES=0x0D, MODE=0x0E, DESC_HEAD=0x0F, DESC_PAGE=0x10, DESC_PARAM=0x11, DESC_LABELS=0x12,      # 1.4
+           DESC_END=0x13, PVAL=0x14, LSTATE=0x15, LM_ERR=0x16,
+           MODES_REQ=0x54, MODE_SET=0x55, DESC_REQ=0x56, VALS_REQ=0x57, PSET=0x58)
 NONE = 127                             # protocol 1.2: no cursor
 KIND = dict(empty=0, uni=1, bi=2, enum=3, toggle=4)
 LED = dict(off=0, dim=1, on=2, blink=3)
@@ -356,6 +362,297 @@ def v13_table():
     return t
 
 
+# ------------------------------------------------------------------ protocol 1.4 ---
+MID = dict(RUN4=0, SYNTH=1, AMB=2)
+MF_AVAIL, MF_DESC, MF_CTRL = 1, 2, 4
+LK = ["number", "enum", "toggle", "action", "mask"]
+LE = dict(NOMODE=1, WRONGMODE=2, NODESC=3, UNKNOWN=4, RANGE=5, READONLY=6, REFUSED=7, CLOCK=8, BUSY=9)
+
+
+def s14(v):
+    """a signed value on the wire: v + 8192 as two 7-bit bytes"""
+    assert -8192 <= v <= 8191
+    return v14(v + 8192)
+
+
+def crc5_(c):
+    return [(c >> (7 * i)) & 0x7F for i in range(5)]
+
+
+def pset(mode, pairs):
+    """PSET: [(id, value), ...] (1..16) for the mode playing"""
+    assert 1 <= len(pairs) <= 16
+    p = [mode]
+    for i, v in pairs:
+        p += v14(i) + s14(v)
+    return frame("PSET", p)
+
+
+def mode_frame(mode, flags, h):
+    return frame("MODE", [mode, flags] + crc5_(h))
+
+
+def modes_frame(cur, entries):
+    p = [cur, len(entries)]
+    for i, fl, nm in entries:
+        p += [i, fl] + string(nm)
+    return frame("MODES", p)
+
+
+def pval(mode, entries):
+    p = [mode, len(entries)]
+    for i, v, t in entries:
+        p += v14(i) + s14(v) + string(t)
+    return frame("PVAL", p)
+
+
+def lm_err(mode, code, pid=0):
+    return frame("LM_ERR", [mode, LE[code]] + v14(pid))
+
+
+def fnv(h, data):
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+class R:
+    def __init__(self, b):
+        self.b, self.i = list(b), 0
+
+    def u8(self):
+        if self.i >= len(self.b):
+            raise ValueError("truncated")
+        self.i += 1
+        return self.b[self.i - 1]
+
+    def v14(self):
+        return self.u8() << 7 | self.u8()
+
+    def s14(self):
+        return self.v14() - 8192
+
+    def h5(self):
+        return sum(self.u8() << (7 * i) for i in range(5))
+
+    def string(self, mx):
+        n = self.u8()
+        if n > mx:
+            raise ValueError("string longer than %d" % mx)
+        out = ""
+        for _ in range(n):
+            c = self.u8()
+            out += chr(0x80 + self.u8()) if c == 0x7F else chr(c)
+        return out
+
+    def done(self):
+        if self.i != len(self.b):
+            raise ValueError("trailing bytes")
+
+
+def decode14(f):
+    """a device -> host 1.4 frame (F0 .. F7) as a dict, or None for another command; raises ValueError"""
+    if len(f) < 6 or f[:4] != HDR or f[-1] != 0xF7 or not 0x0D <= f[4] <= 0x16:
+        return None
+    c, r = f[4], R(f[5:-1])
+    if c == 0x0D:
+        d = dict(cmd="MODES", cur=r.u8(), modes=[])
+        for _ in range(r.u8()):
+            d["modes"].append((r.u8(), r.u8(), r.string(12)))
+    elif c == 0x0E:
+        d = dict(cmd="MODE", mode=r.u8(), flags=r.u8(), hash=r.h5())
+    elif c == 0x0F:
+        d = dict(cmd="DESC_HEAD", mode=r.u8(), hash=r.h5(), npages=r.u8(), nparams=r.v14(), nstate=r.u8())
+        d["title"] = r.string(16)
+        d["state"] = [r.string(16) for _ in range(d["nstate"])]
+    elif c == 0x10:
+        d = dict(cmd="DESC_PAGE", page=r.u8(), title=r.string(16))
+    elif c == 0x11:
+        d = dict(cmd="DESC_PARAM", id=r.v14(), page=r.u8(), kind=LK[r.u8()], flags=r.u8(), step=r.u8(), lo=r.s14(),
+                 hi=r.s14(), default=r.s14(), nlabels=r.u8(), name=r.string(16), unit=r.string(8))
+        d.update(value=r.s14(), text=r.string(16))
+        assert d["lo"] <= d["default"] <= d["hi"] and d["lo"] <= d["value"] <= d["hi"], d
+    elif c == 0x12:
+        d = dict(cmd="DESC_LABELS", id=r.v14(), first=r.u8(), total=r.u8())
+        d["labels"] = [r.string(16) for _ in range(r.u8())]
+    elif c == 0x13:
+        d = dict(cmd="DESC_END", mode=r.u8(), hash=r.h5())
+    elif c == 0x14:
+        d = dict(cmd="PVAL", mode=r.u8(), values=[])
+        for _ in range(r.u8()):
+            d["values"].append((r.v14(), r.s14(), r.string(16)))
+    elif c == 0x15:
+        d = dict(cmd="LSTATE", mode=r.u8(), flags=r.u8())
+        d["texts"] = [r.string(16) for _ in range(r.u8())]
+    else:
+        d = dict(cmd="LM_ERR", mode=r.u8(), code=r.u8(), id=r.v14())
+    r.done()
+    assert len(f) <= 136, "a device frame longer than 136 bytes"
+    return d
+
+
+def desc_hash_part(f):
+    """the bytes of a description frame its hash covers (docs/PROTOCOL.md "The hash")"""
+    if f[4] == 0x0F:
+        return f[4:6] + f[11:-1]
+    if f[4] in (0x10, 0x12):
+        return f[4:-1]
+    if f[4] == 0x11:
+        r = R(f[5:-1])
+        for _ in range(13):
+            r.u8()
+        r.string(16)
+        r.string(8)
+        return f[4:5 + r.i]
+    return []
+
+
+class Desc:
+    """a description as a host collects it: DESC_HEAD .. DESC_END, checked (counts, labels, hash)"""
+
+    def __init__(self):
+        self.head, self.pages, self.params, self.h, self.done = None, {}, [], 0x811C9DC5, False
+
+    def feed(self, f, d):
+        c = d["cmd"]
+        if c == "DESC_HEAD":
+            self.__init__()
+            self.head = d
+        elif self.head is None:
+            return
+        if c in ("DESC_HEAD", "DESC_PAGE", "DESC_PARAM", "DESC_LABELS"):
+            self.h = fnv(self.h, desc_hash_part(f))
+        if c == "DESC_PAGE":
+            assert d["page"] == len(self.pages), "pages in order"
+            self.pages[d["page"]] = d["title"]
+        elif c == "DESC_PARAM":
+            d["labels"] = []
+            self.params.append(d)
+        elif c == "DESC_LABELS":
+            p = self.params[-1]
+            assert d["id"] == p["id"] and d["total"] == p["nlabels"] and d["first"] == len(p["labels"]), "labels in order"
+            p["labels"] += d["labels"]
+        elif c == "DESC_END":
+            h = self.h or 1
+            assert d["mode"] == self.head["mode"], "END's mode"
+            assert len(self.pages) == self.head["npages"] and len(self.params) == self.head["nparams"], "counts"
+            for p in self.params:
+                assert len(p["labels"]) == p["nlabels"], ("labels of", p["name"])
+                assert p["page"] < self.head["npages"], ("page of", p["name"])
+            assert len(set(p["id"] for p in self.params)) == len(self.params), "ids unique"
+            assert h == self.head["hash"] == d["hash"], "hash %08X head %08X end %08X" % (h, self.head["hash"], d["hash"])
+            self.done = True
+
+
+def split_frames(raw):
+    out, cur = [], None
+    for b in raw:
+        if b == 0xF0:
+            cur = [b]
+        elif cur is not None:
+            cur.append(b)
+            if b == 0xF7:
+                out.append(cur)
+                cur = None
+    return out
+
+
+# what docs/PROTOCOL.md promises for each mode: (id, page, kind, name)
+AMB_PARAMS = [(32, 0, "enum", "PIECE"), (33, 0, "mask", "NOTES"), (34, 0, "toggle", "GROW"), (35, 0, "toggle", "FREEZE"),
+              (36, 0, "action", "NEXT CHORD"), (37, 0, "action", "SAVE"), (38, 0, "action", "RESET PIECE"),
+              (18, 1, "number", "TEMPO"), (5, 1, "number", "EVOLVE"), (15, 1, "number", "MOTION"), (6, 1, "number", "DRIFT"),
+              (0, 2, "number", "LEVEL"), (13, 2, "number", "SWELL"), (12, 2, "number", "BRIGHT"), (22, 2, "enum", "COLOUR"),
+              (1, 3, "number", "LEVEL"), (4, 3, "number", "DENSITY"), (14, 3, "number", "TONE"), (21, 3, "number", "OCTAVE"),
+              (2, 4, "number", "LEVEL"), (23, 4, "number", "OCTAVE"), (24, 4, "number", "GLIDE"), (25, 4, "number", "FIFTH"),
+              (3, 5, "number", "LEVEL"), (7, 5, "number", "HITS"), (26, 5, "number", "SWING"), (27, 5, "number", "HATS"),
+              (8, 6, "number", "ECHO"), (9, 6, "enum", "ECHO TIME"), (10, 6, "number", "REVERB"), (11, 6, "number", "SIZE"),
+              (19, 7, "enum", "ROOT"), (16, 7, "number", "TUNE"), (17, 7, "enum", "MIDI OUT"), (20, 7, "enum", "SCALE")]
+AMB_PAGES = ["PLAY", "GARDEN", "PAD", "BELLS", "BASS", "PULSE", "SPACE", "KEY"]
+SYNTH_PAGES = ["VOICE", "SYNTH", "MORPH", "OP1", "OP2", "OP3", "OP4", "OP5", "OP6", "LFO", "EFFECTS", "GLOBAL", "ARP", "SEQ"]
+
+
+def desc_check(path, which=None):
+    raw = open(path, "rb").read()
+    descs, modes, n14 = [], [], 0
+    cur = Desc()
+    for f in split_frames(raw):
+        d = decode14(f)
+        if d is None:
+            continue
+        n14 += 1
+        if d["cmd"] == "MODE":
+            modes.append(d)
+        cur.feed(f, d)
+        if cur.done:
+            descs.append(cur)
+            cur = Desc()
+    assert descs, "no complete description in %s" % path
+    for ds in descs:
+        h = ds.head
+        mf = [m for m in modes if m["mode"] == h["mode"]]
+        assert mf and all(m["hash"] == h["hash"] and m["flags"] & MF_DESC for m in mf), "MODE's hash is the description's"
+        print("description: mode %d %r, %d pages, %d parameters, state %s, hash %08X (MODE agrees)" %
+              (h["mode"], h["title"], h["npages"], h["nparams"], "/".join(h["state"]), h["hash"]))
+        for p in ds.params:
+            lab = (" [%s]" % " ".join(p["labels"])) if p["labels"] else ""
+            print("  %4d  %-8s %-6s %-12s %d..%d step %d def %d flags %d unit %r = %d %r%s" %
+                  (p["id"], ds.pages[p["page"]], p["kind"], p["name"], p["lo"], p["hi"], p["step"], p["default"],
+                   p["flags"], p["unit"], p["value"], p["text"], lab))
+    if which == "amb":
+        ds = [d for d in descs if d.head["mode"] == 2][-1]
+        got = [(p["id"], p["page"], p["kind"], p["name"]) for p in ds.params]
+        assert got == AMB_PARAMS, "AMB's parameters differ from docs/PROTOCOL.md:\n%r" % got
+        assert [ds.pages[i] for i in range(len(ds.pages))] == AMB_PAGES
+        assert ds.head["state"] == ["PIECE", "CHORD", "SCALE", "STATE"]
+    if which == "synth":
+        ds = [d for d in descs if d.head["mode"] == 1][-1]
+        assert [ds.pages[i] for i in range(len(ds.pages))] == SYNTH_PAGES
+        assert len(ds.params) == 143 and ds.params[0]["name"] == "VOICE"
+        ids = [p["id"] for p in ds.params]
+        assert ids[:3] == [150, 151, 152] and ids[3:11] == list(range(8)) and ids[11:107] == list(range(16, 112))
+    print("desc %s: %d 1.4 frames, %d description(s) checked" % (path, n14, len(descs)))
+    return 0
+
+
+def v14_table():
+    """the 1.4 frames the scenarios use"""
+    t = {"ACK14": frame("HELLO_ACK", [1, 4]), "MODES_REQ": frame("MODES_REQ")}
+    for nm, i in list(MID.items()) + [("NINE", 9)]:
+        t["MODE_SET_" + nm] = frame("MODE_SET", [i])
+        t["DESC_REQ_" + nm] = frame("DESC_REQ", [i])
+        t["VALS_REQ_" + nm] = frame("VALS_REQ", [i])
+    av = lambda amb: [(0, MF_AVAIL | MF_CTRL, "RUN4"), (1, MF_AVAIL | MF_DESC, "SYNTH"),     # noqa: E731
+                      (2, (MF_AVAIL | MF_DESC) if amb else 0, "AMB")]
+    for cur in range(3):
+        t["MODES_%d" % cur] = modes_frame(cur, av(True))
+        t["MODES_NOAMB_%d" % cur] = modes_frame(cur, av(False))
+    t["MODE_RUN4"] = mode_frame(0, MF_AVAIL | MF_CTRL, 0)
+    t.update({
+        "ERR_NODESC_RUN4": lm_err(0, "NODESC"), "ERR_NOMODE_RUN4": lm_err(0, "NOMODE"), "ERR_NOMODE_SYNTH": lm_err(1, "NOMODE"),
+        "ERR_WRONG_AMB": lm_err(2, "WRONGMODE"),
+        # AMB (mode 2): PAD LEVEL (id 0), FREEZE (35), NEXT CHORD (36), NOTES (33), GROW (34), PIECE (32), SCALE (20)
+        "PSET_PAD70": pset(2, [(0, 70)]), "PVAL_PAD70": pval(2, [(0, 70, "70")]), "PVAL_PAD73": pval(2, [(0, 73, "73")]),
+        "PSET_FREEZE1": pset(2, [(35, 1)]), "PVAL_FREEZE1": pval(2, [(35, 1, "ON")]),
+        "PSET_FREEZE0": pset(2, [(35, 0)]), "PVAL_FREEZE0": pval(2, [(35, 0, "OFF")]),
+        "PSET_NEXT": pset(2, [(36, 1)]), "PSET_NEXT0": pset(2, [(36, 0)]),
+        "PSET_TWO": pset(2, [(10, 30), (11, 40)]), "PVAL_TWO": pval(2, [(10, 30, "30"), (11, 40, "40")]),
+        "PSET_UNKNOWN": pset(2, [(10, 50), (99, 1)]), "PSET_RANGE": pset(2, [(0, 101)]),
+        "PSET_NOROOT": pset(2, [(33, 0xAB5 & ~(1 << 2))]),            # D taken out of D dorian: the root stays
+        "PSET_NOTES": pset(2, [(33, 0xAB5 & ~(1 << 5))]),             # F taken out
+        "PVAL_NOTES": pval(2, [(33, 0xAB5 & ~(1 << 5), "6 NOTES"), (20, 8, "CUSTOM")]),
+        "PSET_GROW0": pset(2, [(34, 0)]), "PSET_GROW1": pset(2, [(34, 1)]),
+        "ERR_UNKNOWN_99": lm_err(2, "UNKNOWN", 99), "ERR_RANGE_0": lm_err(2, "RANGE", 0), "ERR_RANGE_36": lm_err(2, "RANGE", 36),
+        "ERR_REFUSED_33": lm_err(2, "REFUSED", 33), "ERR_CLOCK_34": lm_err(2, "CLOCK", 34),
+        "PSET_WRONG": pset(1, [(0, 1)]), "PSET_PIECE2": pset(2, [(32, 1)]),
+        # SYNTH (mode 1): VOICE (150) F4, BRIGHT (0) +10, an empty user slot, PLAY (153)
+        "PSET_SY_VOICE4": pset(1, [(150, 4)]), "PSET_SY_BRIGHT": pset(1, [(0, 10)]), "PVAL_SY_BRIGHT": pval(1, [(0, 10, "+10")]),
+        "PSET_SY_EMPTY": pset(1, [(150, 20)]), "ERR_SY_REFUSED": lm_err(1, "REFUSED", 150),
+        "PSET_SY_OP3": pset(1, [(16 + 2 * 16 + 2, 50)]),               # OP3 LEVEL = 50
+        "PSET_SY_PLAY1": pset(1, [(153, 1)]), "PSET_SY_PLAY0": pset(1, [(153, 0)]),
+    })
+    return t
+
+
 def expand(name):
     """a scenario with lines '@name@' replaced by 'sysex HEX'"""
     table = {
@@ -370,7 +667,8 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 7, 0, 3]), "SYNC": frame("SYNC_REQ"),
+        "HELLO": frame("HELLO", [1, 0, 8, 0, 4]), "SYNC": frame("SYNC_REQ"),
+        "HELLO_LOCAL": frame("HELLO", [1, 0, 8, 1, 4]),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -379,6 +677,7 @@ def expand(name):
         "POT_8192": frame("POT", v14(8192)), "POT_MAX": frame("POT", v14(16383)),
     }
     table.update(v13_table())
+    table.update(v14_table())
     for i in range(14):
         table["BTN%d_1" % i] = frame("BTN", [i, 1])
         table["BTN%d_0" % i] = frame("BTN", [i, 0])
@@ -411,12 +710,14 @@ def main(a):
             print("%-12s %3d bytes  %s" % (label, len(f), hx(f)))
     elif a[1] == "sim":
         sys.stdout.write(expand(a[2]))
+    elif a[1] == "desc":
+        return desc_check(a[2], a[3] if len(a) > 3 else None)
     elif a[1] == "expect":
         k = a[2]
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 7, 0, 3]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 8, 0, 4]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

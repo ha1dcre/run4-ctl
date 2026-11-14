@@ -18,15 +18,17 @@ SysEx import, arpeggiator, sequencer with parameter locks, trig conditions, gene
 scale and chord keys, mutate, an A / B morph, MIDI learn, pages) are implemented and tested in fm1-base's host
 simulator and in native tests (`make test`); so are the USB backup, the screen mirror, sample-accurate MIDI in, the
 overload guard, LOCAL OUT and the USB stems package; firmware 0.7 adds AMB mode, the Dattorro plate as Synth mode's
-reverb and the help cards. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
+reverb and the help cards; firmware 0.8 protocol 1.4: RUN4 lists and switches the modes and remote-controls the local
+modes from their self-description (AMB and Synth mode described), the protocol and codec under MIT. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
 the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `docs/PROTOCOL.md` | the wire protocol v1 (minor 3) |
-| `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats) |
+| `docs/PROTOCOL.md` | the wire protocol v1 (minor 4), MIT |
+| `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats), MIT; `tests/r4p_fuzz.c` its fuzz test |
+| `src/lm.c`, `src/synth_lm.c`, `src/amb_lm.c` | protocol 1.4: the local modes for the host (list, switch, description, values, status line), table-driven; Synth mode's and AMB mode's descriptions |
 | `src/ui.c` | the display: state from host frames, redraw by region |
 | `src/tape_ui.c` | RUN4 mode's tape view (protocol 1.3): waveform, loop region, playhead and meters in Synth mode's layout |
 | `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import, scales and chords, mutate, the morph, sample-accurate MIDI in, the overload guard; the step sequencer (16 x 64 steps, after Felucca's) with parameter locks, trig conditions and the song chain; its pages |
@@ -123,6 +125,13 @@ CPU (this Mac, -O2): AMB mode 0.43 % of real time at its busiest piece (VOICES, 
 mode's whole engine with 8 voices and every effect 0.58 % (0.6: 0.63 %, the difference is noise). On the device not
 measured; AMB-1 runs the same engine (with float lines) on the same hardware.
 
+Protocol 1.4 (firmware 0.8, `src/lm.c`): RAM 916 B of .bss (the shadow of the values last sent, 160 x 2 B, the frame
+being built, the state; measured natively, `expect lm_ram` in `31_modes`), no pool; the descriptions are tables in
+flash. Code: the codec grew 5,170 -> 7,798 B (arm-none-eabi-gcc -Os Thumb-2, as a stand-in for the JieLi toolchain);
+the whole of 1.4 adds 28 KB to the host simulator's x86-64 -O2 text (about a third of that expected on the device: not
+measured, no device toolchain here). A description is worked out once per mode for its hash (encoding it whole, in
+the main loop, at the first MODE of that mode).
+
 ### AMB mode off
 
 AMB mode is a build-time switch, `R4_AMB` (`app/app.h`, default 1). The package without it is `app-noamb/` (`app/`
@@ -136,7 +145,7 @@ is Synth's 67,584 B: the app's pool 144,592 B); its store object stays in the st
 
     git clone --recursive <this repo>          # or: git submodule update --init --recursive
     python3 -m venv .venv && .venv/bin/pip install pillow    # fm1-base's font generator needs Pillow
-    make test        # codec unit tests (ASan/UBSan), synth tests (with the reverb A/B), AMB tests, the simulator
+    make test        # codec unit tests and 1e6 fuzzed frames (ASan/UBSan), synth tests (with the reverb A/B), AMB tests, the simulator
                      # scenarios (all three packages), the fake FM-1's and the backup tool's self-tests
     make audio       # the listening files in tests/audio/ (the reverb A/B)
     make unit        # only the codec tests
@@ -196,3 +205,8 @@ The JieLi toolchain is Linux x86-64 only; on macOS fm1-base's `tools/build.py` r
 
 GPL-3.0 (`LICENSE`). Files from fm1-base and felucca-bsp, and AMB-1's engine and plate (`src/amb/`, `src/plate.[ch]`),
 stay MPL-2.0, file by file (see `NOTICE`, `LICENSES/MPL-2.0.txt`).
+
+**The protocol and its codec are MIT** (`LICENSE-MIT`): `docs/PROTOCOL.md`, `src/r4p.h`, `src/r4p.c` (and the codec's
+fuzz test `tests/r4p_fuzz.c`), so other firmwares and devices can implement RUN4 CTL (`docs/PROTOCOL.md`, "Implementing
+RUN4 CTL in your own firmware or device"). They are original work of this project; nothing in them comes from
+fm1-base, felucca-bsp, Felucca, AMB-1 or Mutable Dreams. The rest of the firmware stays GPL-3.0.

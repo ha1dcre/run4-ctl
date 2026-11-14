@@ -371,6 +371,23 @@ AMB mode, see there):
   FM-1's own sound only; the iPad's audio is mixed in for the FM-1's headphones and line output.
 * If RUN4 sends its MIDI clock to the FM-1, the sequencer and the arpeggiator follow it (clock AUTO).
 
+### RUN4 picks the mode and plays the FM-1's controls (firmware 0.8)
+
+From firmware 0.8 (protocol 1.4) RUN4 can choose the FM-1's mode itself and show the controls of Synth mode and AMB
+mode in the app: the FM-1 tells RUN4 its modes, and for the mode playing its pages and every parameter (name, range,
+the text the FM-1 shows), so RUN4 needs no update for a new mode. When RUN4 switches the mode it is exactly as if you
+pressed SEL + HOME, and the other way round: switch on the FM-1 and RUN4 follows. The link stays up through a switch
+(no NOT CONNECTED screen, no new hello). Whatever you or RUN4 change shows on both: the FM-1 redraws its page and shows
+its usual toast (GROWING, NEXT CHORD, SAVED ...), RUN4 gets the new value and the FM-1's status line (AMB: the piece,
+the chord, the scale and whether it grows, rests or is frozen). The values RUN4 sets are saved as your own edits are.
+
+**AMB into a RUN4 Tape.** Connect the FM-1 to the iPad with USB-C, pick AMB in RUN4, set the Tape track's input to the
+FM-1 and arm it. Press PLAY / REC in RUN4: RUN4 sends its MIDI clock, AMB grows from the top in time with the take
+(START) and rests at STOP, at RUN4's tempo. While RUN4's clock runs, its transport leads: RUN4 cannot grow or rest AMB
+by itself then (it shows that AMB follows the transport), but the FM-1's PLAY button still works. Keep AMB's MIDI OUT
+(KEY page) OFF while RUN4 sends its clock, and set SETUP > AUDIO > LOCAL OUT to USB ONLY if you do not want to hear
+it twice. (The app's side of this needs RUN4's own update; the firmware's side is in 0.8.)
+
 ## Bluetooth
 
 Bluetooth MIDI starts when the FM-1 is switched on. Connect from your computer or tablet (it shows up as a
@@ -511,4 +528,6 @@ setting feels too soft or too hard, pick another curve.
 
 ## Licence
 
-GPL-3.0-only. Parts from fm1-base and felucca-bsp stay under their own licences (MPL-2.0); see `NOTICE`.
+GPL-3.0-only. Parts from fm1-base and felucca-bsp stay under their own licences (MPL-2.0); see `NOTICE`. The protocol
+(`docs/PROTOCOL.md`) and its codec (`src/r4p.h`, `src/r4p.c`) are MIT (`LICENSE-MIT`), so other firmwares and devices
+can speak RUN4 CTL.

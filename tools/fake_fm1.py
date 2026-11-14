@@ -18,6 +18,9 @@ builders are shared with tools/fake_run4.py. Keys on the terminal (TAB switches 
   MASTER    9 down, 0 up (512 of 16383 each)
   1.3       B send a backup of the fake's user voices, R restore the host's last one (both answer like the firmware;
             the fake also answers NAMES_REQ, VOICE_GET and the host voice's frames with HV_STATE)
+  1.4       M the next mode (as SEL + HOME: RUN4, SYNTH, AMB; told with MODE to a 1.4 host); the fake answers MODES_REQ,
+            MODE_SET, DESC_REQ, VALS_REQ and PSET for AMB with the firmware's AMB parameters (docs/PROTOCOL.md; its
+            ranges and texts simplified: the real description comes from the firmware or its emulator), G grows / rests
   piano     (after TAB) z s x d c v g b h n j m , l . ; /  = C4 up;  q 2 w 3 e r 5 t 6 y 7 u = C5 up;  - + octave; TAB back
   other     ? help   p show the page again   Q quit
 """
@@ -124,6 +127,8 @@ def decode(frame):
     if cmd == 0x46:
         return dict(cmd="TOAST", text=r.string(), seconds=(r.u8() or 15) / 10.0)
     d = decode13(cmd, r)
+    if d is None:
+        d = decode14(cmd, r)
     if d is not None:
         if r.i != len(r.b):
             raise Bad("trailing bytes")
@@ -199,6 +204,25 @@ def decode13(cmd, r):
     return None
 
 
+def decode14(cmd, r):
+    """protocol 1.4 host -> device frames; None for another command"""
+    if cmd == 0x54:
+        return dict(cmd="MODES_REQ")
+    if cmd in (0x55, 0x56, 0x57):
+        d = dict(cmd={0x55: "MODE_SET", 0x56: "DESC_REQ", 0x57: "VALS_REQ"}[cmd], mode=r.u8())
+        if d["mode"] > 126:
+            raise Bad("bad mode")
+        return d
+    if cmd == 0x58:
+        d = dict(cmd="PSET", mode=r.u8(), pairs=[])
+        while r.i < len(r.b):
+            d["pairs"].append((r.v14(), r.v14() - 8192))
+        if not 1 <= len(d["pairs"]) <= 16 or d["mode"] > 126:
+            raise Bad("PSET needs 1..16 pairs")
+        return d
+    return None
+
+
 def show(d):
     c = d["cmd"]
     if c == "PAGE":
@@ -246,7 +270,11 @@ def show(d):
         return "BK_INFO %d voices crc %08X" % (d["count"], d["crc"])
     if c == "BK_DATA":
         return "BK_DATA %d%s" % (d["k"], "" if d["used"] else " (empty)")
-    if c in ("NAMES_REQ", "VOICE_GET"):
+    if c == "PSET":
+        return "PSET mode %d " % d["mode"] + " ".join("%d=%d" % p for p in d["pairs"])
+    if c in ("MODE_SET", "DESC_REQ", "VALS_REQ"):
+        return "%s %d" % (c, d["mode"])
+    if c in ("NAMES_REQ", "VOICE_GET", "MODES_REQ"):
         return c + (" %d" % d["idx"] if "idx" in d else "")
     if c == "LIST":
         if not d["total"]:
@@ -257,11 +285,72 @@ def show(d):
 
 
 # ------------------------------------------------------------------ the device ---
-MODE_RUN4, FW = 0, (0, 7)
+MODE_RUN4, FW = 0, (0, 8)
 
 
-def hello():
-    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4, 3])      # protocol 1.3
+def hello(mode=0):
+    return f4.frame("HELLO", [1, FW[0], FW[1], 1 if mode else 0, 4])      # protocol 1.4
+
+
+# protocol 1.4: AMB as the fake describes it: the firmware's ids, pages, kinds and names (fake_run4.AMB_PARAMS)
+AMB_NAMES = ["GARDEN", "DEPARTURES", "VOICES", "AFTERNOON", "NIGHT BUS", "SHORELINE", "GLASS", "TIDES"]
+NOTES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+FAKE_ENUMS = {32: AMB_NAMES, 22: ["RHODES", "VOICES"], 9: ["1/4.", "1/2", "1/2.", "1 BAR", "2 BARS", "4 BARS"],
+              19: NOTES, 17: ["OFF", "CLOCK", "NOTES"],
+              20: ["IONIAN", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYD.", "AEOLIAN", "PENT MAJ", "PENT MIN", "CUSTOM"]}
+FAKE_RANGE = {18: (30, 120, 72), 21: (-2, 2, 0), 23: (-1, 1, 0), 16: (-50, 50, 0)}
+
+
+def fake_amb():
+    """(pages, state labels, params): params as dicts with the DESC_PARAM fields"""
+    out = []
+    for pid, page, kind, name in f4.AMB_PARAMS:
+        p = dict(id=pid, page=page, kind=kind, name=name, flags=0, step=1, unit="", labels=[])
+        if kind == "enum":
+            p["labels"] = FAKE_ENUMS[pid]
+            p.update(lo=0, hi=len(p["labels"]) - 1, default=0)
+        elif kind == "mask":
+            p.update(lo=0, hi=4095, default=0xAB5, labels=NOTES)
+        elif kind == "toggle":
+            p.update(lo=0, hi=1, default=1 if pid == 34 else 0, labels=["RESTING", "GROWING"] if pid == 34 else ["OFF", "ON"])
+            p["flags"] = 2 if pid == 34 else 0
+        elif kind == "action":
+            p.update(lo=0, hi=1, default=0)
+        else:
+            lo, hi, de = FAKE_RANGE.get(pid, (0, 100, 50))
+            p.update(lo=lo, hi=hi, default=de, flags=4 if lo < 0 else 0,
+                     unit={18: "BPM", 16: "ct", 21: "oct", 23: "oct"}.get(pid, ""))
+        if pid == 20:
+            p["default"] = 1
+        if pid == 19:
+            p["default"] = 2
+        out.append(p)
+    return f4.AMB_PAGES, ["PIECE", "CHORD", "SCALE", "STATE"], out
+
+
+def desc_frames(mode, title, pages, state, params, values, text):
+    """every frame of a description (DESC_HEAD .. DESC_END) and its hash, as the firmware builds them (src/lm.c)"""
+    def head(h):
+        p = [mode] + f4.crc5_(h) + [len(pages)] + f4.v14(len(params)) + [len(state)] + f4.string(title)
+        for s_ in state:
+            p += f4.string(s_)
+        return f4.frame("DESC_HEAD", p)
+    body = [f4.frame("DESC_PAGE", [i] + f4.string(t)) for i, t in enumerate(pages)]
+    kinds = f4.LK
+    for p in params:
+        v = values[p["id"]]
+        body.append(f4.frame("DESC_PARAM", f4.v14(p["id"]) + [p["page"], kinds.index(p["kind"]), p["flags"], p["step"]] +
+                             f4.s14(p["lo"]) + f4.s14(p["hi"]) + f4.s14(p["default"]) + [len(p["labels"])] +
+                             f4.string(p["name"]) + f4.string(p["unit"]) + f4.s14(v) + f4.string(text(p, v))))
+        for first in range(0, len(p["labels"]), 8):
+            chunk = p["labels"][first:first + 8]
+            body.append(f4.frame("DESC_LABELS", f4.v14(p["id"]) + [first, len(p["labels"]), len(chunk)] +
+                                 sum((f4.string(x) for x in chunk), [])))
+    h = 0x811C9DC5
+    for f in [head(0)] + body:
+        h = f4.fnv(h, f4.desc_hash_part(f))
+    h = h or 1
+    return [head(h)] + body + [f4.frame("DESC_END", [mode] + f4.crc5_(h))], h
 
 
 def voice_name(d):
@@ -307,6 +396,12 @@ class Device:
         self.voices = [list(v) for v in f4.dx7_voices()] + [None] * 32
         self.hv = dict(on=0, chan=15, voice=0, data=list(self.voices[0]))
         self.restore = None                             # dict(k, used, data, info) while restoring
+        # protocol 1.4: the mode, the host's minor, AMB's values
+        self.mode, self.minor = 0, 0
+        self.amb_pages, self.amb_state, self.amb_params = fake_amb()
+        self.amb = {p["id"]: p["default"] for p in self.amb_params}
+        self.amb[34] = 0
+        self.sub = False
 
     def hv_state(self):
         name = "".join(chr(c) for c in self.hv["data"][118:128]).rstrip()
@@ -328,7 +423,7 @@ class Device:
     def tick(self, now):
         if not self.acked and now - self.hello_at >= 1.0:
             self.hello_at = now
-            self.send(hello())
+            self.send(hello(self.mode))
             self.out("-> HELLO")
 
     def on_frame(self, frame):
@@ -342,16 +437,119 @@ class Device:
         self.out("<- " + show(d))
         if d["cmd"] == "HELLO_ACK":
             self.acked = True
-            self.send(f4.frame("SYNC_REQ"))
-            self.send(pot(self.master))
-            self.out("-> SYNC_REQ, POT %d" % self.master)
+            self.minor = d["minor"]
+            self.sub = False
+            if self.mode == MODE_RUN4:
+                self.send(f4.frame("SYNC_REQ"))
+                self.send(pot(self.master))
+                self.out("-> SYNC_REQ, POT %d" % self.master)
+            if self.minor >= 4:
+                self.send(self.mode_frame())
         elif d["cmd"] == "PAGE":
             self.page = d
         elif d["cmd"] == "LIST":
             self.list = d if d["total"] else None
             self.sel = d["sel"]
+        elif d["cmd"] in ("MODES_REQ", "MODE_SET", "DESC_REQ", "VALS_REQ", "PSET"):
+            self.on_frame14(d)
         else:
             self.on_frame13(d)
+
+    # ---------------------------------------------------------------- 1.4 ---
+    def amb_text(self, p, v):
+        if p["kind"] in ("enum", "toggle"):
+            return p["labels"][v - p["lo"]]
+        if p["kind"] == "mask":
+            return "%d NOTES" % bin(v).count("1")
+        if p["kind"] == "action":
+            return ""
+        return "%+d CT" % v if p["id"] == 16 and v else ("0 CT" if p["id"] == 16 else str(v))
+
+    def mode_hash(self, mode):
+        if mode != 2:
+            return 0
+        return desc_frames(2, "AMB", self.amb_pages, self.amb_state, self.amb_params, self.amb, self.amb_text)[1]
+
+    def mode_frame(self):
+        fl = 1 | (4 if self.mode == 0 else 2)
+        return f4.mode_frame(self.mode, fl, self.mode_hash(self.mode))
+
+    def lstate(self):
+        t = [AMB_NAMES[self.amb[32]], "Dm7", "D DORIAN", "GROWING" if self.amb[34] else "RESTING"]
+        return f4.frame("LSTATE", [2, (1 if self.amb[34] else 0) | (2 if self.amb[35] else 0), 4] + sum((f4.string(x) for x in t), []))
+
+    def switch(self, mode):
+        """a mode switch (SEL + HOME on the device, or MODE_SET): a 1.4 host keeps the link and gets MODE"""
+        self.mode, self.sub = mode, False
+        if self.acked and self.minor >= 4:
+            self.send(self.mode_frame())
+            if mode == MODE_RUN4:
+                self.send(f4.frame("SYNC_REQ"))
+        else:
+            self.acked = False
+            self.hello_at = 0.0
+        self.out("(mode %s)" % ("RUN4", "SYNTH", "AMB")[mode])
+
+    def err(self, code, pid=0):
+        self.send(f4.lm_err(self.mode, code, pid))
+
+    def on_frame14(self, d):
+        c = d["cmd"]
+        if c == "MODES_REQ":
+            self.send(f4.modes_frame(self.mode, [(0, 5, "RUN4"), (1, 1, "SYNTH"), (2, 3, "AMB")]))   # (the fake: SYNTH undescribed)
+        elif c == "MODE_SET":
+            if d["mode"] > 2:
+                self.err("NOMODE")
+            elif d["mode"] == self.mode:
+                self.send(self.mode_frame())
+            else:
+                self.switch(d["mode"])
+        elif c in ("DESC_REQ", "VALS_REQ"):
+            if d["mode"] != self.mode:
+                self.err("WRONGMODE")
+                self.send(self.mode_frame())
+            elif self.mode != 2:
+                self.err("NODESC")
+            else:
+                self.sub = True
+                if c == "DESC_REQ":
+                    for f in desc_frames(2, "AMB", self.amb_pages, self.amb_state, self.amb_params, self.amb, self.amb_text)[0]:
+                        self.send(f)
+                else:
+                    vals = [(p["id"], self.amb[p["id"]], self.amb_text(p, self.amb[p["id"]])) for p in self.amb_params
+                            if p["kind"] != "action"]
+                    for k in range(0, len(vals), 6):
+                        self.send(f4.pval(2, vals[k:k + 6]))
+                self.send(self.lstate())
+        elif c == "PSET":
+            if d["mode"] != self.mode:
+                self.err("WRONGMODE")
+                return self.send(self.mode_frame())
+            if self.mode != 2:
+                return self.err("NODESC")
+            byid = {p["id"]: p for p in self.amb_params}
+            for pid, v in d["pairs"]:
+                p = byid.get(pid)
+                if p is None:
+                    return self.err("UNKNOWN", pid)
+                if not p["lo"] <= v <= p["hi"] or (p["kind"] == "action" and v != 1):
+                    return self.err("RANGE", pid)
+            changed = []
+            for pid, v in d["pairs"]:
+                p = byid[pid]
+                if p["kind"] == "mask" and not (v >> 2) & 1:
+                    self.err("REFUSED", pid)
+                    continue
+                if p["kind"] == "action":
+                    self.out("(action %s)" % p["name"])
+                    continue
+                if self.amb[pid] != v:
+                    self.amb[pid] = v
+                    changed.append((pid, v, self.amb_text(p, v)))
+            if changed and self.sub:
+                self.send(f4.pval(2, changed[:6]))
+                if any(c_[0] in (32, 34, 35) for c_ in changed):
+                    self.send(self.lstate())
 
     def on_frame13(self, d):
         c = d["cmd"]
@@ -450,6 +648,15 @@ class Device:
             return self.backup()
         if ch == "R" and not self.piano:
             return self.restore_start()
+        if ch == "M" and not self.piano:
+            return self.switch((self.mode + 1) % 3)
+        if ch == "G" and not self.piano and self.mode == 2:
+            self.amb[34] ^= 1
+            p = [q for q in self.amb_params if q["id"] == 34][0]
+            if self.sub:
+                self.send(f4.pval(2, [(34, self.amb[34], self.amb_text(p, self.amb[34]))]))
+                self.send(self.lstate())
+            return self.out("(AMB %s)" % ("growing" if self.amb[34] else "resting"))
         if ch == "?":
             return self.out(__doc__)
 
@@ -549,7 +756,7 @@ def selftest():
 
     h = lambda s: [int(x, 16) for x in s.split()]  # noqa: E731
     # device -> host: the bytes the C codec produces (tests/r4p_test.c, tests/scenarios)
-    eq(hello(), h("F0 7D 52 34 01 01 00 07 00 03 F7"), "HELLO")
+    eq(hello(), h("F0 7D 52 34 01 01 00 08 00 04 F7"), "HELLO")
     eq(btn(0, True), h("F0 7D 52 34 02 00 01 F7"), "BTN down")
     eq(btn(13, False), h("F0 7D 52 34 02 0D 00 F7"), "BTN up")
     eq(enc(3, 1), h("F0 7D 52 34 03 03 41 F7"), "ENC +1")
@@ -656,6 +863,46 @@ def selftest():
         else:
             dev2.on_frame(f4.bk_part(*store["parts"][k][1:], host=True))
     eq(dev2.voices[8:], f4.import_bank_records(), "restore round trip")
+    # protocol 1.4: the bytes the C codec makes (tests/r4p_test.c), the fake device's answers, a description round trip
+    eq(f4.mode_frame(2, 3, 0xCBF43926), h("F0 7D 52 34 0E 02 03 26 72 50 5F 0C F7"), "MODE bytes (as tests/r4p_test.c)")
+    eq(f4.pset(2, [(0, 70)]), h("F0 7D 52 34 58 02 00 00 40 46 F7"), "PSET bytes")
+    eq(f4.fnv(0x811C9DC5, [ord("a")]), 0xE40C292C, "FNV-1a check value")
+    eq(decode(f4.pset(2, [(300, -7), (0, 1)])), dict(cmd="PSET", mode=2, pairs=[(300, -7), (0, 1)]), "PSET decode")
+    eq(decode(f4.frame("MODE_SET", [2])), dict(cmd="MODE_SET", mode=2), "MODE_SET decode")
+    for bad in (f4.frame("PSET", [2]), f4.frame("PSET", [2, 0, 0, 0x40]), f4.frame("MODE_SET", [127])):
+        try:
+            decode(bad)
+            eq("accepted", "Bad", "bad 1.4 frame")
+        except Bad:
+            n[0] += 1
+    sent3 = []
+    dev3 = Device(sent3.append, lambda m: None, out=lambda s: None)
+    dev3.on_frame(f4.frame("HELLO_ACK", [1, 4]))
+    eq(sent3[-1], f4.mode_frame(0, 5, 0), "1.4 ack: MODE RUN4")
+    del sent3[:]
+    dev3.on_frame(f4.frame("MODES_REQ"))
+    eq(f4.decode14(sent3[0])["modes"][2], (2, 3, "AMB"), "MODES")
+    del sent3[:]
+    dev3.on_frame(f4.frame("MODE_SET", [2]))
+    eq((dev3.mode, f4.decode14(sent3[0])["cmd"], dev3.acked), (2, "MODE", True), "MODE_SET: the link stays")
+    hsh = f4.decode14(sent3[0])["hash"]
+    del sent3[:]
+    dev3.on_frame(f4.frame("DESC_REQ", [2]))
+    dsc = f4.Desc()
+    for fr in sent3:
+        dd = f4.decode14(fr)
+        dsc.feed(fr, dd)
+    eq((dsc.done, dsc.head["hash"], [(p["id"], p["page"], p["kind"], p["name"]) for p in dsc.params]),
+       (True, hsh, f4.AMB_PARAMS), "description round trip")
+    del sent3[:]
+    dev3.on_frame(f4.pset(2, [(0, 70)]))
+    eq(f4.decode14(sent3[0]), dict(cmd="PVAL", mode=2, values=[(0, 70, "70")]), "PSET -> PVAL echo")
+    del sent3[:]
+    dev3.on_frame(f4.pset(2, [(0, 101)]))
+    eq(sent3, [f4.lm_err(2, "RANGE", 0)], "PSET out of range -> LM_ERR")
+    del sent3[:]
+    dev3.on_frame(f4.pset(1, [(0, 1)]))
+    eq(f4.decode14(sent3[0])["code"], f4.LE["WRONGMODE"], "PSET for another mode")
     print("fake_fm1 selftest: %d checks ok" % n[0])
 
 

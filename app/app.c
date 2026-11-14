@@ -10,7 +10,7 @@
 #include "tape_ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 7
+#define FW_MINOR 8
 enum { MODE_RUN4 = 0, MODE_SYNTH = 1, MODE_AMB = 2 };   /* SEL + HOME: the next one, round (RUN4, SYNTH, AMB); HELLO
                                                          * says RUN4 or a local mode (SYNTH: Synth and AMB alike) */
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
@@ -645,6 +645,8 @@ static void bk_frame(const r4p_msg_t *m)
         break;
     }
 }
+static void lm_jobs(uint32_t now);
+static int lm_urgent(void);
 /* what the host is owed, behind the buttons, as there is room (one frame at most a call: the others' turn too) */
 static void jobs_send(uint32_t now)
 {
@@ -668,6 +670,10 @@ static void jobs_send(uint32_t now)
         hv_name(m.u.hvstate.name);
         if (send_frame(f, r4p_encode(f, sizeof f, &m)))
             ctl.want_hvstate = 0;
+        return;
+    }
+    if (lm_urgent()) {                                 /* 1.4: an error, the mode, the mode list */
+        lm_jobs(now);
         return;
     }
     if (ctl.vget1) {
@@ -738,6 +744,7 @@ static void jobs_send(uint32_t now)
     default:
         break;
     }
+    lm_jobs(now);                                      /* 1.4: the description, the values, the status line */
 }
 static void setup_learn_save(void);
 static void setup_save_press(void)                     /* SAVE on the SETUP page: VOICE BACKUP's armed action */
@@ -876,6 +883,25 @@ static void am_draw_head(void) {}
 static void am_draw_band(int full) { (void)full; }
 #endif
 
+/* ------------------------------------------------- protocol 1.4: local modes --- */
+static void mode_switch(uint8_t to);
+#include "lm.c"
+#include "synth_lm.c"
+#if R4_AMB
+#include "amb_lm.c"
+#endif
+static const lm_desc_t *lm_desc(uint32_t m)
+{
+    if (m == MODE_SYNTH)
+        return &SL_DESC;
+#if R4_AMB
+    if (m == MODE_AMB)
+        return &AL_DESC;
+#endif
+    return 0;
+}
+static int lm_urgent(void) { return host14() && (lm.err_n || lm.want_mode || lm.want_modes); }
+
 /* ------------------------------------------------------------- Synth mode --- */
 static void synth_notes_off_keys(void)         /* held keys: the note-offs of the mode being left */
 {
@@ -896,6 +922,7 @@ static volatile uint8_t mode_hold;                 /* a mode switch under way: t
 static void mode_switch(uint8_t to)
 {
     uint8_t from = mode;
+    int keep = host14();                           /* 1.4: the link stays; the host is told with MODE, not HELLO */
     if (to == mode)
         return;
     mode_hold = 1;                                 /* (from here to the end: silence; the arena changes hands) */
@@ -946,6 +973,18 @@ static void mode_switch(uint8_t to)
     } else {
         ui_reset_page();
     }
+    if (keep && to == MODE_RUN4) {                 /* (as after a HELLO_ACK: the host draws again) */
+        ui_connect(1);
+        ctl.leds = (r4p_leds_t){{0}, {0}};
+        ui.v12 = 1;
+        ctl.pot_sent = -1;
+        ctl.want_sync = 1;
+        ctl.want_pot = 1;
+        ctl.want_hvstate = hv.on;
+    } else if (keep) {
+        ui.connected = 1;
+    }
+    lm_reset(keep);
     ui.dirty = D_ALL;
     mode_hold = 0;
 }
@@ -1394,6 +1433,8 @@ static void midi_pump(uint32_t n)
         if (mode == MODE_AMB) {                        /* AMB: a clock drives the garden (START grows, STOP rests); a note
                                                         * on channel 1 takes its note out of the scale or puts it back
                                                         * (not the host voice's notes from RUN4: suspended) */
+            if (st == 0xFAu || st == 0xFBu || st == 0xFCu)
+                am_clk_run = st != 0xFCu;              /* (1.4: while a clock runs, its START / STOP has the transport) */
             if (st == 0xF8u || st == 0xFAu || st == 0xFBu || st == 0xFCu)
                 en_clock_isr(st == 0xF8u ? EN_CLK_TICK : st == 0xFAu ? EN_CLK_START : st == 0xFBu ? EN_CLK_CONTINUE : EN_CLK_STOP);
             else if ((st & 0xF0u) == 0x90u && d2 && ch == 0u && !(hv.on && hv.chan == 0u && (port == PORT_USB || port == PORT_BLE)))
@@ -1535,7 +1576,9 @@ static void input(void)
         ctl.want_sync = ctl.want_pot = 0;
         ctl.host_minor = 0;
         hv_link_lost();
+        lm_link_lost();
     }
+    lm_switch_owed();                                  /* 1.4: a MODE_SET from the host */
     if (!ctl.session)
         ctl.hello_at = now - HELLO_MS;                 /* (nothing to send to yet; try at the first chance) */
     if (!ui.connected && now - ctl.hello_at >= HELLO_MS)
@@ -1783,6 +1826,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     switch (m.cmd) {
     case R4P_HELLO_ACK:
         ctl.want_hvstate = hv.on;                      /* 1.3: where its voice stands (sent to a 1.3 host only) */
+        lm_reset(m.u.ack.minor >= 4);                  /* 1.4: the mode (MODE), nothing subscribed */
         if (mode != MODE_RUN4) {                       /* the host knows we are a local mode: nothing to draw or sync */
             ui.connected = 1;
             ctl.host_minor = m.u.ack.minor;
@@ -1843,6 +1887,11 @@ int app_sysex(const uint8_t *p, uint32_t n)
         if (ui.connected)
             bk_frame(&m);
         break;
+    /* 1.4: the local modes, in every mode */
+    case R4P_MODES_REQ: case R4P_MODE_SET: case R4P_DESC_REQ: case R4P_VALS_REQ: case R4P_PSET:
+        if (ui.connected)
+            lm_frame(&m);
+        break;
     default:
         break;                                         /* device->host commands from the host: ignored */
     }
@@ -1882,6 +1931,7 @@ void app_init(void)
     hv.chan = 15;                                      /* (HV_STATE's channel before any HV_ON) */
     memset(&bk, 0, sizeof bk);
     ctl.names_next = 255;
+    memset(&lm, 0, sizeof lm);
     syn_host_defaults(&syn_alt);                       /* 1.3: the host voice's settings, parked */
     ml_init();
 #if R4_AMB
@@ -2139,6 +2189,18 @@ int app_expect(const char *what, int *got)
     else if (!strncmp(what, "amb_par", 7)) *got = am_par(atoi(what + 7) % P_NPARAMS);   /* amb_parN: parameter N (amb.h P_*) */
 #endif
     else if (!strcmp(what, "set_mode")) *got = setup.mode;
+    else if (!strcmp(what, "lm_sub")) *got = lm.sub;                       /* 1.4 */
+    else if (!strcmp(what, "lm_stream")) *got = lm.st;
+    else if (!strcmp(what, "lm_sets")) *got = (int)lm.sets;
+    else if (!strcmp(what, "lm_ram")) *got = (int)(sizeof lm + sizeof lm_f + sizeof lm_m);   /* 1.4's .bss */
+    else if (!strcmp(what, "lm_known")) {
+        uint32_t i, c = 0;
+        for (i = 0; i < LM_MAX; i++) c += (lm.known[i / 32] >> (i % 32)) & 1u;
+        *got = (int)c;
+    }
+    else if (!strcmp(what, "lm_frames")) *got = (int)lm.frames;
+    else if (!strcmp(what, "lm_nparams")) *got = lm_desc(mode) ? lm_desc(mode)->nparams : 0;
+    else if (!strcmp(what, "lm_hash_lo")) *got = (int)(lm_hash(mode) & 0x3FFFu);
     else if (!strcmp(what, "octave")) *got = ctl.octave;
     else if (!strcmp(what, "shift")) *got = ui.shift;
     else if (!strcmp(what, "page_idx")) *got = ui.page.page_idx;

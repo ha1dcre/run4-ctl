@@ -8,7 +8,7 @@
 #define R4_AMB 1                         /* AMB mode in the build (app-noamb/app.h: 0); the plate and the cards either way */
 #endif
 #define APP_NAME "RUN4 CTL"
-#define APP_VERSION "0.3"
+#define APP_VERSION "0.4"
 #define APP_SPLASH_RGB RGB(255, 140, 40)
 #define APP_BLOCK 256u
 #define APP_TOUCH                        /* key velocity and pressure (lib/touch.h); the SETUP page sets how they are used */

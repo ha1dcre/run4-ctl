@@ -17,7 +17,7 @@ wait 100
 expect mode 2
 expect set_mode 1
 expect amb_boot 1
-expect_sysex F0 7D 52 34 01 01 00 07 01 03 F7
+expect_sysex F0 7D 52 34 01 01 00 08 01 04 F7
 @ACK@
 wait 100
 expect connected 1

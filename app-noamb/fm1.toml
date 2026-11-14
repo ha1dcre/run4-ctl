@@ -21,7 +21,7 @@ o2 = ["../src/plate.c"]          # the plate reverb: its own unit at -O2 (float 
 emu = ["midi"]                   # browser emulator (build.py app --web): Web MIDI in/out with SysEx (keyboard, RUN4)
 
 # firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)
-author = "TODO-OWNER author name"                 # TODO-OWNER: your name or handle as it should appear
+author = "Eugen Schott"
 licence = "GPL-3.0-only"
 tagline = "RUN4 controller and FM synth, without AMB mode"
 description = "Two modes. RUN4 mode makes the M-VAVE FM-1 a hardware controller for the iOS app RUN4 over USB or Bluetooth MIDI: the app draws its pages and lights on the FM-1 and can play its FM engine as a track's instrument. Synth mode (SEL + HOME) is a six-operator FM synth with DX7 bank import, effects, an arpeggiator, an A / B morph, MIDI learn and a step sequencer (16 patterns of up to 64 steps, chords, ties, parameter locks, trig conditions, generators, MIDI clock); it plays from MIDI in, sample-accurate. Everything backs up over USB."

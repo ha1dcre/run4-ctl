@@ -1,0 +1,193 @@
+# Protocol 1.4, the local modes: a 1.4 host lists the modes, switches to AMB (the link stays: MODE, not HELLO), gets
+# AMB's description (checked by tools/fake_run4.py desc: frames, labels, counts, the hash, the parameters PROTOCOL.md
+# lists), sets parameters, fires actions, gets the values back as they change (its own and the device's knobs), the
+# errors; the clock has the transport while it runs; the player switches modes on the device; Synth mode's
+# description and parameters; a 1.3 host sees no change.
+@ACK14@
+wait 100
+expect host_minor 4
+expect connected 1
+expect_sysex @SYNC@
+expect_sysex @MODE_RUN4@
+sysex_out
+# the modes: RUN4 (the controller), SYNTH and AMB (local, described)
+@MODES_REQ@
+wait 50
+expect_sysex @MODES_0@
+# RUN4 mode has no description; there is no mode 9
+@DESC_REQ_RUN4@
+wait 30
+expect_sysex @ERR_NODESC_RUN4@
+@MODE_SET_NINE@
+wait 30
+expect_sysex @ERR_NOMODE_RUN4@
+expect mode 0
+sysex_out
+# the host switches to AMB: as SEL + HOME would, the link stays up (no HELLO, no new HELLO_ACK)
+sysex_log out:lm_amb.bin
+@MODE_SET_AMB@
+wait 200
+expect mode 2
+expect connected 1
+expect amb_playing 0
+@DESC_REQ_AMB@
+wait 800
+expect lm_stream 0
+expect lm_sub 1
+expect lm_nparams 35
+expect amb_playing 1
+expect lm_known 35
+expect lm_ram <1024
+shot lm_amb_remote.png
+sysex_log off
+sysex_out
+# a parameter: PAD LEVEL (id 0) 60 -> 70, echoed once
+@PSET_PAD70@
+wait 150
+expect amb_par0 70
+expect amb_dirty 1
+expect_sysex @PVAL_PAD70@
+# two in one frame: REVERB 30, SIZE 40 (one PVAL back)
+@PSET_TWO@
+wait 150
+expect amb_par10 30
+expect amb_par11 40
+expect_sysex @PVAL_TWO@
+# a toggle: FREEZE on, off
+@PSET_FREEZE1@
+wait 150
+expect amb_frozen 1
+expect_sysex @PVAL_FREEZE1@
+@PSET_FREEZE0@
+wait 150
+expect amb_frozen 0
+expect_sysex @PVAL_FREEZE0@
+sysex_out
+# the device's own knob: ENV, K1 +3 -> PAD LEVEL 73 goes to the host
+tap ENV
+wait 60
+turn K1 3
+wait 150
+expect amb_par0 73
+expect_sysex @PVAL_PAD73@
+shot lm_amb_pad.png
+# the notes: F out of D dorian (the scale becomes CUSTOM, both told); the root cannot go
+@PSET_NOTES@
+wait 150
+expect amb_pool 1701
+expect_sysex @PVAL_NOTES@
+@PSET_NOROOT@
+wait 60
+expect_sysex @ERR_REFUSED_33@
+expect amb_pool 1701
+sysex_out
+# errors: an unknown id (and nothing of that frame applied), out of range, an action with 0, another mode
+@PSET_UNKNOWN@
+wait 60
+expect_sysex @ERR_UNKNOWN_99@
+expect amb_par10 30
+@PSET_RANGE@
+wait 60
+expect_sysex @ERR_RANGE_0@
+expect amb_par0 73
+@PSET_NEXT0@
+wait 60
+expect_sysex @ERR_RANGE_36@
+@PSET_WRONG@
+wait 60
+expect_sysex @ERR_WRONG_AMB@
+expect frames_bad 0
+# an action: NEXT CHORD (the device's toast says so)
+@PSET_NEXT@
+wait 60
+expect toast 1
+expect lm_sets 7
+# the transport: while a MIDI clock runs (START, no STOP) its START / STOP has it; REST from the host is refused
+midi FA
+wait 20
+expect amb_ext 1
+@PSET_GROW0@
+wait 60
+expect_sysex @ERR_CLOCK_34@
+expect amb_playing 1
+midi FC
+wait 60
+expect amb_playing 0
+@PSET_GROW1@
+wait 100
+expect amb_playing 1
+# every value again (a host that has the description cached): all 35 known
+@VALS_REQ_AMB@
+wait 400
+expect lm_known 35
+# the player switches on the device: AMB -> RUN4 (SEL + HOME); the host is told, and asked for its pages
+sysex_out
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 0
+expect connected 1
+expect_sysex @SYNC@
+expect_sysex @MODE_RUN4@
+expect lm_sub 0
+@TAPE@
+wait 60
+shot lm_back_run4.png
+# ... and on to SYNTH: its description
+sysex_log out:lm_synth.bin
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 1
+expect connected 1
+@DESC_REQ_SYNTH@
+wait 1500
+expect lm_stream 0
+expect lm_nparams 143
+sysex_log off
+sysex_out
+# Synth mode's parameters: the voice (F4), BRIGHT +10, an empty user slot (refused), OP3's LEVEL, the sequencer
+@PSET_SY_VOICE4@
+wait 100
+expect syn_patch 3
+@PSET_SY_BRIGHT@
+wait 150
+expect syn_bright 10
+expect_sysex @PVAL_SY_BRIGHT@
+@PSET_SY_EMPTY@
+wait 60
+expect_sysex @ERR_SY_REFUSED@
+expect syn_patch 3
+@PSET_SY_OP3@
+wait 60
+@PSET_SY_PLAY1@
+wait 200
+expect syn_seq 1
+@PSET_SY_PLAY0@
+wait 200
+expect syn_seq 0
+shot lm_synth.png
+# a 1.3 host: a mode switch is the HELLO again, as before (nothing of 1.4 goes to it)
+@ACK13@
+wait 100
+expect host_minor 3
+sysex_out
+@MODE_SET_AMB@
+wait 200
+expect mode 2
+expect connected 0
+expect_sysex @HELLO_LOCAL@
+@ACK13@
+wait 100
+@MODE_SET_RUN4@
+wait 200
+expect mode 0
+expect connected 0
+expect_sysex @HELLO@
+@ACK14@
+wait 100
+expect connected 1
