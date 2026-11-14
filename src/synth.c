@@ -803,10 +803,13 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
     if (fxv.dly_mix) {                         /* a ping-pong: L feeds R, R feeds L */
         uint32_t div16 = DLY_DIV16[(uint32_t)fxv.dly_div % 6u], tn = syn_step_samples(1) * div16 / 1u;
         uint32_t tt = tn > DLY_N - 1u ? DLY_N - 1u : tn;
-        int32_t dl = fx_dly[0][(fx_st.dw - tt) % DLY_N] << 8, dr = fx_dly[1][(fx_st.dw - tt) % DLY_N] << 8;
+        int32_t xl = fx_dly[0][(fx_st.dw - tt) % DLY_N], xr = fx_dly[1][(fx_st.dw - tt) % DLY_N];
+        int32_t dl = xl << 8, dr = xr << 8;
         int32_t fb = fxv.dly_fb * 640 / 100;   /* up to 0.62 */
-        fx_dly[0][fx_st.dw % DLY_N] = (int16_t)((l + (int32_t)((int64_t)dr * fb >> 10)) >> 8);
-        fx_dly[1][fx_st.dw % DLY_N] = (int16_t)((r + (int32_t)((int64_t)dl * fb >> 10)) >> 8);
+        /* the feedback, dr * fb >> 10 exactly: dr is xr << 8. In 32 bits (|xr * fb| < 2^26): a 64-bit multiply among
+         * these 16-bit loads is the FM-1 CPU fault of felucca-bsp docs/CPU.md (a register left a bit off) */
+        fx_dly[0][fx_st.dw % DLY_N] = (int16_t)((l + (xr * fb >> 2)) >> 8);
+        fx_dly[1][fx_st.dw % DLY_N] = (int16_t)((r + (xl * fb >> 2)) >> 8);
         fx_st.dw++;
         l += r4_muldiv_s32(dl, fxv.dly_mix, 100);
         r += r4_muldiv_s32(dr, fxv.dly_mix, 100);
