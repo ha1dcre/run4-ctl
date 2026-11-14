@@ -60,6 +60,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           }
           build full app
+          cp app/build/run4ctl.dis app/build/run4ctl-full.dis 2>/dev/null || true   # (the USB-only build writes it again)
           build usb-only app --no-ble
           build no-amb app-noamb
           build stems app-stems
@@ -71,5 +72,6 @@ jobs:
           path: |
             app*/build/*.fwsc
             app*/build/firmware*.json
+            app*/build/*.dis
             logs/
           if-no-files-found: warn
