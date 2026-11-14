@@ -2,7 +2,7 @@
 PY ?= .venv/bin/python
 B  := build
 
-test: unit synth amb sim tools
+test: unit fuzz synth amb sim tools
 
 unit: $(B)/r4p_test
 	$(B)/r4p_test
@@ -20,6 +20,14 @@ amb: $(B)/amb_test
 $(B)/amb_test: tests/amb_test.c src/amb/amb.c src/amb/amb.h src/plate.c src/plate.h src/arena.h
 	@mkdir -p $(B)
 	cc -std=gnu11 -O2 -g -ffp-contract=off -DR4_NATIVE -Ibase/include -Isrc -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -o $@ tests/amb_test.c
+
+# the codec against hostile input: 1e6 random and mutated frames under AddressSanitizer and UBSan (tests/r4p_fuzz.c)
+fuzz: $(B)/r4p_fuzz
+	$(B)/r4p_fuzz 1000000
+
+$(B)/r4p_fuzz: tests/r4p_fuzz.c src/r4p.c src/r4p.h
+	@mkdir -p $(B)
+	cc -std=c99 -Wall -Wextra -Wno-unused-parameter -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -o $@ tests/r4p_fuzz.c src/r4p.c
 
 $(B)/r4p_test: tests/r4p_test.c src/r4p.c src/r4p.h
 	@mkdir -p $(B)
@@ -39,4 +47,4 @@ tools:
 host:
 	$(PY) base/tools/build.py app --host
 
-.PHONY: test unit synth amb sim tools host audio
+.PHONY: test unit fuzz synth amb sim tools host audio

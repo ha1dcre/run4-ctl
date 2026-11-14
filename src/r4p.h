@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: GPL-3.0-only
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Eugen Schott (see LICENSE-MIT: the protocol and this codec are MIT, the rest of RUN4 CTL GPL-3.0)
  * RUN4 CTL protocol v1 (docs/PROTOCOL.md): one codec, compiled into the firmware and natively for the tests.
  * Plain C99, no libc, no floating point, no allocation. A frame is F0 7D 52 34 <cmd> <payload> F7, 7-bit bytes. */
 #ifndef R4P_H
@@ -7,9 +8,10 @@
 #include <stdint.h>
 
 #define R4P_VER 1
-#define R4P_MINOR 3               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
+#define R4P_MINOR 4               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
                                    * trailer (cursor, position, path), FOCUS, VALUE flags; 1.3: the host voice, the
-                                   * voice list, the tape view, the patch backup */
+                                   * voice list, the tape view, the patch backup; 1.4: the local modes (list, switch,
+                                   * self-description, values, state) */
 #define R4P_CURSOR_NONE 127
 #define R4P_VF_BIG 1              /* VALUE flags bit 0: show the big value view */
 #define R4P_LIST_ROWS 7           /* items in one LIST frame (the window) */
@@ -20,18 +22,44 @@
 #define R4P_NENC 7                /* 0 SELECT, 1 ALGO, 2 PRESETS, 3..6 K1..K4 */
 #define R4P_V14_MAX 16383
 #define R4P_FRAME_MAX 640         /* the most a device takes between F0 and F7 (fm1-base); ours stay below (PAGE 1.2: 569) */
+#define R4P_DEV_MAX 136           /* the most a frame from the device takes, F0 and F7 included (1.3 and 1.4) */
 
 enum {                            /* device -> host */
     R4P_HELLO = 0x01, R4P_BTN = 0x02, R4P_ENC = 0x03, R4P_POT = 0x04, R4P_SYNC_REQ = 0x05, R4P_LIST_PICK = 0x06,
     R4P_HV_STATE = 0x07, R4P_VOICE_NAMES = 0x08, R4P_VOICE_DATA = 0x09,                 /* 1.3 */
     R4P_BK_PART = 0x0A, R4P_BK_END = 0x0B, R4P_BK_GET = 0x0C,                           /* 1.3 */
+    R4P_MODES = 0x0D, R4P_MODE = 0x0E, R4P_DESC_HEAD = 0x0F, R4P_DESC_PAGE = 0x10, R4P_DESC_PARAM = 0x11,   /* 1.4 */
+    R4P_DESC_LABELS = 0x12, R4P_DESC_END = 0x13, R4P_PVAL = 0x14, R4P_LSTATE = 0x15, R4P_LM_ERR = 0x16,     /* 1.4 */
     /* host -> device */
     R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46, R4P_LIST = 0x47,
     R4P_FOCUS = 0x48,
     R4P_HV_ON = 0x49, R4P_HV_VOICE = 0x4A, R4P_HV_PARAM = 0x4B, R4P_NAMES_REQ = 0x4C, R4P_VOICE_GET = 0x4D,   /* 1.3 */
     R4P_TAPE_WAVE = 0x4E, R4P_TAPE_POS = 0x4F, R4P_METERS = 0x50,                                         /* 1.3 */
-    R4P_BK_ACK = 0x51, R4P_BK_INFO = 0x52, R4P_BK_DATA = 0x53                                             /* 1.3 */
+    R4P_BK_ACK = 0x51, R4P_BK_INFO = 0x52, R4P_BK_DATA = 0x53,                                            /* 1.3 */
+    R4P_MODES_REQ = 0x54, R4P_MODE_SET = 0x55, R4P_DESC_REQ = 0x56, R4P_VALS_REQ = 0x57, R4P_PSET = 0x58  /* 1.4 */
 };
+/* protocol 1.4: the local modes */
+#define R4P_LM_STR 16             /* characters in a name, label, value text, page title, state text */
+#define R4P_LM_UNIT 8             /* characters in a unit */
+#define R4P_LM_MNAME 12           /* characters in a mode's name */
+#define R4P_MODES_MAX 8           /* modes in MODES */
+#define R4P_LM_PAGES 32           /* pages in a description */
+#define R4P_LM_PARAMS 1024        /* parameters in a description */
+#define R4P_LM_NSTATE 4           /* texts in LSTATE */
+#define R4P_LM_LROWS 8            /* labels in one DESC_LABELS */
+#define R4P_LM_LABELS 127         /* labels of one parameter */
+#define R4P_PVAL_MAX 6            /* values in one PVAL */
+#define R4P_PSET_MAX 16           /* pairs in one PSET */
+#define R4P_S14_MIN (-8192)       /* a signed value on the wire: two 7-bit bytes of v + 8192 */
+#define R4P_S14_MAX 8191
+enum { R4P_MID_RUN4, R4P_MID_SYNTH, R4P_MID_AMB };                   /* mode ids (stable) */
+enum { R4P_MF_AVAIL = 1, R4P_MF_DESC = 2, R4P_MF_CTRL = 4 };          /* MODES / MODE flags */
+enum { R4P_LK_NUMBER, R4P_LK_ENUM, R4P_LK_TOGGLE, R4P_LK_ACTION, R4P_LK_MASK, R4P_LK_COUNT };   /* parameter kinds */
+enum { R4P_PF_READONLY = 1, R4P_PF_AUTO = 2, R4P_PF_BIPOLAR = 4, R4P_PF_ALL = 7 };              /* parameter flags */
+enum { R4P_LS_PLAYING = 1, R4P_LS_FROZEN = 2, R4P_LS_EXTCLOCK = 4, R4P_LS_WAKING = 8, R4P_LS_RECORDING = 16,
+       R4P_LS_ALL = 31 };                                                                       /* LSTATE flags */
+enum { R4P_LE_OK, R4P_LE_NOMODE, R4P_LE_WRONGMODE, R4P_LE_NODESC, R4P_LE_UNKNOWN, R4P_LE_RANGE, R4P_LE_READONLY,
+       R4P_LE_REFUSED, R4P_LE_CLOCK, R4P_LE_BUSY, R4P_LE_COUNT };                               /* LM_ERR codes */
 /* protocol 1.3 */
 enum { R4P_HV_OFF, R4P_HV_SOUNDING, R4P_HV_SUSPENDED };            /* HV_STATE state */
 enum { R4P_HVV_STORED, R4P_HVV_PACKED, R4P_HVV_VCED };             /* HV_VOICE kind: a stored voice, 128 / 155 bytes */
@@ -103,6 +131,29 @@ typedef struct { uint8_t count; uint32_t crc; } r4p_bksum_t;                    
 typedef struct { uint8_t track; char label[R4P_STR_MAX + 1]; uint8_t n; uint8_t peak[R4P_WAVE_MAX]; } r4p_wave_t;   /* n 0 = off */
 typedef struct { uint16_t play, in, out; uint8_t flags; } r4p_tpos_t;           /* TAPE_POS, 0..16383 across the wave */
 typedef struct { uint8_t level[R4P_NMETERS], clip; } r4p_meters_t;              /* METERS: 0..127 (127 + 2 x dBFS), clip bits */
+/* protocol 1.4 */
+typedef struct { uint8_t id, flags; char name[R4P_LM_MNAME + 1]; } r4p_modeent_t;
+typedef struct { uint8_t cur, n; r4p_modeent_t m[R4P_MODES_MAX]; } r4p_modes_t;                 /* MODES */
+typedef struct { uint8_t mode, flags; uint32_t hash; } r4p_mode_t;                              /* MODE, DESC_END (flags 0) */
+typedef struct {                                                                                /* DESC_HEAD */
+    uint8_t mode; uint32_t hash; uint8_t npages; uint16_t nparams; uint8_t nstate;
+    char title[R4P_LM_STR + 1];
+    char state[R4P_LM_NSTATE][R4P_LM_STR + 1];
+} r4p_dhead_t;
+typedef struct { uint8_t page; char title[R4P_LM_STR + 1]; } r4p_dpage_t;                       /* DESC_PAGE */
+typedef struct {                                                                                /* DESC_PARAM */
+    uint16_t id; uint8_t page, kind, flags, step;
+    int16_t lo, hi, def;
+    uint8_t nlabels;
+    char name[R4P_LM_STR + 1], unit[R4P_LM_UNIT + 1];
+    int16_t value;
+    char text[R4P_LM_STR + 1];
+} r4p_dparam_t;
+typedef struct { uint16_t id; uint8_t first, total, n; char label[R4P_LM_LROWS][R4P_LM_STR + 1]; } r4p_dlabels_t;
+typedef struct { uint8_t mode, n; uint16_t id[R4P_PVAL_MAX]; int16_t v[R4P_PVAL_MAX]; char text[R4P_PVAL_MAX][R4P_LM_STR + 1]; } r4p_pval_t;
+typedef struct { uint8_t mode, n; uint16_t id[R4P_PSET_MAX]; int16_t v[R4P_PSET_MAX]; } r4p_pset_t;
+typedef struct { uint8_t mode, flags, n; char text[R4P_LM_NSTATE][R4P_LM_STR + 1]; } r4p_lstate_t;
+typedef struct { uint8_t mode, code; uint16_t id; } r4p_lerr_t;
 
 typedef struct {
     uint8_t cmd;
@@ -130,7 +181,18 @@ typedef struct {
         r4p_wave_t wave;
         r4p_tpos_t tpos;
         r4p_meters_t meters;
-        struct { uint8_t v; } b1;  /* VOICE_GET idx, BK_GET part, BK_ACK status (NAMES_REQ: none) */
+        struct { uint8_t v; } b1;  /* VOICE_GET idx, BK_GET part, BK_ACK status (NAMES_REQ: none); 1.4: MODE_SET,
+                                    * DESC_REQ, VALS_REQ mode (MODES_REQ: none) */
+        r4p_modes_t modes;        /* 1.4 */
+        r4p_mode_t mode;          /* MODE, DESC_END */
+        r4p_dhead_t dhead;
+        r4p_dpage_t dpage;
+        r4p_dparam_t dparam;
+        r4p_dlabels_t dlabels;
+        r4p_pval_t pval;
+        r4p_pset_t pset;
+        r4p_lstate_t lstate;
+        r4p_lerr_t lerr;
     } u;
 } r4p_msg_t;
 
@@ -153,6 +215,13 @@ size_t r4p_list_pick(uint8_t *buf, size_t cap, uint8_t index, uint8_t action);
 uint32_t r4p_crc32(uint32_t crc, const uint8_t *p, size_t n);
 /* the bytes a backup part adds to it: k, used, then its 128 data bytes */
 uint32_t r4p_crc32_part(uint32_t crc, const r4p_voice_t *part);
+
+/* protocol 1.4: the description's hash, FNV-1a 32 (offset 0x811C9DC5, prime 0x01000193): start with R4P_FNV0 */
+#define R4P_FNV0 0x811C9DC5u
+uint32_t r4p_fnv(uint32_t h, const uint8_t *p, size_t n);
+/* the bytes of an encoded description frame (F0 .. F7) the hash covers: DESC_HEAD from cmd to its end without the five
+ * hash bytes, DESC_PAGE and DESC_LABELS from cmd to the end, DESC_PARAM from cmd up to (not with) its value and text */
+uint32_t r4p_desc_hash_add(uint32_t h, const uint8_t *frame, size_t n);
 
 /* encoder detents coalesced per frame: add every detent seen, take once per frame; what clamping left over carries on */
 typedef struct { int16_t acc[R4P_NENC]; } r4p_enc_acc_t;

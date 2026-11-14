@@ -1,5 +1,7 @@
-/* SPDX-License-Identifier: GPL-3.0-only
- * RUN4 CTL protocol v1 codec (see r4p.h, docs/PROTOCOL.md). */
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Eugen Schott (see LICENSE-MIT)
+ * RUN4 CTL protocol v1 codec (see r4p.h, docs/PROTOCOL.md). The reader never reads past the bytes it is given and
+ * never writes past the message it fills: every count, length and range is checked before it is used. */
 #include "r4p.h"
 
 static const uint8_t HDR[4] = {0xF0, 0x7D, 0x52, 0x34};
@@ -41,6 +43,30 @@ static void wstr_n(wr_t *w, const char *s, unsigned max)
     }
 }
 static void wstr(wr_t *w, const char *s) { wstr_n(w, s, R4P_STR_MAX); }
+static void ws14(wr_t *w, int v)                    /* 1.4: a signed value, v + 8192 as 14 bits */
+{
+    if (v < R4P_S14_MIN || v > R4P_S14_MAX) {
+        w->bad = 1;
+        v = 0;
+    }
+    w14(w, (unsigned)(v + 8192));
+}
+static int mode_id_ok(unsigned m) { return m < 127u; }
+/* 1.4: a parameter's description is consistent (the same rules both ways) */
+static int dparam_ok(const r4p_dparam_t *d)
+{
+    if (d->kind >= R4P_LK_COUNT || (d->flags & ~R4P_PF_ALL) || !d->step || d->step > 127u || d->page >= R4P_LM_PAGES ||
+        d->lo > d->hi || d->def < d->lo || d->def > d->hi || d->value < d->lo || d->value > d->hi ||
+        d->nlabels > R4P_LM_LABELS || d->id > R4P_V14_MAX)
+        return 0;
+    switch (d->kind) {
+    case R4P_LK_ENUM: return d->nlabels >= 1 && d->hi - d->lo + 1 == d->nlabels;
+    case R4P_LK_TOGGLE: return d->lo == 0 && d->hi == 1 && (d->nlabels == 0 || d->nlabels == 2);
+    case R4P_LK_ACTION: return d->lo == 0 && d->hi == 1 && d->nlabels == 0 && d->def == 0;
+    case R4P_LK_MASK: return d->lo == 0 && d->nlabels >= 1 && d->nlabels <= 13 && d->hi == (1 << d->nlabels) - 1;
+    default: return 1;
+    }
+}
 static void wbytes(wr_t *w, const uint8_t *p, unsigned n)
 {
     unsigned i;
@@ -278,11 +304,109 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
         if (m->u.b1.v > R4P_BK_FAILED)
             w.bad = 1;
         break;
+    /* ------------------------------------------------------------- 1.4 --- */
+    case R4P_MODES: {
+        const r4p_modes_t *l = &m->u.modes;
+        w8(&w, l->cur); w8(&w, l->n);
+        if (!l->n || l->n > R4P_MODES_MAX || !mode_id_ok(l->cur))
+            w.bad = 1;
+        for (i = 0; i < l->n && i < R4P_MODES_MAX; i++) {
+            w8(&w, l->m[i].id); w8(&w, l->m[i].flags); wstr_n(&w, l->m[i].name, R4P_LM_MNAME);
+            if (!mode_id_ok(l->m[i].id) || l->m[i].flags > 7u)
+                w.bad = 1;
+        }
+        break;
+    }
+    case R4P_MODE: case R4P_DESC_END:
+        w8(&w, m->u.mode.mode);
+        if (m->cmd == R4P_MODE)
+            w8(&w, m->u.mode.flags);
+        wcrc(&w, m->u.mode.hash);
+        if (!mode_id_ok(m->u.mode.mode) || (m->cmd == R4P_MODE && m->u.mode.flags > 7u))
+            w.bad = 1;
+        break;
+    case R4P_DESC_HEAD: {
+        const r4p_dhead_t *d = &m->u.dhead;
+        w8(&w, d->mode); wcrc(&w, d->hash); w8(&w, d->npages); w14(&w, d->nparams); w8(&w, d->nstate);
+        wstr_n(&w, d->title, R4P_LM_STR);
+        if (!mode_id_ok(d->mode) || d->npages > R4P_LM_PAGES || d->nparams > R4P_LM_PARAMS || d->nstate > R4P_LM_NSTATE)
+            w.bad = 1;
+        for (i = 0; i < d->nstate && i < R4P_LM_NSTATE; i++)
+            wstr_n(&w, d->state[i], R4P_LM_STR);
+        break;
+    }
+    case R4P_DESC_PAGE:
+        w8(&w, m->u.dpage.page); wstr_n(&w, m->u.dpage.title, R4P_LM_STR);
+        if (m->u.dpage.page >= R4P_LM_PAGES)
+            w.bad = 1;
+        break;
+    case R4P_DESC_PARAM: {
+        const r4p_dparam_t *d = &m->u.dparam;
+        w14(&w, d->id); w8(&w, d->page); w8(&w, d->kind); w8(&w, d->flags); w8(&w, d->step);
+        ws14(&w, d->lo); ws14(&w, d->hi); ws14(&w, d->def); w8(&w, d->nlabels);
+        wstr_n(&w, d->name, R4P_LM_STR); wstr_n(&w, d->unit, R4P_LM_UNIT);
+        ws14(&w, d->value); wstr_n(&w, d->text, R4P_LM_STR);
+        if (!dparam_ok(d))
+            w.bad = 1;
+        break;
+    }
+    case R4P_DESC_LABELS: {
+        const r4p_dlabels_t *l = &m->u.dlabels;
+        w14(&w, l->id); w8(&w, l->first); w8(&w, l->total); w8(&w, l->n);
+        if (!l->n || l->n > R4P_LM_LROWS || l->total > R4P_LM_LABELS || (unsigned)l->first + l->n > l->total)
+            w.bad = 1;
+        for (i = 0; i < l->n && i < R4P_LM_LROWS; i++)
+            wstr_n(&w, l->label[i], R4P_LM_STR);
+        break;
+    }
+    case R4P_PVAL: {
+        const r4p_pval_t *q = &m->u.pval;
+        w8(&w, q->mode); w8(&w, q->n);
+        if (!mode_id_ok(q->mode) || !q->n || q->n > R4P_PVAL_MAX)
+            w.bad = 1;
+        for (i = 0; i < q->n && i < R4P_PVAL_MAX; i++) {
+            w14(&w, q->id[i]); ws14(&w, q->v[i]); wstr_n(&w, q->text[i], R4P_LM_STR);
+        }
+        break;
+    }
+    case R4P_LSTATE: {
+        const r4p_lstate_t *q = &m->u.lstate;
+        w8(&w, q->mode); w8(&w, q->flags); w8(&w, q->n);
+        if (!mode_id_ok(q->mode) || (q->flags & ~R4P_LS_ALL) || q->n > R4P_LM_NSTATE)
+            w.bad = 1;
+        for (i = 0; i < q->n && i < R4P_LM_NSTATE; i++)
+            wstr_n(&w, q->text[i], R4P_LM_STR);
+        break;
+    }
+    case R4P_LM_ERR:
+        w8(&w, m->u.lerr.mode); w8(&w, m->u.lerr.code); w14(&w, m->u.lerr.id);
+        if (!mode_id_ok(m->u.lerr.mode) || !m->u.lerr.code || m->u.lerr.code >= R4P_LE_COUNT)
+            w.bad = 1;
+        break;
+    case R4P_MODES_REQ:
+        break;
+    case R4P_MODE_SET: case R4P_DESC_REQ: case R4P_VALS_REQ:
+        w8(&w, m->u.b1.v);
+        if (!mode_id_ok(m->u.b1.v))
+            w.bad = 1;
+        break;
+    case R4P_PSET: {
+        const r4p_pset_t *q = &m->u.pset;
+        w8(&w, q->mode);
+        if (!mode_id_ok(q->mode) || !q->n || q->n > R4P_PSET_MAX)
+            w.bad = 1;
+        for (i = 0; i < q->n && i < R4P_PSET_MAX; i++) {
+            w14(&w, q->id[i]); ws14(&w, q->v[i]);
+        }
+        break;
+    }
     default:
         return 0;
     }
     if (w.n >= w.cap)
         w.bad = 1;
+    if (m->cmd >= R4P_MODES && m->cmd <= R4P_LM_ERR && w.n + 1u > R4P_DEV_MAX)
+        w.bad = 1;                                   /* (1.4 device frames fit the Bluetooth queue whole) */
     if (w.bad)
         return 0;
     w.b[w.n++] = 0xF7;
@@ -322,6 +446,7 @@ static void rstr_n(rd_t *r, char *dst, unsigned max)
     dst[r->bad ? 0 : n] = 0;
 }
 static void rstr(rd_t *r, char *dst) { rstr_n(r, dst, R4P_STR_MAX); }
+static int rs14(rd_t *r) { return (int)r14(r) - 8192; }
 static void rbytes(rd_t *r, uint8_t *dst, unsigned n)
 {
     unsigned i;
@@ -596,6 +721,121 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
         if (out->u.b1.v > R4P_BK_FAILED)
             r.bad = 1;
         break;
+    /* ------------------------------------------------------------- 1.4 --- */
+    case R4P_MODES: {
+        r4p_modes_t *l = &out->u.modes;
+        for (i = 0; i < sizeof *l; i++)
+            ((uint8_t *)l)[i] = 0;
+        l->cur = (uint8_t)r8(&r); l->n = (uint8_t)r8(&r);
+        if (!l->n || l->n > R4P_MODES_MAX || !mode_id_ok(l->cur))
+            r.bad = 1;
+        for (i = 0; i < l->n && !r.bad; i++) {
+            l->m[i].id = (uint8_t)r8(&r); l->m[i].flags = (uint8_t)r8(&r);
+            if (!mode_id_ok(l->m[i].id) || l->m[i].flags > 7u)
+                r.bad = 1;
+            rstr_n(&r, l->m[i].name, R4P_LM_MNAME);
+        }
+        break;
+    }
+    case R4P_MODE: case R4P_DESC_END:
+        out->u.mode.mode = (uint8_t)r8(&r);
+        out->u.mode.flags = out->cmd == R4P_MODE ? (uint8_t)r8(&r) : 0u;
+        out->u.mode.hash = rcrc(&r);
+        if (!mode_id_ok(out->u.mode.mode) || out->u.mode.flags > 7u)
+            r.bad = 1;
+        break;
+    case R4P_DESC_HEAD: {
+        r4p_dhead_t *d = &out->u.dhead;
+        for (i = 0; i < sizeof *d; i++)
+            ((uint8_t *)d)[i] = 0;
+        d->mode = (uint8_t)r8(&r); d->hash = rcrc(&r); d->npages = (uint8_t)r8(&r); d->nparams = (uint16_t)r14(&r);
+        d->nstate = (uint8_t)r8(&r);
+        if (!mode_id_ok(d->mode) || d->npages > R4P_LM_PAGES || d->nparams > R4P_LM_PARAMS || d->nstate > R4P_LM_NSTATE)
+            r.bad = 1;
+        rstr_n(&r, d->title, R4P_LM_STR);
+        for (i = 0; i < d->nstate && !r.bad; i++)
+            rstr_n(&r, d->state[i], R4P_LM_STR);
+        break;
+    }
+    case R4P_DESC_PAGE:
+        out->u.dpage.page = (uint8_t)r8(&r);
+        if (out->u.dpage.page >= R4P_LM_PAGES)
+            r.bad = 1;
+        rstr_n(&r, out->u.dpage.title, R4P_LM_STR);
+        break;
+    case R4P_DESC_PARAM: {
+        r4p_dparam_t *d = &out->u.dparam;
+        d->id = (uint16_t)r14(&r); d->page = (uint8_t)r8(&r); d->kind = (uint8_t)r8(&r); d->flags = (uint8_t)r8(&r);
+        d->step = (uint8_t)r8(&r);
+        d->lo = (int16_t)rs14(&r); d->hi = (int16_t)rs14(&r); d->def = (int16_t)rs14(&r); d->nlabels = (uint8_t)r8(&r);
+        rstr_n(&r, d->name, R4P_LM_STR); rstr_n(&r, d->unit, R4P_LM_UNIT);
+        d->value = (int16_t)rs14(&r);
+        rstr_n(&r, d->text, R4P_LM_STR);
+        if (!r.bad && !dparam_ok(d))
+            r.bad = 1;
+        break;
+    }
+    case R4P_DESC_LABELS: {
+        r4p_dlabels_t *l = &out->u.dlabels;
+        for (i = 0; i < sizeof *l; i++)
+            ((uint8_t *)l)[i] = 0;
+        l->id = (uint16_t)r14(&r); l->first = (uint8_t)r8(&r); l->total = (uint8_t)r8(&r); l->n = (uint8_t)r8(&r);
+        if (!l->n || l->n > R4P_LM_LROWS || l->total > R4P_LM_LABELS || (unsigned)l->first + l->n > l->total)
+            r.bad = 1;
+        for (i = 0; i < l->n && !r.bad; i++)
+            rstr_n(&r, l->label[i], R4P_LM_STR);
+        break;
+    }
+    case R4P_PVAL: {
+        r4p_pval_t *q = &out->u.pval;
+        q->mode = (uint8_t)r8(&r); q->n = (uint8_t)r8(&r);
+        if (!mode_id_ok(q->mode) || !q->n || q->n > R4P_PVAL_MAX)
+            r.bad = 1;
+        for (i = 0; i < q->n && !r.bad; i++) {
+            q->id[i] = (uint16_t)r14(&r); q->v[i] = (int16_t)rs14(&r); rstr_n(&r, q->text[i], R4P_LM_STR);
+        }
+        break;
+    }
+    case R4P_LSTATE: {
+        r4p_lstate_t *q = &out->u.lstate;
+        q->mode = (uint8_t)r8(&r); q->flags = (uint8_t)r8(&r); q->n = (uint8_t)r8(&r);
+        if (!mode_id_ok(q->mode) || (q->flags & ~R4P_LS_ALL) || q->n > R4P_LM_NSTATE)
+            r.bad = 1;
+        for (i = 0; i < q->n && !r.bad; i++)
+            rstr_n(&r, q->text[i], R4P_LM_STR);
+        break;
+    }
+    case R4P_LM_ERR:
+        out->u.lerr.mode = (uint8_t)r8(&r); out->u.lerr.code = (uint8_t)r8(&r); out->u.lerr.id = (uint16_t)r14(&r);
+        if (!mode_id_ok(out->u.lerr.mode) || !out->u.lerr.code || out->u.lerr.code >= R4P_LE_COUNT)
+            r.bad = 1;
+        break;
+    case R4P_MODES_REQ:
+        break;
+    case R4P_MODE_SET: case R4P_DESC_REQ: case R4P_VALS_REQ:
+        out->u.b1.v = (uint8_t)r8(&r);
+        if (!mode_id_ok(out->u.b1.v))
+            r.bad = 1;
+        break;
+    case R4P_PSET: {
+        r4p_pset_t *q = &out->u.pset;
+        q->mode = (uint8_t)r8(&r);
+        q->n = 0;
+        if (!mode_id_ok(q->mode))
+            r.bad = 1;
+        while (r.at < r.n && !r.bad) {
+            if (q->n >= R4P_PSET_MAX) {
+                r.bad = 1;
+                break;
+            }
+            q->id[q->n] = (uint16_t)r14(&r);
+            q->v[q->n] = (int16_t)rs14(&r);
+            q->n++;
+        }
+        if (!q->n)
+            r.bad = 1;
+        break;
+    }
     default:
         return -1;
     }
@@ -667,6 +907,57 @@ uint32_t r4p_crc32_part(uint32_t crc, const r4p_voice_t *part)
     h[0] = part->idx;
     h[1] = part->used;
     return r4p_crc32(r4p_crc32(crc, h, 2), part->data, R4P_PACKED);
+}
+
+uint32_t r4p_fnv(uint32_t h, const uint8_t *p, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++)
+        h = (h ^ p[i]) * 0x01000193u;
+    return h;
+}
+/* the length of a string field on the wire at p (its length byte, then its characters, an escaped one two bytes);
+ * 0 when it does not fit in n */
+static size_t str_span(const uint8_t *p, size_t n)
+{
+    size_t k, at = 1, c;
+    if (!n)
+        return 0;
+    for (k = p[0], c = 0; c < k; c++) {
+        if (at >= n)
+            return 0;
+        at += p[at] == 0x7Fu ? 2u : 1u;
+    }
+    return at <= n ? at : 0;
+}
+uint32_t r4p_desc_hash_add(uint32_t h, const uint8_t *f, size_t n)
+{
+    size_t at, s;
+    if (n < 7 || f[0] != 0xF0 || f[n - 1] != 0xF7)
+        return h;
+    switch (f[4]) {
+    case R4P_DESC_HEAD:                              /* cmd, mode | 5 hash bytes | the rest */
+        if (n < 13)
+            return h;
+        h = r4p_fnv(h, f + 4, 2);
+        return r4p_fnv(h, f + 11, n - 12);
+    case R4P_DESC_PAGE: case R4P_DESC_LABELS:
+        return r4p_fnv(h, f + 4, n - 5);
+    case R4P_DESC_PARAM:                             /* cmd, the 13 fixed bytes, name, unit | value, text */
+        at = 5 + 13;
+        if (at >= n - 1)
+            return h;
+        s = str_span(f + at, n - 1 - at);            /* name */
+        if (!s)
+            return h;
+        at += s;
+        s = str_span(f + at, n - 1 - at);            /* unit */
+        if (!s)
+            return h;
+        return r4p_fnv(h, f + 4, at + s - 4);
+    default:
+        return h;
+    }
 }
 
 void r4p_enc_add(r4p_enc_acc_t *a, uint8_t id, int delta)

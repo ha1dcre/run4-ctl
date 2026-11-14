@@ -1,4 +1,11 @@
-# RUN4 CTL protocol v1 (minor 3)
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Copyright (c) 2026 Eugen Schott -->
+
+# RUN4 CTL protocol v1 (minor 4)
+
+This document and the reference codec (`src/r4p.h`, `src/r4p.c`) are under the MIT licence (`LICENSE-MIT`), so any
+firmware or device can implement RUN4 CTL; the rest of RUN4 CTL stays GPL-3.0. See "Implementing RUN4 CTL in your own
+firmware or device" at the end.
 
 The FM-1 running RUN4 CTL is a terminal: it reports what the player touches and draws what the iOS app RUN4 tells it
 to. This file is the contract between the two. The reference implementation is one codec, `src/r4p.h` / `src/r4p.c`
@@ -20,8 +27,9 @@ cross-check it.
   and F7 (513 between them); with the protocol 1.2 trailer (a 24-character escaped path) **569 bytes** (567 between
   them), below the 640 bytes fm1-base's USB-MIDI SysEx buffer takes (`HOST_SX_MAX`, the same as
   the device's). The codec test asserts it (`tests/r4p_test.c`, "max PAGE frame"). Frames **from the device** are at most
-  136 bytes (protocol 1.3: VOICE_DATA, BK_PART), so one always fits whole in the Bluetooth MIDI out queue (64 packets of
-  3 bytes = 192) and in the USB SysEx ring (128 packets = 384); the device sends a frame only when it fits whole.
+  136 bytes (protocol 1.3: VOICE_DATA, BK_PART; 1.4: every frame, the encoder refuses a longer one), so one always fits
+  whole in the Bluetooth MIDI out queue (64 packets of 3 bytes = 192) and in the USB SysEx ring (128 packets = 384); the
+  device sends a frame only when it fits whole.
 * Coexistence: fm1-base reserves SysEx under `7D 4C ..` (sub-IDs `43` remote control, `47` crash log, `48` crash history,
   `53` debug stats, `57` WiFi, `41` Bluetooth audio, `44` Bluetooth devices) and `7D 53 52 ..` (fm1-reader's screen
   reader); its updater uses `F0 22 24 35 ..` and a `F0 pack7(00 59 ..)` framing (the screen mirror reuses the latter). `7D 52 34` collides
@@ -32,7 +40,7 @@ cross-check it.
 
 | cmd | name | payload |
 | --- | --- | --- |
-| 0x01 | HELLO | `proto_ver, fw_major, fw_minor, mode, [proto_minor]` (mode 0 = RUN4, 1 = a local mode: Synth or, since firmware 0.7, AMB; `proto_minor` since 1.1, absent = 0) |
+| 0x01 | HELLO | `proto_ver, fw_major, fw_minor, mode, [proto_minor]` (mode 0 = RUN4, 1 = a local mode: Synth or, since firmware 0.7, AMB - which one: 1.4's MODE; `proto_minor` since 1.1, absent = 0) |
 | 0x02 | BTN | `id (0..13), state (1 down / 0 up)` |
 | 0x03 | ENC | `id (0..6), delta` |
 | 0x04 | POT | `value14` (MASTER) |
@@ -44,6 +52,16 @@ cross-check it.
 | 0x0A | BK_PART | `k, used, 128 bytes` - 1.3, "Patch backup" |
 | 0x0B | BK_END | `count, crc (5 bytes)` - 1.3 |
 | 0x0C | BK_GET | `k` (0..31, 127 = the summary) - 1.3 |
+| 0x0D | MODES | `cur, n, n x (id, flags, name(str))` - 1.4, "Local modes" |
+| 0x0E | MODE | `mode, flags, hash (5 bytes)` - 1.4 |
+| 0x0F | DESC_HEAD | `mode, hash (5), npages, nparams14, nstate, title(str), nstate x label(str)` - 1.4 |
+| 0x10 | DESC_PAGE | `page, title(str)` - 1.4 |
+| 0x11 | DESC_PARAM | `id14, page, kind, flags, step, lo, hi, def (s14 each), nlabels, name(str), unit(str), value (s14), text(str)` - 1.4 |
+| 0x12 | DESC_LABELS | `id14, first, total, n, n x label(str)` - 1.4 |
+| 0x13 | DESC_END | `mode, hash (5)` - 1.4 |
+| 0x14 | PVAL | `mode, n, n x (id14, value s14, text(str))` - 1.4 |
+| 0x15 | LSTATE | `mode, flags, n, n x text(str)` - 1.4 |
+| 0x16 | LM_ERR | `mode, code, id14` - 1.4 |
 
 Button ids follow fm1-base `plat.h`: 0 FX, 1 SEL, 2 ENV, 3 LFO, 4 EDIT, 5 GLO, 6 HOME, 7 SAVE, 8 ARP, 9 SEQ, 10 PLAY,
 11 REC, 12 OCT-, 13 OCT+. Encoder ids: 0 SELECT, 1 ALGO, 2 PRESETS, 3..6 K1..K4.
@@ -89,6 +107,11 @@ while a key is held leaves no stuck note.
 | 0x51 | BK_ACK | `status` - 1.3, "Patch backup" |
 | 0x52 | BK_INFO | `count, crc (5 bytes)` - 1.3 |
 | 0x53 | BK_DATA | `k, used, 128 bytes` - 1.3 |
+| 0x54 | MODES_REQ | none - 1.4 |
+| 0x55 | MODE_SET | `mode` - 1.4 |
+| 0x56 | DESC_REQ | `mode` - 1.4 |
+| 0x57 | VALS_REQ | `mode` - 1.4 |
+| 0x58 | PSET | `mode, n x (id14, value s14)`, n 1..16 - 1.4 |
 
 Protocol 1.2 adds optional trailers (see "Protocol 1.2: where you are"): PAGE may end with
 `cursor item_idx14 item_count14 path(str)`, VALUE with `flags`.
@@ -169,7 +192,7 @@ view switches to it. Everything is redrawn by region (no full-screen clear).
 Version 1.3 adds four things: the **host voice** (the FM-1's own FM engine as an instrument of a RUN4 track, also in
 RUN4 mode), the **voice list** (the FM-1's 40 voice names and their data), the **tape view** (a waveform, playhead and
 meters drawn on the FM-1) and the **patch backup** (the 32 user voices kept by the host). It is backwards compatible:
-`proto_ver` stays 1, the firmware's HELLO says minor 3, and a host that speaks 1.3 answers **HELLO_ACK `01 03`**.
+`proto_ver` stays 1, the firmware's HELLO says minor 3 (4 since 1.4), and a host that speaks 1.3 answers **HELLO_ACK `01 03`**.
 
 * The device **sends** 1.3 frames (HV_STATE, VOICE_NAMES, VOICE_DATA, BK_PART, BK_END, BK_GET) only to a host whose
   last HELLO_ACK said minor 3 or more. A 1.0 / 1.1 / 1.2 host sees no change at all (its layout is never the tape
@@ -295,8 +318,8 @@ Sent after each HV_ON and HV_VOICE, when the FM-1 switches to Synth mode while t
 the HELLO with mode 1), and after each HELLO_ACK while it is on (state 1 in RUN4 mode, 2 in Synth mode).
 
 **AMB mode (firmware 0.7).** The FM-1 has a third mode, AMB (a generative ambient machine, MANUAL "AMB mode"). Its
-HELLO says mode 1, as Synth mode's: for the host both are a local mode that sounds on its own, nothing to draw or
-sync, the host voice suspended (HV_STATE 2), SEL + REC / SEL + PLAY sent as BTN 11 / 10, the sound on the USB audio
+HELLO says mode 1, as Synth mode's (a 1.4 host learns which from MODE and can describe and control both, "Protocol
+1.4"): for the host both are a local mode that sounds on its own, nothing to draw or sync, the host voice suspended (HV_STATE 2), SEL + REC / SEL + PLAY sent as BTN 11 / 10, the sound on the USB audio
 input as ever. Nothing new on the wire; a host needs no change. In AMB mode a MIDI clock from the host drives the
 garden (START grows it, STOP rests it), and a note on channel 1 changes its scale (unless it is the host voice's
 channel: those notes are ignored there); its MIDI OUT is off unless the player sets it (clock, or notes on channels 1,
@@ -413,12 +436,282 @@ in RAM until SAVE; a voice that sounds keeps sounding (the restore changes the s
 A host that does not take part (1.2) is never sent BK frames: the device says NO HOST at once. A backup is 33 frames
 from the device, a restore 33 request / answer round trips.
 
+## Protocol 1.4: local modes
+
+Version 1.4 lets the host pick the FM-1's mode and remote-control its **local modes** (Synth, AMB, and any later one)
+without knowing them in advance: the device lists its modes, switches on request, describes the playing local mode
+(pages, parameters, their kinds, ranges, labels, values and the text it shows for them) and reports value changes and
+a short status line. A host built on this document needs no update for a new mode or a new parameter; it caches a
+description by its hash. First use: RUN4 picks AMB, and records it into a Tape over the USB audio input.
+
+It is backwards compatible: `proto_ver` stays 1, the firmware's HELLO says minor 4, and a host that speaks 1.4 answers
+**HELLO_ACK `01 04`**. The device sends the 1.4 frames (MODES, MODE, DESC_*, PVAL, LSTATE, LM_ERR) only to a host whose
+last HELLO_ACK said minor 4 or more; a 1.0 .. 1.3 host sees exactly what it saw before. The device takes the 1.4 host
+frames from any host after its HELLO_ACK (a MODE_SET from a 1.3 host switches the mode, and the HELLO handshake follows
+as for SEL + HOME); before the HELLO_ACK they are ignored.
+
+### Values on the wire
+
+* **s14**: a signed value, `v + 8192` as a 14-bit value (two 7-bit bytes, MSB first): -8192 .. 8191. `00 00` is -8192,
+  `40 00` is 0, `7F 7F` is 8191.
+* **id14**: a parameter's id, 0..16383, plain 14-bit.
+* **hash (5)**: 32 bits as five 7-bit groups, lowest first (as BK_END's CRC; the fifth group 0..15).
+* Strings as everywhere (length byte, Latin-1 escape), with these maxima: mode names 12 characters, parameter names,
+  page titles, labels, value texts, the description's title and the state texts 16, units 8. The reader refuses a
+  longer string (the frame is malformed); the encoder cuts.
+* Every 1.4 frame from the device is at most **136 bytes** (F0 and F7 included). Where a frame carries a variable
+  number of entries (DESC_LABELS, PVAL), the device puts in as many as fit, up to the maximum below.
+
+### Modes
+
+| id | name | flags | what it is |
+| --- | --- | --- | --- |
+| 0 | RUN4 | AVAIL, CTRL | the controller: the host draws its pages (1.0 .. 1.3). No description |
+| 1 | SYNTH | AVAIL, DESC | Synth mode, described (below) |
+| 2 | AMB | AVAIL, DESC; in the package without AMB (`app-noamb`): **0** (listed, not available) | AMB mode, described (below) |
+
+Mode ids are stable; a later mode takes the next free id (3, 4, ...), up to 126. **Flags** (MODES, MODE): bit 0
+**AVAIL** = this firmware has the mode, bit 1 **DESC** = it is described (DESC_REQ works), bit 2 **CTRL** = the
+controller mode (the host draws: PAGE, LEDS, STATUS ...). Other bits 0. HELLO's `mode` byte stays as in 1.0: 0 in the
+CTRL mode, 1 in any local mode.
+
+**MODES_REQ (0x54)** - host to device, no payload. Answer: **MODES (0x0D)** `cur, n, n x (id, flags, name(str))`: the
+mode playing and every mode the firmware knows, available or not, in id order (`1 <= n <= 8`).
+
+**MODE_SET (0x55)** `mode` - host to device: switch to that mode, exactly as SEL + HOME to it would (held keys
+released, the old mode stopped and its settings saved as at a switch on the device, AMB grows 0.7 s after it comes in,
+the SETUP page, a LIST or a help card are closed). It is carried out at the next pass of the device's main loop.
+Answers: MODE (also when the mode is already playing); `LM_ERR NOMODE` for an id that is not AVAIL here (the mode does
+not change).
+
+**MODE (0x0E)** `mode, flags, hash` - device to host: the mode now playing, its flags and its description's hash
+(0 = no description: RUN4 mode). Sent to a 1.4 host:
+
+* after each HELLO_ACK with minor >= 4, in every mode (in RUN4 mode after the SYNC_REQ and the POT);
+* after every mode change, the player's (SEL + HOME) or the host's (MODE_SET);
+* in answer to a MODE_SET, and after an `LM_ERR WRONGMODE`.
+
+**The link stays across a mode change (1.4 host only).** With a host whose last HELLO_ACK said minor 4 or more the
+device does not drop to "not connected" and sends no HELLO at a mode switch: it sends MODE. Into RUN4 mode it also
+does what a HELLO_ACK does: SYNC_REQ and a POT (the host sends PAGE, LEDS, STATUS, the tape view and the host voice's
+HV_ON / HV_VOICE / HV_PARAM again, as after any SYNC_REQ), HV_STATE 1 when the host voice is on. Out of RUN4 mode:
+HV_STATE 2 (host voice on) and MODE; the host stops drawing. With a 1.0 .. 1.3 host a switch is the HELLO handshake as
+before (section "Two modes").
+
+### The description
+
+**DESC_REQ (0x56)** `mode` - host to device: describe the mode playing. `mode` must be the one playing (else
+`LM_ERR WRONGMODE` and a MODE), and it must have a description (else `LM_ERR NODESC`). The device answers with the
+description, in this order, nothing else of 1.4 in between except LM_ERR, MODE and MODES:
+
+1. **DESC_HEAD (0x0F)** `mode, hash (5), npages, nparams14, nstate, title(str), nstate x label(str)` - npages 0..32,
+   nparams 0..1024, nstate 0..4: the labels of LSTATE's texts (AMB: PIECE, CHORD, SCALE, STATE).
+2. **DESC_PAGE (0x10)** `page, title(str)` for page = 0 .. npages-1 in order.
+3. For each parameter in the device's order: **DESC_PARAM (0x11)**, then, when it has labels, its **DESC_LABELS
+   (0x12)** frames, `first` = 0, 8, 16 ... in order.
+4. **DESC_END (0x13)** `mode, hash (5)`, then an LSTATE.
+
+A DESC_REQ while a description goes out starts it over. A mode change ends it (MODE follows): a host drops what it has
+of an unfinished description when a MODE or a new DESC_HEAD arrives. The host checks at DESC_END: npages pages,
+nparams parameters, every parameter's `nlabels` labels, unique ids, the hash it worked out = DESC_HEAD's = DESC_END's
+= MODE's; else it asks again.
+
+**DESC_PARAM (0x11)**: `id14, page, kind, flags, step, lo s14, hi s14, def s14, nlabels, name(str), unit(str),
+value s14, text(str)`.
+
+| field | meaning |
+| --- | --- |
+| `id` | stable for the mode: the host may keep it (a host's mapping, a stored setting); never reused for another meaning |
+| `page` | the page it sits on, 0..npages-1 |
+| `kind` | 0 NUMBER, 1 ENUM, 2 TOGGLE, 3 ACTION, 4 MASK (below) |
+| `flags` | bit 0 READONLY (shown, not set), bit 1 AUTO (it changes by itself: a clock, a drift, the generative engine), bit 2 BIPOLAR (draw it from the middle, 0 at the centre) |
+| `step` | 1..127: a value the host sets is `lo + k x step` |
+| `lo`, `hi`, `def` | the range and the default (`lo <= def <= hi`) |
+| `nlabels` | how many labels follow in DESC_LABELS (0..127) |
+| `name`, `unit` | e.g. `LEVEL`, `ct`. The unit is a hint for the host's own editor; what the device shows is `text` |
+| `value`, `text` | the value now and the text the device shows for it (`39S`, `1 BAR`, `+10`, `GROWING`): the host shows `text`, it never formats a value of a mode it does not know |
+
+| kind | values | labels | set by the host |
+| --- | --- | --- | --- |
+| NUMBER | `lo..hi` | 0 | any `lo + k x step` |
+| ENUM | `lo..hi`, `hi - lo + 1 = nlabels` | label k = value `lo + k` | any value |
+| TOGGLE | `lo` 0, `hi` 1 | 0, or 2 (label 0 = off, 1 = on) | 0 or 1 |
+| ACTION | `lo` 0, `hi` 1, `def` 0, the value always 0 | 0 | **1 fires it** (0 is RANGE) |
+| MASK | `lo` 0, `hi` = 2^nlabels - 1, nlabels 1..13 | label k = bit k | any bit pattern (the mode may refuse some: REFUSED) |
+
+A frame that breaks these rules is malformed (dropped by the reader). The reader takes ENUM, MASK and TOGGLE's labels
+as text for the host's UI (e.g. a list of pieces); ACTIONs are buttons; a READONLY parameter is shown only.
+
+**The hash** (FNV-1a 32: start 0x811C9DC5, per byte `h = (h XOR b) x 0x01000193 mod 2^32`) runs over the description's
+frames in the order they are sent, over these bytes of each (as encoded on the wire): DESC_HEAD from its cmd byte to
+the end of the payload **without** its five hash bytes (cmd, mode, then npages ..); DESC_PAGE and DESC_LABELS from cmd
+to the end of the payload; DESC_PARAM from cmd up to the end of `unit` (**without** `value` and `text`). DESC_END and
+F0 / F7 are not in it. A result of 0 is sent as 1 (0 means "no description"). So the hash changes with anything static
+in the description (a renamed parameter, a new label, another range) and not with the values; a host that has a
+description with that hash (from MODE) may skip DESC_REQ and send VALS_REQ. The codec has it as `r4p_desc_hash_add`.
+
+### Values and the status line
+
+**VALS_REQ (0x57)** `mode` - host to device: the values of every parameter again (a host with the description cached).
+Same checks as DESC_REQ. The device answers with PVAL frames for every parameter (but the ACTIONs) and an LSTATE.
+
+A DESC_REQ or VALS_REQ **subscribes** the host: from then on, until the next mode change, HELLO_ACK or new link, the
+device sends what changes. A host that never asks gets no PVAL or LSTATE.
+
+**PVAL (0x14)** `mode, n, n x (id14, value s14, text(str))` - device to host, n 1..6: values that changed, whatever
+changed them (the host's PSET, the device's knobs and keys, a piece change, the clock, a drift). The device looks for
+changes at most every **67 ms (15 a second)** and sends only the parameters whose value differs from the one it last
+sent (or never sent), so each parameter is told at most 15 times a second and a host's own PSET comes back once (its
+**echo**, with the device's text). A value the host sets to what it already was is not echoed. ACTIONs are never in a
+PVAL. A pass that finds more than fits goes on in the next frames at once.
+
+**LSTATE (0x15)** `mode, flags, n, n x text(str)` - device to host, n 0..4: the status line, its texts labelled by
+DESC_HEAD's state labels. Sent after DESC_END and VALS_REQ, then when anything in it changes, at most every 67 ms.
+`flags`: bit 0 PLAYING (growing / the sequencer runs), bit 1 FROZEN, bit 2 EXT CLOCK (a MIDI clock comes in and leads),
+bit 3 WAKING (it will grow in a moment: AMB just came in), bit 4 RECORDING (Synth mode's sequencer records). Other bits 0.
+
+**PSET (0x58)** `mode, n x (id14, value s14)` - host to device, 1..16 pairs: set parameters, fire actions, applied in
+order. The whole frame is checked first: `mode` must be the one playing (else `LM_ERR WRONGMODE`, id 0, and a MODE),
+the mode described (else NODESC); for each pair the id known (else UNKNOWN), not READONLY (else READONLY), the value in
+`lo..hi` and on a step, an ACTION's value 1 (else RANGE). **One bad pair and no pair of the frame is applied** (the
+LM_ERR names the first). Then each pair is applied; one the mode refuses in its state (REFUSED, CLOCK) is skipped with
+its LM_ERR, the others are applied. No other answer: the changed values come back as PVAL. Send changes only,
+coalesced to the latest value, at most 30 PSET frames a second in all (put several pairs in one frame); over Bluetooth
+not in bursts (one frame at a time, see "Bluetooth MIDI").
+
+**LM_ERR (0x16)** `mode, code, id14` - device to host: `mode` = the mode playing, `id` = the parameter concerned
+(0 when none). At most four wait; more in a burst are dropped.
+
+| code | name | when |
+| --- | --- | --- |
+| 1 | NOMODE | MODE_SET: no such mode, or not in this firmware (AMB in `app-noamb`) |
+| 2 | WRONGMODE | DESC_REQ / VALS_REQ / PSET name another mode than the one playing (a MODE follows) |
+| 3 | NODESC | DESC_REQ / VALS_REQ / PSET in a mode without a description (RUN4) |
+| 4 | UNKNOWN | PSET: no parameter with that id |
+| 5 | RANGE | PSET: outside `lo..hi`, off the step, an ACTION with a value other than 1 |
+| 6 | READONLY | PSET: a READONLY parameter |
+| 7 | REFUSED | PSET: in range but not now (AMB: a note mask without the root or with fewer than three notes; Synth: an empty user voice) |
+| 8 | CLOCK | PSET: the transport (AMB's GROW, Synth's PLAY) while a MIDI clock leads it (below) |
+| 9 | BUSY | reserved |
+
+### Sequences
+
+* **Connect (1.4 host).** Device HELLO (minor 4) -> host HELLO_ACK `01 04` -> device (RUN4 mode: SYNC_REQ, POT, then)
+  MODE. In a local mode the host then sends DESC_REQ (or VALS_REQ if it has MODE's hash cached) -> description ->
+  LSTATE -> PVAL / LSTATE as things change.
+* **The host picks AMB.** MODES_REQ -> MODES; MODE_SET 2 -> MODE `02 03 hash`; DESC_REQ 2 (or VALS_REQ 2) -> ... AMB
+  grows 0.7 s after it came in (LSTATE WAKING, then PLAYING; PVAL GROW 1).
+* **The player switches on the device** (SEL + HOME): MODE with the new mode; the subscription ends. Into RUN4 mode:
+  SYNC_REQ, POT, MODE; the host resyncs as after any SYNC_REQ. Into a local mode: the host asks DESC_REQ / VALS_REQ.
+* **Resync after SYNC_REQ.** A SYNC_REQ comes only in RUN4 mode (after a HELLO_ACK or a switch into it): the host
+  sends the page, LEDS, STATUS and the host voice as in 1.3; nothing of 1.4 is owed then. In a local mode a host that
+  lost track (a replug, its own restart) sends HELLO_ACK `01 04` -> MODE, then DESC_REQ / VALS_REQ.
+* **A new link** (cable, Bluetooth): HELLO again; nothing is subscribed, a MODE_SET not yet carried out is forgotten.
+
+Sizes: AMB's description is 57 frames, 1,707 bytes (the longest frame 78 bytes); Synth mode's 187 frames, 5,751 bytes
+(measured in the simulator, `tests/scenarios/31_modes.txt`). The device sends up to four 1.4 frames per pass of its
+main loop as the link has room, behind the button events and the 1.3 answers (HV_STATE, then MODE / MODES / LM_ERR,
+then VOICE_DATA, VOICE_NAMES, the backup, then the description, PVAL, LSTATE). Over USB a description takes a few
+frames of the main loop; over Bluetooth it is paced by the 64-packet queue (not measured on a device).
+
+### AMB's description (mode 2)
+
+8 pages: 0 PLAY, 1 GARDEN, 2 PAD, 3 BELLS, 4 BASS, 5 PULSE, 6 SPACE, 7 KEY (pages 1..7 are the device's pages, their
+four knobs in knob order). 35 parameters; ids 0..27 are AMB's engine parameters (`src/amb/amb.h` P_*), 32..38 the
+PLAY page's. State texts: PIECE (`GARDEN`), CHORD (`Em7`), SCALE (`D DORIAN`, `D CUSTOM`), STATE (`GROWING`,
+`RESTING`, `FROZEN`, `EXT CLOCK`, `WAKING`). The pieces keep every value per piece (a piece change sends all of them).
+
+| id | page | name | kind | range (def) | notes |
+| --- | --- | --- | --- | --- | --- |
+| 32 | PLAY | PIECE | ENUM | 0..7 (0) GARDEN DEPARTURES VOICES AFTERNOON NIGHT BUS SHORELINE GLASS TIDES | as PRESETS: the piece as it was left |
+| 33 | PLAY | NOTES | MASK | 12 bits, bit k = pitch class k (C, C#, D, Eb ... B) (0xAB5) | the scale as the keys toggle it. REFUSED without the root or with fewer than 3 notes. Text `7 NOTES` |
+| 34 | PLAY | GROW | TOGGLE, AUTO | RESTING / GROWING (1) | PLAY: grows / rests (the tails ring on). CLOCK while a MIDI clock runs (below). Text `WAKING` while it is about to grow |
+| 35 | PLAY | FREEZE | TOGGLE | OFF / ON (0) | REC: the chord held, the plate rings on |
+| 36 | PLAY | NEXT CHORD | ACTION | | EDIT: the next chord, on the next bar while growing |
+| 37 | PLAY | SAVE | ACTION | | SAVE: the pieces into the store |
+| 38 | PLAY | RESET PIECE | ACTION | | SAVE held: the piece back to its recipe (not saved until SAVE) |
+| 18 | GARDEN | TEMPO | NUMBER | 30..120 (72) BPM | (a running MIDI clock's tempo leads) |
+| 5 | GARDEN | EVOLVE | NUMBER | 0..100 (35) | |
+| 15 | GARDEN | MOTION | NUMBER | 0..100 (50) | |
+| 6 | GARDEN | DRIFT | NUMBER | 0..100 (25) | text 20S .. 5:00 |
+| 0 | PAD | LEVEL | NUMBER | 0..100 (60) | |
+| 13 | PAD | SWELL | NUMBER | 0..100 (60) | |
+| 12 | PAD | BRIGHT | NUMBER | 0..100 (40) | |
+| 22 | PAD | COLOUR | ENUM | RHODES VOICES (0) | |
+| 1 | BELLS | LEVEL | NUMBER | 0..100 (65) | |
+| 4 | BELLS | DENSITY | NUMBER | 0..100 (40) | |
+| 14 | BELLS | TONE | NUMBER | 0..100 (50) | |
+| 21 | BELLS | OCTAVE | NUMBER, BIPOLAR | -2..2 (0) oct | OCT- / OCT+ |
+| 2 | BASS | LEVEL | NUMBER | 0..100 (45) | |
+| 23 | BASS | OCTAVE | NUMBER, BIPOLAR | -1..1 (0) oct | |
+| 24 | BASS | GLIDE | NUMBER | 0..100 (20) | |
+| 25 | BASS | FIFTH | NUMBER | 0..100 (35) | |
+| 3 | PULSE | LEVEL | NUMBER | 0..100 (40) | |
+| 7 | PULSE | HITS | NUMBER | 0..100 (35) | |
+| 26 | PULSE | SWING | NUMBER | 0..100 (0) | text 50% .. 75% |
+| 27 | PULSE | HATS | NUMBER | 0..100 (50) | |
+| 8 | SPACE | ECHO | NUMBER | 0..100 (45) | |
+| 9 | SPACE | ECHO TIME | ENUM | 1/4. 1/2 1/2. 1 BAR 2 BARS 4 BARS (3) | |
+| 10 | SPACE | REVERB | NUMBER | 0..100 (65) | |
+| 11 | SPACE | SIZE | NUMBER | 0..100 (80) | |
+| 19 | KEY | ROOT | ENUM | C C# D Eb E F F# G Ab A Bb B (2) | the scale moves with it |
+| 16 | KEY | TUNE | NUMBER, BIPOLAR | -50..50 (0) ct | the player's, not the piece's |
+| 17 | KEY | MIDI OUT | ENUM | OFF CLOCK NOTES (0) | the player's, not the piece's |
+| 20 | KEY | SCALE | ENUM | IONIAN DORIAN PHRYGIAN LYDIAN MIXOLYD. AEOLIAN PENT MAJ PENT MIN CUSTOM (1) | 8 = CUSTOM: notes taken out or put in; setting 8 keeps the notes as they are |
+
+Every value the host sets goes into the piece playing (or the player's TUNE / MIDI OUT) and is saved as the device's
+own edits are (a few seconds later while resting; SAVE at once). The device redraws its page and shows the same
+toast as for its own buttons (GROWING, NEXT CHORD, SAVED ...).
+
+### Synth mode's description (mode 1)
+
+Built from Synth mode's own page table (`src/synth_ui.c` SP[]), so it is exactly what its pages edit. 14 pages:
+0 VOICE, 1 SYNTH, 2 MORPH, 3..8 OP1..OP6, 9 LFO, 10 EFFECTS, 11 GLOBAL, 12 ARP, 13 SEQ; 143 parameters. State texts:
+VOICE (`F4 BRASS SECT`), PATTERN (`PATTERN 1`), STATE (`PLAYING`, `STOPPED`, `EXT CLOCK`); flags PLAYING, RECORDING,
+EXT CLOCK.
+
+| ids | page | parameters |
+| --- | --- | --- |
+| 150, 151, 152 | VOICE | VOICE (1..40: F1..F8, U1..U32; text `F4 BRASS SECT`; an empty user slot is REFUSED), ALGORITHM (1..32), SAVE VOICE (ACTION: into this user slot or the first free one) |
+| 0..3 | SYNTH | BRIGHT (-64..63), FEEDBACK (0..7), ENV SPEED (-64..63), LEVEL (0..100 %) |
+| 4..7 | MORPH | MORPH (0..100 %, AUTO: a drift moves it), MODE (ENUM OFF KNOB 10 S .. 5 MIN), SET A, SET B (ACTIONs: the snapshot now) |
+| 16 + 16 x op + j | OP1..OP6 | j 0..7 the OPERATOR page (RATIO, FINE, LEVEL, DETUNE, MODE, VEL SENS, RATE SCALE, AMP MOD), j 8..15 the ENVELOPE page (RATE 1..4, LEVEL 1..4); op 0..5 = OP1..OP6 |
+| 112..119 | LFO | SPEED, DELAY, PITCH MOD, AMP MOD, WAVE, PITCH SENS, LFO SYNC, OSC SYNC |
+| 120..127 | EFFECTS | DRIVE, CHORUS, DELAY, REVERB, DELAY TIME, DELAY FDBK, REVERB TYPE, REVERB SIZE |
+| 128..133, 136..139 | GLOBAL | TRANSPOSE, TUNE, MIDI CH (0 = OMNI), BEND RANGE, VELOCITY, MUTATE; SCALE, ROOT, KEY MODE, MIDI IN |
+| 140..147 | ARP | ARP, MODE, RATE, OCTAVES, GATE, CHORD, INVERSION, SPREAD |
+| 153, 154 | SEQ | PLAY (TOGGLE STOPPED / PLAYING, AUTO; CLOCK while a MIDI clock leads), TEMPO (400..2400 = 40.0..240.0 BPM, unit `BPM/10`) |
+
+Ranges, kinds and labels are in the description (the sequencer's steps, locks and patterns are not described).
+Synth mode's `def` is the range's low end or 0: its values come with the voice and the settings, it has no default of
+its own per parameter.
+
+### Transport: RUN4's clock and the remote GROW / PLAY
+
+AMB follows a MIDI clock from the host (USB or Bluetooth) as before: **START** grows from the top, **CONTINUE** grows
+on, **STOP** rests, the ticks (F8, 24 a beat) set its tempo while they come (EXT CLOCK; half a second without one: its
+own tempo again). The rule for 1.4: **while a clock runs, the clock has the transport.** "Runs" = a START or CONTINUE
+came and no STOP since, and ticks still come (within ~0.6 s). Then a PSET of GROW (34) is refused with `LM_ERR CLOCK`
+and changes nothing; the host shows that AMB follows its transport. Ticks without a START (a host that sends its clock
+while stopped), or after a STOP: GROW from the host works, and a garden grown that way plays at the clock's tempo. The
+player's PLAY button on the FM-1 always works (the player has the last word); the next START / STOP from the clock wins
+again. Synth mode's PLAY (153) follows the same rule (refused while its sequencer follows a MIDI clock, clock AUTO).
+
+**Recording AMB into a RUN4 Tape** (the intended use): RUN4 picks AMB (MODE_SET 2), sends its MIDI clock to the FM-1
+over the same USB-C cable, and records the FM-1's USB audio input on the Tape track. RUN4's transport START starts
+the recording and AMB grows from the top in time with it; STOP rests AMB (its tails ring out) - so a take starts on
+the grid. Without a clock from RUN4 the host may grow and rest AMB with GROW. MIDI OUT on AMB's KEY page should stay
+OFF while RUN4 sends a clock (MIDI OUT CLOCK sends AMB's own clock only while no clock comes in; NOTES sends its notes
+on channels 1, 2, 3 and 10 to RUN4, which a host may route or ignore). SETUP > AUDIO > LOCAL OUT USB ONLY keeps the
+FM-1's speaker silent while RUN4 records it.
+
 ## Connection
 
 1. On boot, and every second until HELLO_ACK: the device sends HELLO and shows "NOT CONNECTED". The keys send notes
    regardless.
 2. On HELLO_ACK the device sends SYNC_REQ (and one POT) and switches to the page screen; the host answers with
-   PAGE, LEDS, STATUS. A repeated HELLO_ACK does the same (host restarted).
+   PAGE, LEDS, STATUS. A repeated HELLO_ACK does the same (host restarted). To a 1.4 host the device then sends MODE
+   (in a local mode only MODE: nothing to draw).
 3. A new USB session (cable out and in, `plat_usb_session` changed) drops back to step 1.
 4. PAGE / VALUE / STATUS / TOAST received before the HELLO_ACK are ignored.
 5. A malformed frame of ours is dropped (and counted); frames from the host that are device-to-host commands are ignored.
@@ -440,11 +733,13 @@ from the device, a restore 33 request / answer round trips.
 * Everything else is forwarded as BTN / ENC / POT.
 * The lights are exactly what LEDS says; with no host, held keys light themselves.
 
-## Two modes, and Bluetooth
+## The modes, and Bluetooth
 
-**Modes.** The firmware has two: RUN4 mode (everything above) and **Synth mode**, a standalone six-operator FM synthesizer
-(docs/MANUAL.md). **SEL + HOME** switches (the HOME press is not sent). The mode the FM-1 was left in is kept and booted
-into. HELLO's `mode` byte says which: 0 = RUN4, 1 = SYNTH. After a switch the firmware sends a HELLO with the new mode
+**Modes.** The firmware has three (two in `app-noamb`): RUN4 mode (everything above), **Synth mode**, a standalone
+six-operator FM synthesizer, and **AMB mode** (docs/MANUAL.md). **SEL + HOME** switches, round (the HOME press is not
+sent); a 1.4 host switches with MODE_SET ("Protocol 1.4"). With a 1.4 host the link stays up at a switch (MODE, not
+HELLO); what follows is how it is with a 1.0 .. 1.3 host. The mode the FM-1 was left in is kept and booted
+into. HELLO's `mode` byte says which: 0 = RUN4, 1 = a local mode (SYNTH or AMB). After a switch the firmware sends a HELLO with the new mode
 every second until HELLO_ACK, in both directions (the first HELLO goes at once, so a host that answers resyncs
 immediately). In Synth mode it sends nothing else but two buttons: **SEL + REC** and **SEL + PLAY** go out as BTN
 REC and BTN PLAY (press and release, ids 11 and 10, no SEL) while a HELLO_ACK for mode 1 was received, so the host's
@@ -466,11 +761,12 @@ stack (`ble_stack = "own"`, `docs/bt/BLE-STACK.md` in fm1-base), whose BLE-MIDI 
 over packets"), which JieLi's library stack is not documented to do. On the link a SysEx frame is a run of USB-MIDI
 SysEx packets (cable 0, CIN 4 = three bytes and more to come, 5 / 6 / 7 = the last 1 / 2 / 3 bytes): a BTN frame is
 `04 F0 7D 52`, `04 34 02 00`, `06 01 F7`. A host that speaks BLE-MIDI through an OS driver (CoreMIDI, Android MIDI) never
-sees this level. Frames from the device are at most 136 bytes (protocol 1.3; up to 1.2 they were 11): the firmware sends
+sees this level. Frames from the device are at most 136 bytes (protocol 1.3 and 1.4; up to 1.2 they were 11): the firmware sends
 one only when the 64-slot queue has room for it whole; frames from the host are reassembled in the firmware up to 640
 bytes between F0 and F7, as on USB, **one at a time** (a frame that arrives while the last one waits is dropped): a host
 must not send bursts over Bluetooth. The 1.3 exchanges that move data (backup, restore) are paced by the device's
-requests for that reason. Notes go out on both links. Bluetooth
+requests for that reason; 1.4's description is one request answered by many device frames (only the device's queue
+paces it), and PSET frames from the host must be spaced (one at a time, wait for the PVAL or ~30 ms). Notes go out on both links. Bluetooth
 starts at every power-on (as M-VAVE's firmware does) and the firmware has no switch for it; `build.py --no-ble` builds
 the USB-only package. **Not verified on a device**: the simulator models the link, not the radio.
 
@@ -478,5 +774,53 @@ the USB-only package. **Not verified on a device**: the simulator models the lin
 
 `proto_ver` is 1. A host should reject a HELLO with a `proto_ver` it does not know; unknown commands are ignored by
 the device. Minors so far: 1.0 (no minor byte), 1.1 (LIST, LIST_PICK), 1.2 (PAGE trailer, FOCUS, VALUE flags, the big
-value view), 1.3 (host voice, voice list, tape view, patch backup); the firmware's HELLO says 3. Both sides speak the
-lower of the two minors.
+value view), 1.3 (host voice, voice list, tape view, patch backup), 1.4 (local modes: list, switch, self-description,
+values, status line); the firmware's HELLO says 4 (RUN4 CTL firmware 0.8). Both sides speak the lower of the two minors.
+
+## Implementing RUN4 CTL in your own firmware or device
+
+This document and the codec (`src/r4p.h`, `src/r4p.c`: plain C99, no libc beyond `stddef.h` / `stdint.h`, no
+allocation, no floating point) are MIT-licensed so that other firmwares and devices can speak RUN4 CTL. Copy the codec
+or write your own from this document; `tests/r4p_test.c` has the known bytes, `tests/r4p_fuzz.c` the robustness test,
+`tools/fake_run4.py` (a host) and `tools/fake_fm1.py` (a device) are independent encoders to check against.
+
+**The minimum a device implements:**
+
+1. **HELLO** every second until a HELLO_ACK, with `proto_ver` 1, your own `fw_major.fw_minor`, `mode` (0 if the host
+   is to draw your screen, 1 if you play on your own) and `proto_minor` 4; take **HELLO_ACK** (`proto_ver`, minor) and
+   speak the lower minor. A new link: HELLO again.
+2. **Protocol 1.4's self-description** for every mode that plays on its own: MODES_REQ / MODES, MODE_SET / MODE,
+   DESC_REQ (DESC_HEAD .. DESC_END with the hash), VALS_REQ, PSET, PVAL, LSTATE, LM_ERR. With it the host shows and
+   edits your parameters without knowing your device. Your mode ids, names, pages and parameter ids are yours (keep
+   ids stable across your firmware versions); a device with one mode lists one. A mode with flag CTRL is a controller
+   mode: the host drives your screen with PAGE / VALUE / LEDS / STATUS (1.0 .. 1.2) and you send BTN / ENC / POT; a
+   device without a screen leaves CTRL out.
+3. **The host voice's notes**, if your device makes sound: after HV_ON (`on`, `chan`) play plain MIDI channel messages
+   on `chan` from the host's link (note on / off, pressure, pitch bend, CC 64, 120, 123) and answer HV_STATE. HV_VOICE
+   and HV_PARAM are the FM-1's (a DX7-style patch and its parameters): a device with another engine ignores the patch
+   kinds it cannot play and the HV_PARAM ids it does not have, and says so in HV_STATE (`voice` 127, its own name). A
+   device without sound ignores HV_* and never sends HV_STATE.
+
+Everything else (LIST, the tape view, the patch backup, the big value view) is optional: ignore a host frame you do not
+implement (it is never answered), never send a device frame the host did not ask for or a lower minor does not have.
+Keep frames from the device at most 136 bytes and to a host that stops reading never block: send a frame only when it
+fits whole.
+
+**Manufacturer ID 0x7D.** `7D` is MIDI's ID for non-commercial and educational use; RUN4 CTL uses `7D 52 34` ("R4")
+as the protocol's own header, not as anyone's manufacturer identity. Any device may use this header for these frames.
+Do not put other data under `7D 52 34`, and check that your other SysEx does not collide (fm1-base's are listed under
+"Transport"). A commercial product that also has SysEx of its own should use its registered manufacturer ID for that.
+
+**How RUN4 treats a device it does not know** (the rules a host follows):
+
+* Any MIDI port whose device sends a valid HELLO with `proto_ver` 1 is a RUN4 CTL device, whatever its USB or
+  Bluetooth name; the name is only shown. A port that never sends HELLO is an ordinary MIDI port. A HELLO with another
+  `proto_ver` is refused (the device stays an ordinary MIDI port).
+* `fw_major.fw_minor` are the device's own and mean nothing across devices; the host decides by `proto_minor` and,
+  from 1.4, by MODES / MODE flags and the descriptions, never by firmware numbers or names (an exception the FM-1 needs:
+  HV_PARAM ids 18..20 only to RUN4 CTL firmware 0.6 and later).
+* Mode ids, parameter ids, page and label texts are taken as the device sends them; a description is cached per device
+  (its port's identity) and hash. A kind, flag bit or frame the host does not know: it skips that parameter or frame
+  and goes on (it does not drop the device). A malformed frame is dropped.
+* The host voice is used only after an HV_STATE answered HV_ON (no HV_STATE within a second: no host voice).
+* The host never sends 1.4 frames to a device that said a minor below 4, nor 1.3 frames below 3.

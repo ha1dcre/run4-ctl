@@ -388,9 +388,9 @@ static void t_v13(void)
     r4p_msg_t m, b;
     size_t n;
     int i;
-    /* HELLO says minor 3 */
+    /* HELLO says the firmware's minor (3 when 1.3 came; 4 since 1.4) */
     n = r4p_hello(buf, sizeof buf, 0, 5, R4P_MODE_RUN4);
-    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == 3 && b.u.hello.fw_minor == 5);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == R4P_MINOR && b.u.hello.fw_minor == 5);
     /* CRC-32: the IEEE check value, chained as zlib does */
     CHECK(r4p_crc32(0, (const uint8_t *)"123456789", 9) == 0xCBF43926u);
     CHECK(r4p_crc32(r4p_crc32(0, (const uint8_t *)"1234", 4), (const uint8_t *)"56789", 5) == 0xCBF43926u);
@@ -538,6 +538,175 @@ static void t_v13(void)
     }
 }
 
+/* protocol 1.4: the local modes */
+static void fill_dparam(r4p_dparam_t *d)
+{
+    memset(d, 0, sizeof *d);
+    d->id = 300; d->page = 2; d->kind = R4P_LK_NUMBER; d->flags = R4P_PF_BIPOLAR; d->step = 1;
+    d->lo = -50; d->hi = 50; d->def = 0; d->value = -7;
+    strcpy(d->name, "TUNE"); strcpy(d->unit, "ct"); strcpy(d->text, "-7 CT");
+}
+static void t_v14(void)
+{
+    r4p_msg_t m, b;
+    size_t n;
+    int i;
+    uint32_t h1, h2;
+    CHECK(R4P_MINOR == 4);
+    /* MODES: three, AMB absent in a build without it */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_MODES; m.u.modes.cur = R4P_MID_AMB; m.u.modes.n = 3;
+    for (i = 0; i < 3; i++) {
+        static const char *const NM[3] = {"RUN4", "SYNTH", "AMB"};
+        m.u.modes.m[i].id = (uint8_t)i; strcpy(m.u.modes.m[i].name, NM[i]);
+        m.u.modes.m[i].flags = (uint8_t)(R4P_MF_AVAIL | (i ? R4P_MF_DESC : R4P_MF_CTRL));
+    }
+    n = enc(&m);
+    CHECK(n == 5 + 2 + 3 * 3 + (4 + 5 + 3) + 1);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.modes.cur == 2 && b.u.modes.n == 3 && !strcmp(b.u.modes.m[1].name, "SYNTH") &&
+          b.u.modes.m[0].flags == (R4P_MF_AVAIL | R4P_MF_CTRL));
+    m.u.modes.n = 0; CHECK(enc(&m) == 0);
+    m.u.modes.n = 9; CHECK(enc(&m) == 0);
+    m.u.modes.n = 3; m.u.modes.m[2].flags = 8; CHECK(enc(&m) == 0);
+    m.u.modes.m[2].flags = 0; m.u.modes.cur = 127; CHECK(enc(&m) == 0);
+    /* MODE and DESC_END: the hash in five 7-bit groups */
+    m.cmd = R4P_MODE; m.u.mode.mode = 2; m.u.mode.flags = 3; m.u.mode.hash = 0xCBF43926u;
+    n = enc(&m);
+    CHECK(n == 13 && buf[5] == 2 && buf[6] == 3 && buf[7] == 0x26 && buf[11] == 0x0C);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.mode.hash == 0xCBF43926u && b.u.mode.flags == 3);
+    m.cmd = R4P_DESC_END; n = enc(&m);
+    CHECK(n == 12 && r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_DESC_END && b.u.mode.hash == 0xCBF43926u);
+    /* DESC_HEAD */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_DESC_HEAD; m.u.dhead.mode = 2; m.u.dhead.hash = 0x12345678u; m.u.dhead.npages = 8; m.u.dhead.nparams = 35;
+    m.u.dhead.nstate = 4; strcpy(m.u.dhead.title, "AMB");
+    strcpy(m.u.dhead.state[0], "PIECE"); strcpy(m.u.dhead.state[1], "CHORD"); strcpy(m.u.dhead.state[2], "SCALE");
+    strcpy(m.u.dhead.state[3], "STATE");
+    CHECK(round_trip(&m, &b) == 1 && b.u.dhead.nparams == 35 && b.u.dhead.hash == 0x12345678u && !strcmp(b.u.dhead.state[3], "STATE"));
+    m.u.dhead.nstate = 5; CHECK(enc(&m) == 0);
+    m.u.dhead.nstate = 4; m.u.dhead.npages = 33; CHECK(enc(&m) == 0);
+    m.u.dhead.npages = 8; m.u.dhead.nparams = 1025; CHECK(enc(&m) == 0);
+    /* DESC_PAGE */
+    m.cmd = R4P_DESC_PAGE; m.u.dpage.page = 31; strcpy(m.u.dpage.title, "SPACE");
+    CHECK(round_trip(&m, &b) == 1 && b.u.dpage.page == 31 && !strcmp(b.u.dpage.title, "SPACE"));
+    m.u.dpage.page = 32; CHECK(enc(&m) == 0);
+    /* DESC_PARAM: signed values, the rules per kind */
+    m.cmd = R4P_DESC_PARAM; fill_dparam(&m.u.dparam);
+    n = enc(&m);
+    CHECK(n == 6 + 13 + 5 + 3 + 2 + 6);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.dparam.lo == -50 && b.u.dparam.hi == 50 && b.u.dparam.value == -7 &&
+          b.u.dparam.id == 300 && !strcmp(b.u.dparam.unit, "ct") && !strcmp(b.u.dparam.text, "-7 CT"));
+    CHECK(buf[11] == ((-50 + 8192) >> 7) && buf[12] == ((-50 + 8192) & 0x7F));      /* lo = v + 8192 */
+    m.u.dparam.value = 51; CHECK(enc(&m) == 0);                                       /* outside lo..hi */
+    m.u.dparam.value = 0; m.u.dparam.def = -51; CHECK(enc(&m) == 0);
+    m.u.dparam.def = 0; m.u.dparam.step = 0; CHECK(enc(&m) == 0);
+    m.u.dparam.step = 1; m.u.dparam.flags = 8; CHECK(enc(&m) == 0);
+    m.u.dparam.flags = 0; m.u.dparam.lo = -9000; CHECK(enc(&m) == 0);                 /* beyond 14 bits signed */
+    m.u.dparam.lo = 0; m.u.dparam.hi = 2; m.u.dparam.kind = R4P_LK_ENUM; m.u.dparam.nlabels = 3; CHECK(round_trip(&m, &b) == 1);
+    m.u.dparam.nlabels = 2; CHECK(enc(&m) == 0);                                       /* an enum: a label per value */
+    m.u.dparam.kind = R4P_LK_MASK; m.u.dparam.hi = 4095; m.u.dparam.nlabels = 12; CHECK(round_trip(&m, &b) == 1 && b.u.dparam.hi == 4095);
+    m.u.dparam.hi = 4094; CHECK(enc(&m) == 0);
+    m.u.dparam.kind = R4P_LK_TOGGLE; m.u.dparam.hi = 1; m.u.dparam.nlabels = 2; CHECK(round_trip(&m, &b) == 1);
+    m.u.dparam.nlabels = 1; CHECK(enc(&m) == 0);
+    m.u.dparam.kind = R4P_LK_ACTION; m.u.dparam.nlabels = 0; CHECK(round_trip(&m, &b) == 1);
+    m.u.dparam.def = 1; CHECK(enc(&m) == 0);
+    m.u.dparam.def = 0; m.u.dparam.kind = R4P_LK_COUNT; CHECK(enc(&m) == 0);
+    {   /* the longest: every string at its maximum, every character escaped, is still a device frame (<= 136) */
+        r4p_dparam_t *d = &m.u.dparam;
+        fill_dparam(d);
+        memset(d->name, 0xC9, R4P_LM_STR); d->name[R4P_LM_STR] = 0;
+        memset(d->unit, 0xC9, R4P_LM_UNIT); d->unit[R4P_LM_UNIT] = 0;
+        memset(d->text, 0xC9, R4P_LM_STR); d->text[R4P_LM_STR] = 0;
+        n = enc(&m);
+        CHECK(n > 0 && n <= R4P_DEV_MAX);
+        printf("  DESC_PARAM longest: %zu bytes\n", n);
+        CHECK(r4p_parse(buf, n, &b) == 1 && (unsigned char)b.u.dparam.name[15] == 0xC9);
+    }
+    /* the hash leaves out the value and its text, and nothing else */
+    m.cmd = R4P_DESC_PARAM; fill_dparam(&m.u.dparam);
+    n = enc(&m); h1 = r4p_desc_hash_add(R4P_FNV0, buf, n);
+    m.u.dparam.value = 33; strcpy(m.u.dparam.text, "+33 CT");
+    n = enc(&m); h2 = r4p_desc_hash_add(R4P_FNV0, buf, n);
+    CHECK(h1 == h2 && h1 != R4P_FNV0);
+    strcpy(m.u.dparam.unit, "c");
+    n = enc(&m); CHECK(r4p_desc_hash_add(R4P_FNV0, buf, n) != h1);
+    CHECK(r4p_fnv(R4P_FNV0, (const uint8_t *)"a", 1) == 0xE40C292Cu);                  /* FNV-1a's own check value */
+    m.cmd = R4P_DESC_HEAD; memset(&m.u.dhead, 0, sizeof m.u.dhead); strcpy(m.u.dhead.title, "X"); m.u.dhead.hash = 5;
+    n = enc(&m); h1 = r4p_desc_hash_add(R4P_FNV0, buf, n);
+    m.u.dhead.hash = 77; n = enc(&m); CHECK(r4p_desc_hash_add(R4P_FNV0, buf, n) == h1);   /* (not its own hash) */
+    CHECK(r4p_desc_hash_add(5u, buf, 3) == 5u);                                          /* not a frame: unchanged */
+    /* DESC_LABELS: windows of at most eight */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_DESC_LABELS; m.u.dlabels.id = 32; m.u.dlabels.first = 0; m.u.dlabels.total = 8; m.u.dlabels.n = 8;
+    for (i = 0; i < 8; i++) snprintf(m.u.dlabels.label[i], sizeof m.u.dlabels.label[i], "PIECE %d", i);
+    n = enc(&m);
+    CHECK(n > 0 && n <= R4P_DEV_MAX && r4p_parse(buf, n, &b) == 1 && !strcmp(b.u.dlabels.label[7], "PIECE 7"));
+    m.u.dlabels.first = 1; CHECK(enc(&m) == 0);                                        /* past total */
+    m.u.dlabels.first = 0; m.u.dlabels.n = 0; CHECK(enc(&m) == 0);
+    m.u.dlabels.n = 8;
+    for (i = 0; i < 8; i++) { memset(m.u.dlabels.label[i], 0xE9, 16); m.u.dlabels.label[i][16] = 0; }
+    CHECK(enc(&m) == 0);                                                               /* too long for a device frame */
+    m.u.dlabels.n = 3; m.u.dlabels.total = 3; CHECK(enc(&m) > 0);
+    /* PVAL, PSET, LSTATE, LM_ERR */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_PVAL; m.u.pval.mode = 2; m.u.pval.n = R4P_PVAL_MAX;
+    for (i = 0; i < R4P_PVAL_MAX; i++) {
+        m.u.pval.id[i] = (uint16_t)(i * 1000); m.u.pval.v[i] = (int16_t)(i * 3000 - 8192);
+        memset(m.u.pval.text[i], 'A' + i, 16); m.u.pval.text[i][16] = 0;
+    }
+    n = enc(&m);
+    CHECK(n == 6 + 2 + 6 * (2 + 2 + 17) && n <= R4P_DEV_MAX);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.pval.n == 6 && b.u.pval.v[0] == -8192 && b.u.pval.v[5] == 6808 && b.u.pval.id[5] == 5000);
+    m.u.pval.n = 0; CHECK(enc(&m) == 0);
+    m.u.pval.n = 7; CHECK(enc(&m) == 0);
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_PSET; m.u.pset.mode = 2; m.u.pset.n = R4P_PSET_MAX;
+    for (i = 0; i < R4P_PSET_MAX; i++) { m.u.pset.id[i] = (uint16_t)i; m.u.pset.v[i] = (int16_t)(i - 8); }
+    n = enc(&m);
+    CHECK(n == 7 + 16 * 4 && r4p_parse(buf, n, &b) == 1 && b.u.pset.n == 16 && b.u.pset.v[0] == -8 && b.u.pset.id[15] == 15);
+    m.u.pset.n = 17; CHECK(enc(&m) == 0);
+    m.u.pset.n = 0; CHECK(enc(&m) == 0);
+    {
+        uint8_t odd[] = {0xF0, 0x7D, 0x52, 0x34, R4P_PSET, 2, 0, 1, 0x40, 0, 0, 0xF7};    /* a pair and a half */
+        uint8_t none[] = {0xF0, 0x7D, 0x52, 0x34, R4P_PSET, 2, 0xF7};
+        uint8_t big[7 + 17 * 4];
+        CHECK(r4p_parse(odd, sizeof odd, &b) == -1);
+        CHECK(r4p_parse(none, sizeof none, &b) == -1);
+        memset(big, 0, sizeof big);
+        big[0] = 0xF0; big[1] = 0x7D; big[2] = 0x52; big[3] = 0x34; big[4] = R4P_PSET; big[5] = 1; big[sizeof big - 1] = 0xF7;
+        CHECK(r4p_parse(big, sizeof big, &b) == -1);                                     /* 17 pairs */
+    }
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_LSTATE; m.u.lstate.mode = 2; m.u.lstate.flags = R4P_LS_PLAYING | R4P_LS_EXTCLOCK; m.u.lstate.n = 4;
+    strcpy(m.u.lstate.text[0], "GARDEN"); strcpy(m.u.lstate.text[1], "Em7"); strcpy(m.u.lstate.text[2], "D DORIAN");
+    strcpy(m.u.lstate.text[3], "GROWING");
+    CHECK(round_trip(&m, &b) == 1 && b.u.lstate.flags == 5 && !strcmp(b.u.lstate.text[1], "Em7"));
+    m.u.lstate.flags = 32; CHECK(enc(&m) == 0);
+    m.u.lstate.flags = 0; m.u.lstate.n = 5; CHECK(enc(&m) == 0);
+    m.u.lstate.n = 0; CHECK(round_trip(&m, &b) == 1 && b.u.lstate.n == 0);
+    m.cmd = R4P_LM_ERR; m.u.lerr.mode = 1; m.u.lerr.code = R4P_LE_RANGE; m.u.lerr.id = 16383;
+    CHECK(enc(&m) == 10 && round_trip(&m, &b) == 1 && b.u.lerr.code == R4P_LE_RANGE && b.u.lerr.id == 16383);
+    m.u.lerr.code = 0; CHECK(enc(&m) == 0);
+    m.u.lerr.code = R4P_LE_COUNT; CHECK(enc(&m) == 0);
+    /* the small host frames */
+    m.cmd = R4P_MODES_REQ; CHECK(enc(&m) == 6 && round_trip(&m, &b) == 1 && b.cmd == R4P_MODES_REQ);
+    for (i = R4P_MODE_SET; i <= R4P_VALS_REQ; i++) {
+        m.cmd = (uint8_t)i; m.u.b1.v = 2;
+        CHECK(enc(&m) == 7 && round_trip(&m, &b) == 1 && b.cmd == i && b.u.b1.v == 2);
+        m.u.b1.v = 127; CHECK(enc(&m) == 0);
+    }
+    {   /* a string longer than its field's maximum is refused, not cut, by the reader */
+        uint8_t f[] = {0xF0, 0x7D, 0x52, 0x34, R4P_DESC_PAGE, 0, 17, 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A',
+                       'A', 'A', 'A', 'A', 'A', 0xF7};
+        CHECK(r4p_parse(f, sizeof f, &b) == -1);
+        f[6] = 16;
+        f[sizeof f - 2] = 0xF7;
+        CHECK(r4p_parse(f, sizeof f - 1, &b) == 1 && strlen(b.u.dpage.title) == 16);
+    }
+    /* a 1.3 host's frames still parse alongside (nothing changed for them) */
+    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 4; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 4);
+}
+
 int main(void)
 {
     t_simple();
@@ -550,6 +719,7 @@ int main(void)
     t_v11();
     t_v12();
     t_v13();
+    t_v14();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

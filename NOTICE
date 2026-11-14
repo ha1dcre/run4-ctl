@@ -1,6 +1,11 @@
 RUN4 CTL
 Copyright (C) 2026 ha1dcre. Licensed under GPL-3.0 (see LICENSE).
 
+The protocol specification docs/PROTOCOL.md, its reference codec src/r4p.h / src/r4p.c and the codec's fuzz test
+tests/r4p_fuzz.c are licensed under the MIT licence (see LICENSE-MIT), so that other firmwares and devices can
+implement the protocol; they contain no code from the projects below. Everything else in RUN4 CTL stays GPL-3.0, and
+the files from fm1-base and felucca-bsp (and AMB-1's, below) stay MPL-2.0.
+
 This project is not affiliated with, endorsed by or sponsored by M-VAVE. "FM-1" is the name of M-VAVE's product.
 
 It is built on, and links at build time with:
