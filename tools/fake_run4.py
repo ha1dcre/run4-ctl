@@ -124,6 +124,45 @@ def demo_frames(which):
     return f
 
 
+def dx7_voices():
+    """the eight packed 128-byte factory voices, read from src/synth/fm6_factory.h (the header Felucca's generator wrote)"""
+    import re
+    from pathlib import Path
+    h = (Path(__file__).resolve().parent.parent / "src" / "synth" / "fm6_factory.h").read_text()
+    body = h[h.index("FM6_FACTORY"):]
+    nums = [int(x) for x in re.findall(r"\b\d+\b", re.sub(r"/\*.*?\*/", "", body[body.index("{"):], flags=re.S))]
+    return [nums[i * 128:(i + 1) * 128] for i in range(8)]
+
+
+def dx7_checksum(data):
+    return (128 - (sum(data) & 127)) & 127
+
+
+def dx7_bank(names=None):
+    """a DX7 32-voice bank dump: F0 43 00 09 20 00 <32 x 128> cksum F7; voice k = factory voice k % 8, renamed"""
+    v = dx7_voices()
+    data = []
+    for k in range(32):
+        r = list(v[k % 8])
+        nm = (names[k] if names else "IMPORT %02d" % (k + 1)).ljust(10)[:10]
+        r[118:128] = [ord(c) for c in nm]
+        data += r
+    return [0xF0, 0x43, 0x00, 0x09, 0x20, 0x00] + data + [dx7_checksum(data), 0xF7]
+
+
+def dx7_single(k=1, name="ONE VOICE"):
+    """one voice: F0 43 00 00 01 1B <155 bytes> cksum F7, the 155-byte (unpacked) layout of voice k"""
+    r = list(dx7_voices()[k])
+    v = []
+    for op in range(6):
+        o = r[op * 17:(op + 1) * 17]
+        v += o[:11] + [o[11] & 3, o[11] >> 2 & 3, o[12] & 7, o[13] & 3, o[13] >> 2 & 7, o[14], o[15] & 1, o[15] >> 1 & 31, o[16], o[12] >> 3 & 15]
+    v += r[102:110] + [r[110] & 31, r[111] & 7, r[111] >> 3 & 1] + r[112:116] + [r[116] & 1, r[116] >> 1 & 7, r[116] >> 4 & 7, r[117]]
+    v += [ord(c) for c in name.ljust(10)[:10]]
+    assert len(v) == 155, len(v)
+    return [0xF0, 0x43, 0x00, 0x00, 0x01, 0x1B] + v + [dx7_checksum(v), 0xF7]
+
+
 def expand(name):
     """a scenario with lines '@name@' replaced by 'sysex HEX'"""
     table = {
@@ -139,6 +178,7 @@ def expand(name):
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
         "HELLO": frame("HELLO", [1, 0, 4, 0, 1]), "SYNC": frame("SYNC_REQ"),
+        "DX7_BANK": dx7_bank(), "DX7_ONE": dx7_single(), "DX7_BAD": dx7_bank()[:-2] + [0x00, 0xF7],
         "POT_8192": frame("POT", v14(8192)), "POT_MAX": frame("POT", v14(16383)),
     }
     for i in range(14):
@@ -153,7 +193,9 @@ def expand(name):
     out = []
     for line in open(name).read().splitlines():
         s = line.strip()
-        if s.startswith("@") and s.endswith("@"):
+        if s.startswith("ble@") and s.endswith("@"):          # the same frame, from the computer over Bluetooth MIDI
+            out.append("blesx " + hx(table[s[4:-1]]))
+        elif s.startswith("@") and s.endswith("@"):
             out.append("sysex " + hx(table[s[1:-1]]))
         elif s.startswith("expect_sysex @"):
             out.append("expect_sysex " + hx(table[s.split("@")[1]]))

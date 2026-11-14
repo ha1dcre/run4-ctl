@@ -1,0 +1,38 @@
+# DX7 SysEx import in Synth mode: a damaged bank imports nothing, a 32-voice bank fills the user slots (they persist),
+# a single voice goes to the first free slot, and in RUN4 mode the dump is ignored.
+@ACK@
+wait 100
+@DX7_BANK@
+wait 100
+expect syn_bank_used 0
+press SEL
+tap HOME
+release SEL
+wait 100
+expect mode 1
+@DX7_BAD@
+wait 100
+expect syn_bank_used 0
+expect toast 0
+@DX7_BANK@
+wait 200
+expect syn_bank_used -1
+expect toast 1
+shot dx7_imported.png
+# the imported voices are playable: patch 8 (the first user voice) is selectable and sounds
+turn PRESET 8
+wait 100
+expect syn_patch 8
+midi 90 3C 64
+wait 300
+expect syn_voices 1
+midi 80 3C 00
+# power cycle: the bank is still there
+reboot
+wait 100
+expect syn_bank_used -1
+# a single voice: goes into the current user slot (patch 8 is selected after reboot? no: patch from settings)
+@DX7_ONE@
+wait 200
+expect syn_bank_used -1
+expect toast 1

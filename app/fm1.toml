@@ -6,7 +6,11 @@ usb_product = "RUN4 CTL FM-1"
 include = ["../src"]             # the shared protocol codec (src/r4p.[ch]) and the UI
 words = "words.tsv"
 font_full = ["M"]                # lower case in the value font: the host formats the text (dB, ms, x)
-# no radio yet: USB-MIDI only (see docs/MANUAL.md)
+# Bluetooth MIDI (build.py --no-ble builds the USB-only NAME-usb.fwsc). The own stack (bt/, docs/bt/BLE-STACK.md in fm1-base) is
+# used because its BLE-MIDI handles SysEx both ways ("SysEx over packets" in and out), which RUN4 CTL's protocol rides on;
+# JieLi's library stack is not documented to. No pairing: macOS and iOS connect without it.
+ble = true
+ble_stack = "own"
 
 # firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)
 author = "TODO-OWNER author name"                 # TODO-OWNER: your name or handle as it should appear

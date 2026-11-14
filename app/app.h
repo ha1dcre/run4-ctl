@@ -14,8 +14,8 @@
 
 /* the store: the platform's panel calibration, our SETUP page (setup_t, app.c), and Synth mode's settings and its two
  * banks of 16 user voices (src/synth.c) */
-enum { OBJ_PANEL, OBJ_SETUP, OBJ_SYNSET, OBJ_BANK_A, OBJ_BANK_B, OBJ_NOBJ };
-#define APP_STORE_MAP {0xDC000u, 0xDA000u, 0xD8000u, 0xD6000u, 0xD4000u}
+enum { OBJ_PANEL, OBJ_SETUP, OBJ_SYNSET, OBJ_BANK_A, OBJ_BANK_B, OBJ_BLE, OBJ_NOBJ };   /* OBJ_BLE: the radio's address and calibration */
+#define APP_STORE_MAP {0xDC000u, 0xDA000u, 0xD8000u, 0xD6000u, 0xD4000u, 0xDE000u}
 
 void app_init(void);
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12);
@@ -27,5 +27,7 @@ void app_say(const char *a, const char *b);
 int app_sysex(const uint8_t *p, uint32_t n);
 void app_sysex_byte(uint8_t b);
 
+#define APP_HOST_CMD                     /* the simulator's "blesx HEX": a SysEx frame in over Bluetooth, as USB-MIDI packets */
+int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, const char *d);
 #define APP_HOST_EXPECT                  /* the simulator's "expect WHAT N" checks */
 int app_expect(const char *what, int *got);

@@ -1,0 +1,57 @@
+# Bluetooth MIDI: with no USB computer the protocol runs over a BLE link (SysEx as USB-MIDI packets, CIN 4..7), the notes
+# go out on it, a DX7 bank dump arrives over it; a frame cut short is dropped.
+usb unplug
+wait 1500
+ble connect
+wait 1500
+expect link 2
+# HELLO goes out as packets (F0 7D 52 | 34 01 01 | 00 04 00 | 01 F7): the first two
+expect_out BLE F0 7D 52
+expect_out BLE 34 01 01
+out
+# the host answers over BLE, then a page
+ble@ACK@
+wait 100
+expect connected 1
+ble@TAPE@
+wait 100
+expect page_idx 1
+shot ble_page.png
+# a button: BTN FX down / up = F0 7D 52 | 34 02 00 | 01 F7 and 34 02 00 | 00 F7
+out
+tap FX
+wait 100
+expect_out BLE 34 02 00
+expect_out BLE 01 F7 00
+expect_out BLE 00 F7 00
+# a key: the note goes out on Bluetooth
+tapkey 7
+wait 100
+expect_out BLE 90 3C 64
+expect_out BLE 80 3C 00
+# a long page (the longest PAGE, 515 bytes) arrives whole; a cut frame (no F7 before the next F0) is dropped
+ble@TAPE@
+wait 100
+expect frames_bad 0
+blesx F0 7D 52 34 42 01 41
+ble@TOAST@
+wait 100
+expect toast 1
+expect frames_bad 0
+# Synth mode over BLE: SEL + HOME, the HELLO says so, a DX7 bank arrives over Bluetooth
+press SEL
+tap HOME
+release SEL
+wait 1500
+expect mode 1
+ble@DX7_BANK@
+wait 300
+expect syn_bank_used -1
+# the link drops: a reconnect says hello again
+ble disconnect
+wait 500
+expect link 0
+ble connect
+wait 1500
+expect link 2
+expect_out BLE F0 7D 52

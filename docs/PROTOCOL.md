@@ -129,6 +129,29 @@ While a list is open the firmware keeps the buttons and encoders local (nothing 
 * Everything else is forwarded as BTN / ENC / POT.
 * The lights are exactly what LEDS says; with no host, held keys light themselves.
 
+## Two modes, and Bluetooth
+
+**Modes.** The firmware has two: RUN4 mode (everything above) and **Synth mode**, a standalone six-operator FM synthesizer
+(docs/MANUAL.md). **SEL + HOME** switches (the HOME press is not sent). The mode the FM-1 was left in is kept and booted
+into. HELLO's `mode` byte says which: 0 = RUN4, 1 = SYNTH. After a switch the firmware sends a HELLO with the new mode
+every second until HELLO_ACK, in both directions. In Synth mode it sends **nothing else**: no BTN, ENC or POT, the keys
+do not send notes, and PAGE / VALUE / LEDS / STATUS / TOAST / LIST from the host are ignored; MASTER is the volume and
+the pages are drawn locally. A host should stop driving the screen when it sees mode 1 and start again (new HELLO_ACK)
+when it sees mode 0. In Synth mode the MIDI in (USB, Bluetooth, the jack) plays the synth, so the FM-1 also works as a
+sound module (note on/off, sustain, pitch bend, all notes off, on the channel set in GLOBAL; omni by default) and DX7
+SysEx dumps are imported (see the manual).
+
+**Bluetooth MIDI.** The protocol runs unchanged over a Bluetooth MIDI link when no USB computer is connected (with a
+computer on USB, the frames go to both links). The firmware is built with `ble = true` and fm1-base's own Bluetooth
+stack (`ble_stack = "own"`, `docs/bt/BLE-STACK.md` in fm1-base), whose BLE-MIDI carries SysEx in both directions ("SysEx
+over packets"), which JieLi's library stack is not documented to do. On the link a SysEx frame is a run of USB-MIDI
+SysEx packets (cable 0, CIN 4 = three bytes and more to come, 5 / 6 / 7 = the last 1 / 2 / 3 bytes): a BTN frame is
+`04 F0 7D 52`, `04 34 02 00`, `06 01 F7`. A host that speaks BLE-MIDI through an OS driver (CoreMIDI, Android MIDI) never
+sees this level. Frames from the device are at most 11 bytes (the 64-slot queue is never the limit); frames from the host
+are reassembled in the firmware up to 640 bytes between F0 and F7, as on USB. Notes go out on both links. Bluetooth
+starts at every power-on (as M-VAVE's firmware does) and the firmware has no switch for it; `build.py --no-ble` builds
+the USB-only package. **Not verified on a device**: the simulator models the link, not the radio.
+
 ## Versioning
 
 `proto_ver` is 1. A host should reject a HELLO with a `proto_ver` it does not know; unknown commands are ignored by

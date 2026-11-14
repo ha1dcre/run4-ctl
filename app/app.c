@@ -134,18 +134,76 @@ static void setup_turn(int which, int d)               /* K1..K4: one step per d
     ui.dirty |= D_TILES;
 }
 
+/* The host's link: USB (a session number) or, with no USB computer, Bluetooth MIDI (a counter that moves at each new
+ * connection). Frames go to every link that is up; the notes too (plat_midi_send filters to the ones that listen). */
+#if defined(FM1B_BLE) && FM1B_BLE
+#define HAVE_BLE 1
+#define TO_LINKS (TO_USB | TO_BLE_HOST)
+static uint32_t ble_gen;
+static int ble_was;
+#else
+#define HAVE_BLE 0
+#define TO_LINKS TO_USB
+#endif
+static uint32_t link_id(void)
+{
+    uint32_t u = plat_usb_session();
+#if HAVE_BLE
+    int b = plat_ble_connected();
+    if (b && !ble_was)
+        ble_gen++;
+    ble_was = b;
+    if (!u && b)
+        return 0x40000000u + ble_gen;
+#endif
+    return u;
+}
+#if HAVE_BLE
+/* a SysEx frame as USB-MIDI packets (CIN 4 = three bytes and more to come, 5 / 6 / 7 = the last 1 / 2 / 3), to the computer's link */
+static uint32_t ble_packets(size_t n) { return (uint32_t)((n + 2u) / 3u); }
+static void ble_put(const uint8_t *f, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i += 3) {
+        size_t left = n - i;
+        uint32_t cin = left > 3 ? 4u : left == 3 ? 7u : left == 2 ? 6u : 5u;
+        uint32_t pkt = cin | (uint32_t)f[i] << 8 | (left > 1 ? (uint32_t)f[i + 1] << 16 : 0u) | (left > 2 ? (uint32_t)f[i + 2] << 24 : 0u);
+        plat_midi_send(pkt, TO_BLE_HOST);
+    }
+}
+#endif
+
 /* Nothing here may wait: plat_sysex_send blocks up to 200 ms when the host stops reading, so a frame goes only when the
- * ring has the room for it whole (plat_sysex_room). Returns 1 = queued, 0 = kept for later (the caller retries). */
+ * ring has the room for it whole (plat_sysex_room), and the Bluetooth queue the same. Returns 1 = queued (on every link
+ * that is up), 0 = kept for later (the caller retries). */
+static int tx_ok(size_t n)                      /* would a frame of n bytes be queued now, on every link that is up? */
+{
+    int usb = plat_usb_session() != 0, ble = 0;
+#if HAVE_BLE
+    ble = plat_ble_connected();
+    if (ble && plat_midi_out_room(TO_BLE_HOST) < ble_packets(n))
+        return 0;
+#endif
+    return (usb || !ble) ? plat_sysex_room() >= (uint32_t)n : 1;       /* (no link at all: no room, as before) */
+}
 static int send_frame(const uint8_t *f, size_t n)
 {
+    int usb = plat_usb_session() != 0, ble = 0;
     if (!n)
         return 0;
-    if (plat_sysex_room() < (uint32_t)n) {
+    if (!tx_ok(n)) {
         ctl.tx_deferred++;
         return 0;
     }
-    if (plat_sysex_send(f, (uint32_t)n) != 0)
+#if HAVE_BLE
+    ble = plat_ble_connected();
+#endif
+    if ((usb || !ble) && plat_sysex_send(f, (uint32_t)n) != 0)
         return 0;
+#if HAVE_BLE
+    if (ble)
+        ble_put(f, n);
+#endif
     ctl.frames_sent++;
     return 1;
 }
@@ -217,8 +275,8 @@ static void synth_notes_off_keys(void)         /* held keys: the note-offs of th
 {
     uint32_t k;
     for (k = 0; k < NKEYS; k++) {
-        if (ctl.sounding[k] != 255 && mode == MODE_RUN4 && plat_midi_out_room(TO_USB))
-            plat_midi_send(0x08u | (0x80u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16, TO_USB);
+        if (ctl.sounding[k] != 255 && mode == MODE_RUN4 && plat_midi_out_room(TO_LINKS))
+            plat_midi_send(0x08u | (0x80u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16, TO_LINKS);
         else if (ctl.sounding[k] != 255 && mode == MODE_SYNTH)
             syn_event(2, ctl.sounding[k], 0, 0);
         ctl.sounding[k] = 255;
@@ -400,14 +458,68 @@ static void synth_lights(uint32_t *lb, uint32_t *lk, uint32_t *db, uint32_t *dk)
     *lk |= ctl.keys;
 }
 
-/* the MIDI in (USB, Bluetooth, the jack) plays the synth: audio context, as the template reads it */
-static void synth_midi_in(void)
+/* SysEx frames from Bluetooth MIDI (USB's come through app_sysex): assembled here from USB-MIDI SysEx packets (CIN 4..7) in
+ * the audio context, handed to the main loop whole, where app_sysex takes them as it takes USB's. One frame waits at a
+ * time; a frame that finds the slot taken is dropped (counted). */
+#define RX_MAX 640
+static uint8_t rx_asm[RX_MAX], rx_frame[RX_MAX];
+static uint16_t rx_n, rx_len;
+static uint8_t rx_open, rx_over;
+static volatile uint8_t rx_ready;
+static uint32_t rx_drop;
+static void rx_byte(uint8_t c)
+{
+    if (c == 0xF0u) {
+        rx_open = 1;
+        rx_over = 0;
+        rx_n = 0;
+        if (mode == MODE_SYNTH)
+            syn_sysex_byte(c);
+        return;
+    }
+    if (!rx_open)
+        return;
+    if (mode == MODE_SYNTH)
+        syn_sysex_byte(c);
+    if (c == 0xF7u) {
+        rx_open = 0;
+        if (!rx_over && rx_n) {
+            if (rx_ready) {
+                rx_drop++;
+            } else {
+                memcpy(rx_frame, rx_asm, rx_n);
+                rx_len = rx_n;
+                rx_ready = 1;
+            }
+        }
+        return;
+    }
+    if (c >= 0x80u) {                                  /* another status inside: the frame is damaged */
+        rx_open = 0;
+        return;
+    }
+    if (rx_n < RX_MAX)
+        rx_asm[rx_n++] = c;
+    else
+        rx_over = 1;
+}
+
+/* the MIDI in (USB, Bluetooth, the jack): Bluetooth's SysEx packets feed the frame assembler; in Synth mode the channel
+ * messages play the synth. Audio context, as the template reads it */
+static void midi_pump(void)
 {
     uint32_t pkt;
     int port;
     while (plat_midi_in(&pkt, &port)) {
-        uint32_t st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu, ch = st & 0x0Fu;
-        if (st >= 0xF0u)
+        uint32_t cin = pkt & 0xFu, st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu, ch = st & 0x0Fu;
+        if (cin >= 4u && cin <= 7u) {                  /* SysEx packets: 4 = 3 bytes, more to come; 5, 6, 7 = the last 1, 2, 3 */
+            uint32_t n = cin == 4u || cin == 7u ? 3u : cin == 6u ? 2u : 1u, i;
+            if (port == PORT_BLE)
+                for (i = 0; i < n; i++)
+                    rx_byte((uint8_t)(pkt >> (8 + 8 * i)));
+            continue;
+        }
+        if (mode != MODE_SYNTH || st >= 0xF0u)
             continue;
         if (syn.chan && ch != (uint32_t)syn.chan - 1u)
             continue;
@@ -444,7 +556,7 @@ static void keys_poll(uint32_t keys)
         uint32_t bit = 1u << k;
         if (!((keys ^ ctl.keys) & bit))
             continue;
-        if (ctl.session && plat_midi_out_room(TO_USB) == 0)
+        if (ctl.session && plat_midi_out_room(TO_LINKS) == 0)
             continue;                                  /* no room: the change stays unseen and is taken next frame */
         if (keys & bit) {
             int32_t note = 53 + (int32_t)k + 12 * ctl.octave;     /* key 0 is F3 = MIDI 53 */
@@ -457,17 +569,17 @@ static void keys_poll(uint32_t keys)
             ctl.snd_ch[k] = setup.chan;
             ctl.prs[k] = 0;
             ctl.notes_on++;
-            plat_midi_send(0x09u | (0x90u | setup.chan) << 8 | (uint32_t)note << 16 | (uint32_t)key_velocity(k) << 24, TO_USB);
+            plat_midi_send(0x09u | (0x90u | setup.chan) << 8 | (uint32_t)note << 16 | (uint32_t)key_velocity(k) << 24, TO_LINKS);
         } else {
             ctl.keys &= ~bit;
             if (ctl.sounding[k] != 255) {
                 ctl.notes_off++;
-                plat_midi_send(0x08u | (0x80u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16, TO_USB);
+                plat_midi_send(0x08u | (0x80u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16, TO_LINKS);
             }
             ctl.sounding[k] = 255;
         }
     }
-    if (setup.at != AT_OFF && ctl.session && plat_midi_out_room(TO_USB) >= 4u) {      /* pressure of the held keys */
+    if (setup.at != AT_OFF && ctl.session && plat_midi_out_room(TO_LINKS) >= 4u) {      /* pressure of the held keys */
         uint32_t mx = 0;
         for (k = 0; k < NKEYS; k++) {
             uint32_t p;
@@ -477,12 +589,12 @@ static void keys_poll(uint32_t keys)
             if (p > mx) mx = p;
             if (setup.at == AT_POLY && (p > ctl.prs[k] ? p - ctl.prs[k] : ctl.prs[k] - p) >= 2u) {
                 ctl.prs[k] = (uint8_t)p;
-                plat_midi_send(0x0Au | (0xA0u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16 | p << 24, TO_USB);
+                plat_midi_send(0x0Au | (0xA0u | ctl.snd_ch[k]) << 8 | (uint32_t)ctl.sounding[k] << 16 | p << 24, TO_LINKS);
             }
         }
         if (setup.at == AT_CHANNEL && ((mx == 0 && ctl.chan_prs) || (mx > ctl.chan_prs ? mx - ctl.chan_prs : ctl.chan_prs - mx) >= 2u)) {
             ctl.chan_prs = (uint8_t)mx;
-            plat_midi_send(0x0Du | (0xD0u | setup.chan) << 8 | mx << 16, TO_USB);
+            plat_midi_send(0x0Du | (0xD0u | setup.chan) << 8 | mx << 16, TO_LINKS);
         }
     }
 }
@@ -503,13 +615,17 @@ static void input(void)
 {
     uint8_t f[16];
     uint32_t btn = plat_buttons(), keys, k, now = plat_ms();
+    if (rx_ready) {                                    /* a frame that came over Bluetooth */
+        app_sysex(rx_frame, rx_len);
+        rx_ready = 0;
+    }
     touch_poll();                                      /* velocity and pressure (lib/touch) */
     keys = touch_keys();
     uint8_t shift = (uint8_t)((btn >> B_SEL) & 1u);   /* SEL held = SHIFT */
     int32_t pot;
 
-    if (plat_usb_session() != ctl.session) {           /* a new computer: say hello again */
-        ctl.session = plat_usb_session();
+    if (link_id() != ctl.session) {           /* a new computer: say hello again */
+        ctl.session = link_id();
         ui_connect(0);
         ctl.hello_at = now - HELLO_MS;
         ctl.pot_sent = -1;
@@ -602,7 +718,7 @@ static void input(void)
         }
         if (d)
             r4p_enc_add(&ctl.enc, (uint8_t)k, d);
-        if (plat_sysex_room() >= 10u) {
+        if (tx_ok(10u)) {
             int t = r4p_enc_take(&ctl.enc, (uint8_t)k);
             if (t)
                 send_frame(f, r4p_enc(f, sizeof f, (uint8_t)k, t));
@@ -696,8 +812,8 @@ void app_init(void)
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t i;
+    midi_pump();
     if (mode == MODE_SYNTH) {                          /* Synth mode: the FM voices; MASTER is the volume */
-        synth_midi_in();
         syn_render(lr, n, master_q12);
         return;
     }
@@ -712,7 +828,7 @@ void app_ui_init(void)
 {
     touch_on(1);                                       /* the keys' readings: velocity and pressure */
     setup_apply();
-    ctl.session = plat_usb_session();
+    ctl.session = link_id();
     ctl.hello_at = plat_ms() - HELLO_MS;
     memset(&ui, 0, sizeof ui);
     ui_reset_page();
@@ -732,6 +848,37 @@ void app_input_only(void) { input(); }
 void app_say(const char *a, const char *b) { (void)a; (void)b; }
 
 #ifdef PLAT_HOST
+static void run_ms(uint32_t ms);
+/* blesx HEX..: a SysEx frame (F0 .. F7) from the computer over Bluetooth, cut into USB-MIDI SysEx packets as the radio
+ * hands them over; the stack's own packets are not simulated */
+int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, const char *d)
+{
+    static uint8_t by[8300];
+    size_t n = 0, i;
+    const char *p;
+    if (strcmp(cmd, "blesx"))
+        return 0;
+    p = strstr(plat_host_line, "blesx") + 5;
+    while (*p) {
+        char *e;
+        unsigned long v = strtoul(p, &e, 16);
+        if (e == p)
+            break;
+        if (n < sizeof by)
+            by[n++] = (uint8_t)v;
+        p = e;
+    }
+    for (i = 0; i < n; i += 3) {
+        size_t left = n - i;
+        uint32_t cin = left > 3 ? 4u : left == 3 ? 7u : left == 2 ? 6u : 5u;
+        min_q[mi_w % MQ] = cin | (uint32_t)by[i] << 8 | (left > 1 ? (uint32_t)by[i + 1] << 16 : 0u) | (left > 2 ? (uint32_t)by[i + 2] << 24 : 0u);
+        min_port[mi_w++ % MQ] = PORT_BLE;
+        if (mi_w % 64u == 0u)
+            run_ms(7);                                 /* (the queue is small: a render block drains it) */
+    }
+    run_ms(20);
+    return 1;
+}
 int app_expect(const char *what, int *got)
 {
     if (!strcmp(what, "connected")) *got = ui.connected;
@@ -739,6 +886,8 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "shift")) *got = ui.shift;
     else if (!strcmp(what, "page_idx")) *got = ui.page.page_idx;
     else if (!strcmp(what, "setup")) *got = ui.setup;
+    else if (!strcmp(what, "rx_drop")) *got = (int)rx_drop;
+    else if (!strcmp(what, "link")) *got = ctl.session >= 0x40000000u ? 2 : ctl.session ? 1 : 0;
     else if (!strcmp(what, "mode")) *got = mode;
     else if (!strcmp(what, "syn_voices")) *got = (int)syn_active_voices;
     else if (!strcmp(what, "syn_patch")) *got = syn.patch_idx;
