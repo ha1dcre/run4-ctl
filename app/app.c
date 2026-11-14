@@ -91,6 +91,7 @@ static void setup_fill(void)                          /* the SETUP page: four ti
     strcpy(p->title, "SETUP");
     strcpy(p->track, "LOCAL");
     p->r = 127; p->g = 70; p->b = 20;
+    if (mode == MODE_SYNTH) { p->r = SY_AR; p->g = SY_AG; p->b = SY_AB; }
     strcpy(p->slot[0].name, "VELOCITY");   p->slot[0].kind = R4P_KIND_ENUM; p->slot[0].value = (uint16_t)(VEL_N << 7 | setup.vel);
     strcpy(p->slot[0].text, VN[setup.vel]);
     strcpy(p->slot[1].name, "AFTERTOUCH"); p->slot[1].kind = R4P_KIND_ENUM; p->slot[1].value = (uint16_t)(AT_N << 7 | setup.at);
@@ -512,6 +513,7 @@ static void synth_frame(uint32_t keys, uint32_t now)
     if ((sui.dirty_set || sq_dirty) && !sq.run && sq_ed.held < 0 && now - sui.edit_at > 4000u)
         syn_save_all();
     sq_frame(now);
+    sp_live(now);
 }
 static void synth_lights(uint32_t *lb, uint32_t *lk, uint32_t *db, uint32_t *dk)
 {
@@ -1052,6 +1054,11 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "syn_arp")) *got = syn.arp_on;
     else if (!strcmp(what, "list")) *got = ui.list_open ? ui.list.sel + 1 : 0;
     else if (!strcmp(what, "host_minor")) *got = ctl.host_minor;
+    else if (!strcmp(what, "scope_frames")) *got = (int)sy.frames;         /* Synth mode's live frames drawn */
+    else if (!strcmp(what, "scope_skipped")) *got = (int)sy.skipped;       /* ... with nothing to send (idle line) */
+    else if (!strcmp(what, "scope_bpf")) *got = sy.frames ? (int)(sy.bytes / sy.frames) : 0;   /* bytes a frame */
+    else if (!strcmp(what, "scope_us")) *got = sy.frames ? (int)(sy.ticks / PLAT_TICKS_PER_US / sy.frames) : 0;
+    else if (!strcmp(what, "scope_reset")) { *got = 0; sy.frames = sy.bytes = sy.skipped = sy.ticks = 0; }
     else if (!strcmp(what, "big")) *got = ui.big1;                         /* 1.2: the slot shown big + 1, 0 = none */
     else if (!strcmp(what, "touch")) *got = ui.touch1;
     else if (!strcmp(what, "cursor")) *got = ui.page.cursor;

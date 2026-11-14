@@ -69,6 +69,11 @@ static const sp_page_t SP[SP_N] = {
     {"SEQUENCER", 3, {{EMPTYP, EMPTYP, EMPTYP, EMPTYP}}, {{0}, {0}, {0}}},     /* its own pages: sq_build (below) */
 };
 
+#define SY_AR 127                            /* Synth mode's one accent, on the wire scale (x2 on screen): warm amber */
+#define SY_AG 76
+#define SY_AB 32
+static uint8_t sy_touch_k;                   /* the knob turned last + 1: its tile in the accent for 2 s (the look, below) */
+static uint32_t sy_touch_at;
 static struct {
     uint8_t page, sub, op;                   /* the page shown, its sub-page, the operator the EDIT / ENV pages edit */
     uint8_t dirty_set;                       /* the settings changed since saved */
@@ -195,8 +200,7 @@ static void sp_build(void)
     const sp_page_t *pg = &SP[sui.page];
     uint32_t k;
     char u[12];
-    ui.seqgrid = sui.page == SP_SEQ;
-    if (ui.seqgrid) {
+    if (sui.page == SP_SEQ) {
         sq_build();
         return;
     }
@@ -213,9 +217,7 @@ static void sp_build(void)
         strcpy(g->title, pg->title);
         syn_patch_label(g->track);
     }
-    g->r = 127; g->g = 70; g->b = 20;                  /* the Synth accent: orange (RUN4's own colour) */
-    if (sui.page == SP_FX) { g->r = 30; g->g = 105; g->b = 100; }
-    if (sui.page == SP_SEQ || sui.page == SP_ARP) { g->r = 70; g->g = 100; g->b = 127; }
+    g->r = SY_AR; g->g = SY_AG; g->b = SY_AB;          /* one accent for all of Synth mode (the footer's dots, toasts) */
     g->page_count = pg->nsub;
     g->page_idx = sui.sub;
     for (k = 0; k < 4u; k++) {
@@ -237,6 +239,8 @@ static void sp_turn(uint32_t k, int d)
 {
     const sp_page_t *pg = &SP[sui.page];
     const sp_param_t *q = &pg->p[sui.sub][k];
+    sy_touch_k = (uint8_t)(k + 1u);
+    sy_touch_at = plat_ms();
     if (sui.page == SP_SEQ) {
         sq_turn(k, d);
         return;
@@ -257,6 +261,7 @@ static void sq_disarm(void);
 static void sp_page_press(uint32_t page)
 {
     sq_disarm();
+    sy_touch_k = 0;
     if (page == sui.page)
         sui.sub = (uint8_t)((sui.sub + 1u) % SP[page].nsub);
     else {
@@ -449,7 +454,7 @@ static void sq_build(void)
     int v = sq_view();
     char t[24], u[12];
     memset(g, 0, sizeof *g);
-    g->r = 70; g->g = 100; g->b = 127;
+    g->r = SY_AR; g->g = SY_AG; g->b = SY_AB;
     sq_pat_name(g->track, sel);
     if (sq.run && sq.rec) {
         strcpy(t, "REC "); u_cat(t, g->track); strcpy(g->track, t);
@@ -654,7 +659,372 @@ static void sq_frame(uint32_t now)
     }
 }
 
-/* the grid band, y 34..115 */
+/* ------------------------------------------------------------- the look --- */
+/* Synth mode draws its own screen (ui.c calls sp_draw_* for it): black, greys and white, one warm accent for where you
+ * are (the page, the knob just turned, the playhead). Every page: a header (title, voice, a strip of the eight pages),
+ * a band 232 x 82 that shows the sound (the output's scope, the six operators, the envelopes, the LFO, the step grid),
+ * and the four knobs' tiles in a row, as the knobs sit. The band's live views redraw at most 25 times a second and
+ * only the rows that change. */
+#define SY_BAR    RGB(196, 196, 202)          /* bars, traces */
+#define SY_GLOW   RGB(62, 62, 70)             /* the trace's soft edge */
+#define SY_MID    RGB(110, 110, 118)
+#define BAND_Y 34
+#define BAND_H 82
+#define LIVE_MS 40u                            /* 25 frames a second at most */
+enum { BV_SCOPE, BV_OPS, BV_ENV, BV_LFO, BV_GRID };
+static struct {
+    int16_t snap[SYN_SCOPE_N];
+    int32_t disp;                              /* the scope's scale (a peak, released slowly) */
+    uint8_t flat;                              /* the last trace was the idle line */
+    uint32_t at;                               /* the last live frame (plat_ms) */
+    uint32_t frames, bytes, skipped, ticks;    /* live frames drawn, bytes blitted, frames with nothing to send, host time */
+    uint8_t lfo_odd;
+} sy;
+static uint16_t sy_accent(int pct) { return RGB(SY_AR * 2 * pct / 100, SY_AG * 2 * pct / 100, SY_AB * 2 * pct / 100); }
+static int sp_band_view(void)
+{
+    if (ui.setup) return BV_SCOPE;
+    switch (sui.page) {
+    case SP_EDIT: return BV_OPS;
+    case SP_ENV: return BV_ENV;
+    case SP_LFO: return BV_LFO;
+    case SP_SEQ: return BV_GRID;
+    default: return BV_SCOPE;
+    }
+}
+
+/* the header: title left, the voice right (grey), the eight pages as a strip under them (this one in the accent) */
+static void sp_draw_head(void)
+{
+    char t[R4P_STR_MAX + 1];
+    int32_t w = PG->track[0] ? pwidth(&FONT_B, PG->track) : 0, i;
+    cv_begin(240, 34, R4_BG);
+    if (w)
+        ptext(232 - w, 7, &FONT_B, PG->track, R4_LABEL);
+    fit(t, PG->title, &FONT_B, 232 - w - 18);
+    ptext(8, 7, &FONT_B, t, R4_TEXT);
+    for (i = 0; i < SP_N; i++)
+        cv_rect(8 + i * 29, 28, 26, 2, !ui.setup && i == sui.page ? sy_accent(100) : R4_TILE);
+    cv_blit(0, 0);
+}
+
+/* the four tiles in a row (y 116..199): the knob turned last in the accent */
+static void sp_draw_tiles(void)
+{
+    uint32_t k, now = plat_ms();
+    cv_begin(240, 84, R4_BG);
+    for (k = 0; k < 4u; k++) {
+        const r4p_slot_t *s = &PG->slot[k];
+        int32_t x = 4 + (int32_t)k * 59, w = 55, bw = 44, bx = x + 7, by = 66, fill, n, i;
+        int hot = sy_touch_k == k + 1u && now - sy_touch_at < 2000u;
+        uint16_t ac = hot ? sy_accent(100) : SY_BAR;
+        const felucca_font_t *f = pwidth(&FONT_M, s->text) <= w - 9 ? &FONT_M : pwidth(&FONT_B, s->text) <= w - 9 ? &FONT_B : &FONT_XS;
+        char nm[R4P_STR_MAX + 1];
+        if (s->kind == R4P_KIND_EMPTY) {
+            cv_rect(x, 2, w, 1, R4_TILE);
+            continue;
+        }
+        cv_rect(x, 2, w, 80, R4_TILE);
+        cv_rect(x, 2, 2, 80, hot ? sy_accent(100) : R4_EDGE);
+        static const char *const SHORT[][2] = {{"AFTERTOUCH", "AFTERTCH"}, {"KEY CHANNEL", "KEY CH"}, {"BEND RANGE", "BEND"},
+                                               {"REVERB TYPE", "REV TYPE"}, {"REVERB SIZE", "REV SIZE"}, {"DELAY FDBK", "DLY FDBK"},
+                                               {"DELAY TIME", "DLY TIME"}};
+        const char *name = s->name;
+        for (i = 0; i < (int32_t)(sizeof SHORT / sizeof SHORT[0]); i++)
+            if (!strcmp(name, SHORT[i][0]))
+                name = SHORT[i][1];
+        if (pwidth(&FONT_XS, name) <= w - 9) {
+            ptext(x + 7, 7, &FONT_XS, name, hot ? sy_accent(100) : R4_LABEL);
+        } else {                                   /* a long name: the small capitals */
+            fit(nm, name, &FONT_T, w - 8);
+            ptext(x + 6, 9, &FONT_T, nm, hot ? sy_accent(100) : R4_LABEL);
+        }
+        ptext(x + 7, f == &FONT_M ? 28 : 33, f, s->text, R4_TEXT);
+        switch (s->kind) {
+        case R4P_KIND_UNI:
+            cv_rect(bx, by + 2, bw, 2, R4_EDGE);
+            fill = s->value * bw / R4P_V14_MAX;
+            cv_rect(bx, by, fill, 6, ac);
+            break;
+        case R4P_KIND_BI:
+            cv_rect(bx, by + 2, bw, 2, R4_EDGE);
+            fill = ((int32_t)s->value - 8192) * (bw / 2) / 8191;
+            if (fill >= 0) cv_rect(bx + bw / 2, by, fill, 6, ac);
+            else cv_rect(bx + bw / 2 + fill, by, -fill, 6, ac);
+            cv_rect(bx + bw / 2, by - 2, 1, 10, R4_LABEL);
+            break;
+        case R4P_KIND_ENUM:
+            n = (s->value >> 7) & 0x7F;
+            n = n < 2 ? 2 : n;
+            for (i = 0; i < n && n <= 12; i++)
+                cv_rect(bx + i * bw / n, by + 2, bw / n - 1 > 1 ? bw / n - 1 : 1, 2, R4_EDGE);
+            if (n > 12)
+                cv_rect(bx, by + 2, bw, 2, R4_EDGE);
+            i = s->value & 0x7F;
+            cv_rect(bx + i * bw / n, by, bw / n - 1 > 2 ? bw / n - 1 : 2, 6, ac);
+            break;
+        case R4P_KIND_TOGGLE:
+            cv_rect(bx, by - 2, 24, 10, s->value ? ac : R4_EDGE);
+            cv_rect(s->value ? bx + 15 : bx + 2, by, 7, 6, s->value ? R4_BG : R4_DIM);
+            break;
+        default:
+            break;
+        }
+    }
+    cv_blit(0, 116);
+}
+
+/* ---- the band's views. Each draws into a canvas of band rows r0 .. r1 - 1 (band coordinates 0..81) ---- */
+static void sy_rows(uint32_t r0, uint32_t r1)  /* a canvas for band rows r0 .. r1 - 1, drawn in band coordinates */
+{
+    cv_begin(232, r1 - r0, R4_BG);
+    cv_oy = -(int32_t)r0;
+    cv_y0 = 0;
+    cv_y1 = (int32_t)(r1 - r0);
+}
+static void sy_send(uint32_t r0)
+{
+    sy.bytes += cv_w * cv_h * 2u;
+    cv_oy = 0;
+    cv_y0 = 0;
+    cv_y1 = (int32_t)cv_h;
+    lcd_blit(4, BAND_Y + r0, cv_w, cv_h, cv_px);
+}
+
+/* The scope (after Felucca's HOME scope, ui_graph.c graph_scope, GPL-3.0-only: a ring of every other output sample, a
+ * rising zero crossing as the trigger, an auto-scaled trace). Here: the trigger wants the signal to have been below
+ * -1/16 of the peak shortly before the crossing (no jitter on noise or harmonics), the scale follows the peak at once
+ * and lets go slowly (a decaying note shrinks calmly to the idle line), and the trace is 2 px with a dim edge. A live
+ * frame is drawn whole in RAM but sent as 15 strips 16 px wide, each only as tall as the old and the new trace span
+ * there (a sine sends a fifth of the band); the idle line, once drawn, sends nothing. */
+#define SC_W 232
+#define SC_MID 41
+#define SC_A 34
+#define SC_G 16                                /* the strips' width */
+static uint8_t sc_prev[SC_W];                  /* the rows the last trace took, per column (its top) */
+static uint16_t sc_strip[2][SC_G * BAND_H];    /* two strips: one is filled while the other is sent */
+static void sy_scope(int full)
+{
+    uint32_t w = syn_scope_w, i, trig = SYN_SCOPE_N - SC_W, g;
+    int32_t peak = 0, hyst, x, py, y, flat, ys[SC_W];
+    uint32_t t0 = plat_ticks24();
+    for (i = 0; i < SYN_SCOPE_N; i++) {
+        int32_t v = sy.snap[i] = syn_scope[(w + i) & (SYN_SCOPE_N - 1u)];
+        v = v < 0 ? -v : v;
+        if (v > peak) peak = v;
+    }
+    hyst = peak / 16 + 8;
+    for (i = 8; i < SYN_SCOPE_N - SC_W - 1u; i++)
+        if (sy.snap[i - 1] < 0 && sy.snap[i] >= 0) {
+            uint32_t j;
+            for (j = i - 8; j < i && sy.snap[j] > -hyst; j++)
+                ;
+            if (j < i) { trig = i; break; }
+        }
+    sy.disp = peak > sy.disp ? peak : sy.disp - sy.disp / 10;
+    if (sy.disp < 1400)
+        sy.disp = 1400;                            /* the floor: a whisper stays small, silence is a line */
+    flat = peak < 40;
+    if (flat && sy.flat && !full) {                /* still the idle line: nothing to send */
+        sy.skipped++;
+        return;
+    }
+    for (x = 0; x < SC_W; x++) {
+        y = SC_MID - sy.snap[trig + (uint32_t)x] * SC_A / sy.disp;
+        ys[x] = y < 3 ? 3 : y > BAND_H - 5 ? BAND_H - 5 : y;
+    }
+    cv_begin(SC_W, BAND_H, R4_BG);
+    for (x = 0; x < SC_W; x += 4)                  /* the idle line, dotted */
+        cv_rect(x, SC_MID, 2, 1, R4_EDGE);
+    py = ys[0];
+    for (x = 1; x < SC_W; x++) {                   /* the soft edge first, then the trace */
+        cv_line(x - 1, py - 1, x, ys[x] - 1, SY_GLOW);
+        cv_line(x - 1, py + 2, x, ys[x] + 2, SY_GLOW);
+        py = ys[x];
+    }
+    py = ys[0];
+    for (x = 1; x < SC_W; x++) {
+        cv_line(x - 1, py, x, ys[x], flat ? SY_MID : R4_TEXT);
+        cv_line(x - 1, py + 1, x, ys[x] + 1, flat ? SY_MID : SY_BAR);
+        py = ys[x];
+    }
+    if (full) {
+        sy.bytes += SC_W * BAND_H * 2u;
+        cv_blit(4, BAND_Y);
+    } else {
+        for (g = 0; g < SC_W / SC_G + (SC_W % SC_G != 0u); g++) {
+            int32_t x0 = (int32_t)(g * SC_G), x1 = x0 + SC_G > SC_W ? SC_W : x0 + SC_G, lo = BAND_H, hi = 0, r, c;
+            uint16_t *d = sc_strip[g & 1u];
+            for (x = x0 - 1; x <= x1; x++) {        /* (a column either side: the lines join there) */
+                int32_t xx = x < 0 ? 0 : x >= SC_W ? SC_W - 1 : x, a = ys[xx], b = sc_prev[xx];
+                if (a < lo) lo = a;
+                if (b < lo) lo = b;
+                if (a > hi) hi = a;
+                if (b > hi) hi = b;
+            }
+            lo = lo - 2 < 0 ? 0 : lo - 2;
+            hi = hi + 4 > BAND_H ? BAND_H : hi + 4;
+            if (lo > SC_MID) lo = SC_MID;          /* (the idle line under it) */
+            if (hi <= SC_MID) hi = SC_MID + 1;
+            for (r = lo; r < hi; r++)
+                for (c = x0; c < x1; c++)
+                    d[(r - lo) * (x1 - x0) + (c - x0)] = cv_px[r * SC_W + c];
+            lcd_blit((uint32_t)(4 + x0), (uint32_t)(BAND_Y + lo), (uint32_t)(x1 - x0), (uint32_t)(hi - lo), d);
+            sy.bytes += (uint32_t)((x1 - x0) * (hi - lo) * 2);
+        }
+    }
+    for (x = 0; x < SC_W; x++)
+        sc_prev[x] = (uint8_t)ys[x];
+    sy.flat = (uint8_t)flat;
+    sy.frames++;
+    sy.ticks += plat_ticks24() - t0;
+}
+
+/* the six operators: a column each (OP1 left), the patch's output level as an outline, the sounding level of the newest
+ * note as the fill (it moves with the envelopes), carriers with a base line, the operator being edited in the accent,
+ * its ratio (or FIX) under it */
+static const syn_voice_t *sy_newest(void)
+{
+    const syn_voice_t *v = 0;
+    uint32_t i;
+    for (i = 0; i < SYN_VOICES; i++)
+        if (syn_v[i].n.live && (!v || syn_v[i].age > v->age))
+            v = &syn_v[i];
+    return v;
+}
+static void sy_ops(int full)
+{
+    const syn_voice_t *v = sy_newest();
+    uint32_t car = fm6_carriers(syn.cur[FP_ALG] & 31u), k;
+    char t[12], u[12];
+    if (!full && !v && sy.flat)
+        return;
+    sy_rows(full ? 0u : 14u, full ? BAND_H : 66u);
+    for (k = 0; k < 6u; k++) {
+        const uint8_t *op = syn.cur + (5u - k) * FP_OP;
+        int32_t x = 2 + (int32_t)k * 38, cw = 34, top = 16, h = 48, ol = op[FP_OL], lvl = 0;
+        int cur = k == sui.op, carrier = (car >> (5u - k)) & 1u;
+        uint16_t c = cur ? sy_accent(100) : SY_BAR;
+        if (v) {
+            int32_t g = v->n.op[5u - k].gain_out;
+            g = g < 0 ? 0 : g > (1 << 24) ? (1 << 24) : g;
+            lvl = (int32_t)((int64_t)g * h >> 24);
+        }
+        if (full) {
+            t[0] = 'O'; t[1] = 'P'; t[2] = (char)('1' + k); t[3] = 0;
+            ptext(x + 2, 0, &FONT_XS, t, cur ? sy_accent(100) : carrier ? R4_TEXT : R4_LABEL);
+            if (op[FP_MODE]) strcpy(t, "FIX");
+            else {
+                uint32_t r100 = op[FP_FC] ? op[FP_FC] * 100u : 50u;
+                r100 += r100 * op[FP_FF] / 100u;
+                t[0] = 0; u_int(r100 / 100u, u); u_cat(t, u); u_cat(t, "."); u_int(r100 % 100u / 10u, u); u_cat(t, u);
+                u_int(r100 % 10u, u); u_cat(t, u);
+            }
+            ptext(x + 2, 67, &FONT_XS, t, cur ? sy_accent(100) : R4_LABEL);
+        }
+        cv_rect(x, top, cw, h, R4_TILE);
+        cv_rect(x, top + h - ol * h / 99, cw, 1, cur ? sy_accent(60) : SY_MID);      /* the patch's level */
+        if (lvl)
+            cv_rect(x + 3, top + h - lvl, cw - 6, lvl, c);
+        if (carrier)
+            cv_rect(x, top + h - 1, cw, 2, cur ? sy_accent(100) : R4_TEXT);
+    }
+    sy_send(full ? 0u : 14u);
+    sy.flat = (uint8_t)!v;
+    sy.frames++;
+}
+
+/* the envelopes: the four rates and levels of each operator as a line (the one edited bright, the others dim, a hold
+ * for the sustain); while a note sounds the stage it is in is marked on the edited one */
+static void sy_env_pts(const uint8_t *op, int32_t *xs, int32_t *ys)
+{
+    int32_t d[4], i, tot = 0, sc;
+    for (i = 0; i < 4; i++) {
+        int32_t r = 99 - op[FP_R1 + i];
+        d[i] = 3 + r * r / 40;
+        tot += d[i];
+    }
+    sc = tot > 0 ? tot : 1;
+    xs[0] = 4;
+    ys[0] = 72 - op[FP_L1 + 3] * 60 / 99;
+    for (i = 0; i < 3; i++) {
+        xs[i + 1] = xs[i] + d[i] * 180 / sc;
+        ys[i + 1] = 72 - op[FP_L1 + i] * 60 / 99;
+    }
+    xs[4] = xs[3] + 36;                            /* the sustain */
+    ys[4] = ys[3];
+    xs[5] = xs[4] + d[3] * 180 / sc;
+    ys[5] = ys[0];
+}
+static void sy_env(int full)
+{
+    const syn_voice_t *v = sy_newest();
+    int32_t xs[6], ys[6], i;
+    uint32_t k;
+    char t[8];
+    if (!full && !v && sy.flat)
+        return;
+    sy_rows(0, BAND_H);
+    for (k = 0; k < 6u; k++) {
+        if (k == sui.op)
+            continue;
+        sy_env_pts(syn.cur + (5u - k) * FP_OP, xs, ys);
+        for (i = 0; i < 5; i++)
+            cv_line(xs[i], ys[i], xs[i + 1], ys[i + 1], R4_EDGE);
+    }
+    sy_env_pts(syn.cur + (5u - sui.op) * FP_OP, xs, ys);
+    for (i = 0; i < 5; i++) {
+        int on = v && ((i < 3 && v->n.env[5u - sui.op].ix == (uint8_t)i) || (i == 3 && v->n.env[5u - sui.op].ix == 3u && v->key) ||
+                       (i == 4 && !v->key));
+        cv_line(xs[i], ys[i], xs[i + 1], ys[i + 1], on ? sy_accent(100) : R4_TEXT);
+        cv_line(xs[i], ys[i] + 1, xs[i + 1], ys[i + 1] + 1, on ? sy_accent(100) : SY_BAR);
+    }
+    for (i = 1; i < 5; i++)
+        cv_rect(xs[i] - 1, ys[i] - 1, 3, 3, R4_TEXT);
+    t[0] = 'O'; t[1] = 'P'; t[2] = (char)('1' + sui.op); t[3] = 0;
+    ptext(4, 0, &FONT_XS, t, sy_accent(100));
+    sy_send(0);
+    sy.flat = (uint8_t)!v;
+    sy.frames++;
+}
+
+/* the LFO: two cycles of its wave and a dot where it is now */
+static int32_t sy_lfo_at(uint32_t wave, uint32_t ph)       /* 0..1 as 0..1024 (the shapes of fm6_lfo_sample) */
+{
+    switch (wave) {
+    case 0: return (int32_t)((ph >> 31) ? (~ph >> 21) : (ph >> 21));
+    case 1: return (int32_t)(1023u - (ph >> 22));
+    case 2: return (int32_t)(ph >> 22);
+    case 3: return ph >> 31 ? 0 : 1023;
+    case 4: return 512 + fm6_sin((int32_t)(ph >> 8)) / 64;
+    default: return (int32_t)(((ph >> 30) * 389u + 211u) & 1023u);   /* S&H: steps (the shape, not its values) */
+    }
+}
+static void sy_lfo(int full)
+{
+    uint32_t wave = syn.cur[FP_LFW] % 6u, x;
+    int32_t py = 0, y, dx, dy;
+    if (!full && (sy.lfo_odd ^= 1u))
+        return;                                    /* (12.5 frames a second: the whole band moves) */
+    sy_rows(0, BAND_H);
+    for (x = 0; x < SC_W; x += 4)
+        cv_rect((int32_t)x, 41, 2, 1, R4_EDGE);
+    for (x = 0; x < SC_W; x++) {
+        y = 70 - sy_lfo_at(wave, (uint32_t)(x * (0x200000000ull / SC_W))) * 58 / 1024;
+        if (x)
+            cv_line((int32_t)x - 1, py, (int32_t)x, y, R4_TEXT), cv_line((int32_t)x - 1, py + 1, (int32_t)x, y + 1, SY_BAR);
+        py = y;
+    }
+    dx = (int32_t)((syn_lfo.phase >> 16) * (uint32_t)(SC_W / 2) >> 16);
+    dy = 70 - sy_lfo_at(wave, syn_lfo.phase) * 58 / 1024;
+    cv_rect(dx - 3, dy - 3, 7, 7, sy_accent(100));
+    cv_rect(dx + SC_W / 2 - 2, dy - 2, 5, 5, sy_accent(50));
+    ptext(4, 0, &FONT_XS, N_WAVE[wave], R4_LABEL);
+    sy_send(0);
+    sy.frames++;
+}
+
+/* the step grid (the SEQ page) */
 static void sq_draw_grid(void)
 {
     const sq_pat_t *pt = sq_ed_pat();
@@ -679,39 +1049,38 @@ static void sq_draw_grid(void)
             continue;
         }
         if (on && sq_is_tie(s)) {
-            cv_rect(x - 2, y + h / 2 - 2, 14, 5, accent(70));        /* a TIE: the note goes on through it */
-            cv_rect(x, y, 12, h, accent(25));
-            cv_rect(x - 2, y + h / 2 - 2, 14, 5, accent(70));
+            cv_rect(x, y, 12, h, R4_TILE);
+            cv_rect(x - 2, y + h / 2 - 2, 14, 5, SY_MID);           /* a TIE: the note goes on through it */
         } else {
-            cv_rect(x, y, 12, h, on && has ? accent(70) : R4_TILE);
+            cv_rect(x, y, 12, h, on && has ? SY_BAR : R4_TILE);
             if (!(on && has))
                 cv_rect(x, y, 12, 1, R4_EDGE);
             for (k = 0; k < sq_n(s); k++) {   /* the notes: a tick each, by pitch */
                 int32_t ty = y + h - 4 - (int32_t)((s->note[k] - lo) * (uint32_t)(h - 6) / (hi - lo));
-                cv_rect(x + 2, ty, 8, 2, on ? R4_TEXT : R4_DIM);
+                cv_rect(x + 2, ty, 8, 2, on ? R4_BG : R4_DIM);
             }
             if (on && has && s->chance)
                 cv_rect(x + 9, y + 1, 2, 2, R4_BG);              /* a chance: a notch in the corner */
         }
         if (playing && sq.step == idx)
-            cv_rect(x, y + h + 2, 12, 4, R4_TEXT);
+            cv_rect(x, y + h + 2, 12, 4, sy_accent(100));
         if ((v == SQV_REC && sq_ed.cursor == idx) || (v == SQV_PAGE && sui.sub == 2 && sq_ed.cursor == idx && !playing))
             cv_rect(x, y + h + 2, 12, 4, R4_RED);
         if (v == SQV_STEP && sq_ed.held == (int8_t)idx) {
-            cv_rect(x - 1, y - 1, 14, 1, R4_TEXT); cv_rect(x - 1, y + h, 14, 1, R4_TEXT);
-            cv_rect(x - 1, y - 1, 1, h + 2, R4_TEXT); cv_rect(x + 12, y - 1, 1, h + 2, R4_TEXT);
+            cv_rect(x - 1, y - 1, 14, 1, sy_accent(100)); cv_rect(x - 1, y + h, 14, 1, sy_accent(100));
+            cv_rect(x - 1, y - 1, 1, h + 2, sy_accent(100)); cv_rect(x + 12, y - 1, 1, h + 2, sy_accent(100));
         }
     }
     for (pg = 0; pg < SQ_STEPS / SQ_PAGE; pg++) {     /* the four step pages (the black keys) */
         int32_t x = 10 + (int32_t)pg * 56, y = 54;
         int in = pg * SQ_PAGE < len;
-        cv_rect(x, y, 52, 10, pg == view ? accent(100) : in ? R4_EDGE : R4_TILE);
+        cv_rect(x, y, 52, 10, pg == view ? SY_BAR : in ? R4_EDGE : R4_TILE);
         cv_rect(x + 1, y + 1, 50, 8, R4_BG);
         for (i = 0; i < SQ_PAGE && in; i++) {
             uint32_t idx = pg * SQ_PAGE + i;
             uint16_t c = idx >= len ? R4_BG : sq_plays(&pt->s[idx]) ? R4_LABEL : R4_TILE;
             if (playing && sq.step == idx)
-                c = R4_TEXT;
+                c = sy_accent(100);
             cv_rect(x + 2 + (int32_t)i * 3, y + 2, 2, 6, c);
         }
     }
@@ -723,56 +1092,39 @@ static void sq_draw_grid(void)
     ptext(10, 67, &FONT_XS, t, R4_LABEL);
     if (sq.run && sq.pat != sel) {
         strcpy(t, "NEXT "); sq_pat_name(u, sel); u_cat(t, u);
-        ptext(230 - pwidth(&FONT_XS, t), 67, &FONT_XS, t, accent(100));
+        ptext(230 - pwidth(&FONT_XS, t), 67, &FONT_XS, t, sy_accent(100));
     } else if (sq_ext() || sq_clock_mode() == SQC_OUT) {
         strcpy(t, sq_ext() ? "CLOCK IN" : "CLOCK OUT");
         ptext(230 - pwidth(&FONT_XS, t), 67, &FONT_XS, t, R4_DIM);
     }
-    cv_blit(0, 34);
+    sy.bytes += 240u * 82u * 2u;
+    cv_blit(0, BAND_Y);
 }
-/* the four tiles in a row, y 116..199 */
-static void sq_draw_tiles(void)
+
+/* the band: full (a page change, the toast gone) or a live frame */
+static void sp_draw_band(int full)
 {
-    uint32_t k;
-    cv_begin(240, 84, R4_BG);
-    for (k = 0; k < 4u; k++) {
-        const r4p_slot_t *s = &ui.page.slot[k];
-        int32_t x = 4 + (int32_t)k * 59, w = 55, bw = 44, bx = x + 7, by = 66, fill, n, i;
-        const felucca_font_t *f = pwidth(&FONT_M, s->text) <= w - 9 ? &FONT_M : &FONT_B;
-        cv_rect(x, 2, w, 80, R4_TILE);
-        cv_rect(x, 2, w, 1, R4_EDGE);
-        cv_rect(x, 2, 3, 80, accent(100));
-        ptext(x + 7, 7, &FONT_XS, s->name, R4_LABEL);
-        if (pwidth(&FONT_B, s->text) > w - 9)
-            f = &FONT_XS;
-        ptext(x + 7, f == &FONT_M ? 28 : 33, f, s->text, R4_TEXT);
-        switch (s->kind) {
-        case R4P_KIND_UNI:
-            cv_rect(bx, by, bw, 6, R4_EDGE);
-            fill = s->value * bw / R4P_V14_MAX;
-            cv_rect(bx, by, fill, 6, accent(100));
-            break;
-        case R4P_KIND_BI:
-            cv_rect(bx, by, bw, 6, R4_EDGE);
-            fill = ((int32_t)s->value - 8192) * (bw / 2) / 8191;
-            if (fill >= 0) cv_rect(bx + bw / 2, by, fill, 6, accent(100));
-            else cv_rect(bx + bw / 2 + fill, by, -fill, 6, accent(100));
-            cv_rect(bx + bw / 2 - 1, by - 2, 2, 10, R4_TEXT);
-            break;
-        case R4P_KIND_ENUM:
-            n = (s->value >> 7) & 0x7F;
-            n = n < 2 ? 2 : n;
-            cv_rect(bx, by, bw, 6, R4_EDGE);
-            i = s->value & 0x7F;
-            cv_rect(bx + i * bw / n, by, bw / n > 2 ? bw / n : 2, 6, accent(100));
-            break;
-        case R4P_KIND_TOGGLE:
-            cv_rect(bx, by - 2, 26, 10, s->value ? accent(100) : R4_EDGE);
-            cv_rect(s->value ? bx + 17 : bx + 2, by, 7, 6, s->value ? on_accent() : R4_DIM);
-            break;
-        default:
-            break;
-        }
+    switch (sp_band_view()) {
+    case BV_GRID: sq_draw_grid(); break;
+    case BV_OPS: sy_ops(full); break;
+    case BV_ENV: sy_env(full); break;
+    case BV_LFO: sy_lfo(full); break;
+    default: sy_scope(full); break;
     }
-    cv_blit(0, 116);
+    if (full)
+        lcd_fill(0, BAND_Y, 4, BAND_H, R4_BG), lcd_fill(236, BAND_Y, 4, BAND_H, R4_BG);
+}
+/* the main loop, once a frame: a live frame when it is due (25 a second at most); the accent of a knob let go fades */
+static void sp_live(uint32_t now)
+{
+    int v = sp_band_view();
+    if (!ui.local || now - sy.at < LIVE_MS)
+        return;
+    sy.at = now;
+    if (v == BV_SCOPE || v == BV_OPS || v == BV_ENV || v == BV_LFO)
+        ui.dirty |= D_LIVE;
+    if (sy_touch_k && now - sy_touch_at >= 2000u) {           /* the turned knob's accent goes */
+        sy_touch_k = 0;
+        ui.dirty |= D_TILE0 << 2;
+    }
 }

@@ -26,9 +26,14 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
 
 ## Synth mode
 
-SEL + HOME enters it; the screen then shows the Synth pages in the same style as RUN4's: a header in the page colour
-(orange for sound, teal for effects, blue for arpeggiator and sequencer), four tiles with a value and a bar, and a
-footer with the page dots, tempo, bar and beat, transport and octave.
+SEL + HOME enters it. The screen is black, grey and white with one warm accent for where you are: the header (the page,
+the voice, a strip of the eight pages with this one lit), a band that shows the sound, the four knobs' tiles in a row
+(the knob you turn lights for two seconds) and the footer (sub-page dots, tempo, bar and beat, transport, octave).
+
+The band: on HOME, FX, GLO, ARP and SETUP the **scope** of the output (it settles to a dotted idle line when nothing
+sounds); on EDIT the **six operators** (the patch's level as a line, what the newest note plays as a moving bar,
+carriers underlined, the one you edit in the accent, its ratio under it); on ENV the **envelopes** (the one you edit
+bright, the stage the newest note is in lit); on LFO its **wave** with a dot where it is; on SEQ the step grid.
 
 **Sound.** Eight voices (the oldest, released one is stolen first), Dexed's FM engine (Felucca's port) with the 32 DX7
 algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo

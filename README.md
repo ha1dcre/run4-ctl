@@ -33,6 +33,13 @@ Store (flash data area, two 4 KiB sectors per object, `app/app.h`): panel 0xDC00
 0xD8000 (186 B), two user banks 0xD6000 / 0xD4000 (2056 B each), Bluetooth 0xDE000, and the sequencer's 16 patterns in
 four objects 0xD2000 / 0xD0000 / 0xCE000 / 0xCC000 (2088 B each, 8352 B; 32 KiB of flash). RAM for the patterns: 8.3 KB.
 
+Display budget (Synth mode's live band, `src/synth_ui.c`): at most 25 frames a second, drawn in RAM and sent as 16 px
+strips only as tall as the old and new trace (measured in the simulator, scenario `14_synth_look`: ~18.5 KB a frame for
+a full-scale note or chord, 0 for the idle line; the whole band would be 38 KB). At the panel's ~44 MHz effective SPI
+(`base/device/lcd.c`, ~5.5 MB/s, DMA) that is ~3.4 ms of transfer a frame, ~8 % of the time at 25 fps, in the main loop;
+the audio interrupt only stores 16 samples a 32-frame block into the scope's ring. Host draw time ~15-25 us a frame;
+on the device not measured (assumed well under 1 ms at 360 MHz).
+
 ## Build and test (macOS or Linux, host only)
 
     git clone --recursive <this repo>          # or: git submodule update --init --recursive

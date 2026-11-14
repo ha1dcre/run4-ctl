@@ -1,0 +1,92 @@
+# Synth mode's look: the scope of the output on HOME (silence, one note, a chord, the release to the idle line), the
+# operators, envelopes and LFO live on their pages, every page in the calm scheme; the cost of the live frames.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 600
+expect mode 1
+expect scope_reset 0
+wait 1000
+shot look_home_silent.png
+expect scope_frames 0
+expect scope_skipped >10
+# one note: the scope moves (25 frames a second at most)
+key 7 down 100 0
+wait 400
+shot look_scope_note.png
+expect scope_frames >5
+expect scope_frames <12
+# the cost of one note's frames (bytes sent a frame, the host's draw time), then the chord's
+expect scope_bpf <20000
+expect scope_reset 0
+# a chord
+key 11 down 100 0
+key 14 down 100 0
+key 18 down 100 0
+wait 300
+shot look_scope_chord.png
+shot look_anim_0.png
+wait 40
+shot look_anim_1.png
+wait 40
+shot look_anim_2.png
+wait 40
+shot look_anim_3.png
+wait 40
+shot look_anim_4.png
+wait 40
+shot look_anim_5.png
+# the scope's cost so far (one note, then a chord, on HOME): bytes a live frame and the host's draw time
+expect scope_bpf <38000
+expect scope_bpf >2000
+expect scope_us <2000
+# the knob turned: its tile in the accent
+turn K1 4
+wait 100
+shot look_home_knob.png
+# the operators move with the envelopes while the chord sounds
+tap EDIT
+wait 300
+shot look_edit_ops.png
+tap ENV
+wait 200
+shot look_env.png
+key 7 up
+key 11 up
+key 14 up
+key 18 up
+wait 200
+shot look_env_release.png
+tap LFO
+wait 300
+shot look_lfo.png
+tap FX
+wait 100
+shot look_fx.png
+tap GLO
+wait 100
+shot look_glo.png
+tap ARP
+wait 100
+shot look_arp.png
+# the release decays to the idle line
+tap HOME
+wait 2500
+shot look_scope_idle.png
+tap SEQ
+tap PLAY
+wait 600
+shot look_seq_play.png
+tap PLAY
+press SEL
+tap GLO
+release SEL
+wait 100
+expect setup 1
+shot look_setup_synth.png
+tap HOME
+wait 100
+expect setup 0

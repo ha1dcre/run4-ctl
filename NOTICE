@@ -28,6 +28,9 @@ Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Fel
             the last TIE back, no double trigger) and step entry (ui_input.c seq_entry: a chord into the cursor step,
             letting go moves on) are adapted from Felucca (GPL-3.0-only, Copyright (C) 2026 Leo Kuroshita); the rest
             (patterns, clock, swing, MIDI clock, storage, the grid editing) is new.
+  src/synth_ui.c   the scope follows Felucca's HOME scope (fx.c scope_buf, ui_graph.c graph_scope, GPL-3.0-only: a ring
+            of every other output sample, a rising zero crossing as the trigger, an auto-scaled 2 px trace); the
+            trigger's hysteresis, the slow release of the scale, the strip-wise sending and the other views are new.
   The DX7 voice and bank formats are Yamaha's; no factory ROM data of any instrument is included.
 
 Files from fm1-base and felucca-bsp stay under the Mozilla Public License 2.0, file by file; the source of those

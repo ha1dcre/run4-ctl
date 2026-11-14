@@ -665,6 +665,11 @@ static void syn_apply_event(const syn_ev_t *e)
         break;
     }
 }
+/* the scope's tap (synth_ui.c draws it, after Felucca's HOME scope): every other output frame, mono, 16 bit, into a ring
+ * the main loop copies; the render only stores (16 stores a 32-frame block) */
+#define SYN_SCOPE_N 512u
+static int16_t syn_scope[SYN_SCOPE_N];
+static volatile uint32_t syn_scope_w;
 /* n frames (a multiple of 32) of the synth into lr[2 * n] (24-bit range, master 0..4096 = 0..1) */
 static uint32_t syn_active_voices;
 static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
@@ -714,6 +719,12 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
                 fx_run(mix[i], &l, &r);
                 lr[2 * (b + i)] = syn_limit((int32_t)((int64_t)l * gain >> 12));
                 lr[2 * (b + i) + 1] = syn_limit((int32_t)((int64_t)r * gain >> 12));
+            }
+            {
+                uint32_t w = syn_scope_w;
+                for (i = 0; i < FM6_N; i += 2u)
+                    syn_scope[w++ & (SYN_SCOPE_N - 1u)] = (int16_t)((lr[2 * (b + i)] + lr[2 * (b + i) + 1]) >> 9);
+                syn_scope_w = w;
             }
         }
     }

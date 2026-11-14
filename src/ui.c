@@ -14,6 +14,7 @@
 
 enum { D_HEAD = 1, D_TILE0 = 2, D_TILES = 2 | 4 | 8 | 16, D_FOOT = 32, D_TOAST = 64, D_CLEAR = 128, D_DOTS = 256,
        D_BIG = 512, D_GAP = 1024,             /* protocol 1.2: the big value view; the strip between the tile rows */
+       D_LIVE = 2048,                         /* Synth mode: a live frame of the band (synth_ui.c) */
        D_TOAST_UNDER = 2 | 4,                 /* the two tiles of the top row: the toast sits in y 84..113 */
        D_ALL = D_HEAD | D_TILES | D_FOOT | D_CLEAR | D_DOTS };
 
@@ -29,7 +30,6 @@ typedef struct {
     uint16_t dirty;
     uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
     uint8_t local;                  /* Synth mode: the pages are ours, no host needed (synth_ui.c) */
-    uint8_t seqgrid;                /* ... the SEQ page: a step grid and four tiles in a row (synth_ui.c draws them) */
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
     r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
@@ -431,8 +431,9 @@ static void big_end(void)
 }
 
 /* ---------------------------------------------------------------- draw --- */
-static void sq_draw_grid(void);             /* synth_ui.c: the SEQ page's body (D_TILE0 / 1: the grid, 2 / 3: the tiles) */
-static void sq_draw_tiles(void);
+static void sp_draw_head(void);             /* synth_ui.c: Synth mode's own look (header, the band: D_TILE0 / 1, tiles: 2 / 3) */
+static void sp_draw_band(int full);
+static void sp_draw_tiles(void);
 static void ui_draw(void)
 {
     uint32_t now = plat_ms();
@@ -477,12 +478,14 @@ static void ui_draw(void)
     if (ui.dirty & D_CLEAR)
         lcd_fill(0, 0, 240, 240, R4_BG);
     if (ui.dirty & D_HEAD)
-        draw_head();
-    if (ui.local && ui.seqgrid && !ui.setup) {
-        if (ui.dirty & (D_TILE0 | D_TILE0 << 1))
-            sq_draw_grid();
+        ui.local ? sp_draw_head() : draw_head();
+    if (ui.local) {
+        if (ui.dirty & (D_TILE0 | D_TILE0 << 1 | D_CLEAR))
+            sp_draw_band(1);
+        else if (ui.dirty & D_LIVE)
+            sp_draw_band(0);
         if (ui.dirty & (D_TILE0 << 2 | D_TILE0 << 3))
-            sq_draw_tiles();
+            sp_draw_tiles();
     } else if (ui.big1 && host_page() && ui.connected) {      /* 1.2: the big value over the tiles */
         if (ui.dirty & (D_BIG | D_TOAST_UNDER | D_CLEAR))
             draw_big();
@@ -497,7 +500,7 @@ static void ui_draw(void)
         draw_foot();
     if ((ui.dirty & (D_TOAST | D_TOAST_UNDER)) && ui.toast_until)
         draw_toast();
-    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP);
+    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP | D_LIVE);
 }
 
 /* --------------------------------------------- host frames into state --- */
