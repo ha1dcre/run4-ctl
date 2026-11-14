@@ -137,8 +137,9 @@ def tolf():
 
 
 # ------------------------------------------------------------------ protocol 1.3 ---
-HVP = "ALG FB BRIGHT ENVSPD VOLUME VIBRATO TREMOLO LFOSPD ATDEPTH BEND VELSENS TRANSPOSE TUNE CHORUS DELAY REVERB DRIVE DLYTIME".split()
-HVP_MAX = [31, 7, 127, 127, 100, 99, 99, 99, 63, 12, 100, 48, 100, 100, 100, 100, 100, 5]
+HVP = ("ALG FB BRIGHT ENVSPD VOLUME VIBRATO TREMOLO LFOSPD ATDEPTH BEND VELSENS TRANSPOSE TUNE CHORUS DELAY REVERB DRIVE "
+       "DLYTIME MORPHSET MORPHMODE MORPH").split()                  # 18..20: the morph (firmware 0.6)
+HVP_MAX = [31, 7, 127, 127, 100, 99, 99, 99, 63, 12, 100, 48, 100, 100, 100, 100, 100, 5, 2, 11, 100]
 VOICE_HV = 127                         # the host voice's own voice (VOICE_GET, VOICE_DATA, HV_STATE)
 
 
@@ -313,6 +314,8 @@ def v13_table():
          "HV_ON16": hv_on(1, 15), "HV_ON1": hv_on(1, 0), "HV_OFF": hv_on(0, 15),
          "HV_PARAMS": hv_param(ALG=5, VOLUME=50, BRIGHT=70), "HV_BAD_PARAM": frame("HV_PARAM", [0, 32]),
          "HV_TEMPO_FX": hv_param(DELAY=30, DLYTIME=2, ATDEPTH=63),
+         "HV_MO_A": hv_param(BRIGHT=20, VOLUME=40, MORPHSET=0), "HV_MO_B": hv_param(BRIGHT=110, VOLUME=90, MORPHSET=1),
+         "HV_MO_KNOB": hv_param(MORPHMODE=1, MORPH=100), "HV_MO_DRIFT": hv_param(MORPHMODE=2, MORPH=0),
          "HV_V3": hv_voice_stored(3), "HV_V20": hv_voice_stored(20), "HV_V9": hv_voice_stored(9),
          "HV_VCED": hv_voice_vced(dx7_single()[6:6 + 155]),
          "HV_PACKED": hv_voice_packed(import_bank_records()[5][:118] + [ord(c) for c in "HOST SENT "]),
@@ -367,7 +370,7 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 5, 0, 3]), "SYNC": frame("SYNC_REQ"),
+        "HELLO": frame("HELLO", [1, 0, 6, 0, 3]), "SYNC": frame("SYNC_REQ"),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -413,7 +416,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 5, 0, 3]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 6, 0, 3]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

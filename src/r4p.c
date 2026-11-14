@@ -4,7 +4,8 @@
 
 static const uint8_t HDR[4] = {0xF0, 0x7D, 0x52, 0x34};
 /* protocol 1.3: HV_PARAM's wire ranges (docs/PROTOCOL.md "Host voice"), 0..max each */
-const uint8_t R4P_HVP_MAX[R4P_HVP_COUNT] = {31, 7, 127, 127, 100, 99, 99, 99, 63, 12, 100, 48, 100, 100, 100, 100, 100, 5};
+const uint8_t R4P_HVP_MAX[R4P_HVP_COUNT] = {31, 7, 127, 127, 100, 99, 99, 99, 63, 12, 100, 48, 100, 100, 100, 100, 100, 5,
+                                           2, 11, 100};
 static int voice_idx_ok(unsigned v) { return v < R4P_NVOICES || v == R4P_VOICE_HV; }
 
 /* ---------------------------------------------------------------- writer --- */

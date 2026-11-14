@@ -26,6 +26,8 @@
 /* ------------------------------------------------------------ settings --- */
 enum { ARP_UP, ARP_DOWN, ARP_UPDOWN, ARP_RANDOM, ARP_PLAYED, ARP_N };
 enum { REV_ROOM, REV_SPRING, REV_HALL, REV_N };
+#define MO_N 10                              /* the morph's values (MO_ID below) */
+enum { MO_OFF, MO_KNOB, MO_DRIFT, MO_NMODES = MO_DRIFT + 10 };   /* MO_DRIFT + i: a ping-pong of MO_SECS[i] seconds */
 /* what is stored (OBJ_SYNSET) and what the pages edit */
 typedef struct {
     uint8_t ver;
@@ -49,11 +51,19 @@ typedef struct {
     uint8_t mut_amt;                         /* MUTATE: 0 small, 1 medium, 2 wild */
     uint8_t song;                            /* the sequencer plays the chain (synth_seq.c) */
     uint8_t rsv3[3];
+    /* version 4: the morph (HOME's second sub-page; the host voice's HV_PARAM 18..20); stores of version 3 end here */
+    int8_t mo_a[MO_N], mo_b[MO_N];           /* the snapshots A and B of the MO_ID values, in their settings' units */
+    uint8_t mo_cap;                          /* bit 0: A taken, bit 1: B */
+    uint8_t mo_mode;                         /* MO_OFF, MO_KNOB (mo_pos), MO_DRIFT + i */
+    uint8_t mo_pos;                          /* 0..100: A .. B (KNOB; a drift starts there) */
+    uint8_t rsv4;
 } syn_set_t;
-#define SYN_SET_VER 3                        /* 2: the patterns moved to their own objects (synth_seq.c); 3: keys, song */
+#define SYN_SET_VER 4                        /* 2: the patterns moved to their own objects (synth_seq.c); 3: keys, song;
+                                              * 4: the morph */
 #define SYN_SET_V2_SIZE 186u                 /* a version 2 store: the same fields up to bpm10 */
-_Static_assert(offsetof(syn_set_t, bpm10) == 184u && offsetof(syn_set_t, scale) == SYN_SET_V2_SIZE && sizeof(syn_set_t) == 198u,
-               "settings store layout");
+#define SYN_SET_V3_SIZE 198u                 /* a version 3 store: the same fields up to rsv3 */
+_Static_assert(offsetof(syn_set_t, bpm10) == 184u && offsetof(syn_set_t, scale) == SYN_SET_V2_SIZE &&
+               offsetof(syn_set_t, mo_a) == SYN_SET_V3_SIZE && sizeof(syn_set_t) == 222u, "settings store layout");
 static syn_set_t syn;
 static uint8_t syn_dirty = 1;                /* an edit: the next block copies the patch again */
 
@@ -305,7 +315,21 @@ enum { LK_ALG, LK_FB, LK_BRIGHT, LK_ENVSPD, LK_LEVEL, LK_LFOSPD, LK_LFODLY, LK_P
 static const int8_t LK_LO[LK_N] = {0, 0, -64, -64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const int8_t LK_HI[LK_N] = {31, 7, 63, 63, 100, 99, 99, 99, 99, 100, 100, 100, 100, 5, 100, 100};
 static struct { uint32_t mask; int16_t v[LK_N]; } syn_lk;   /* bit id: locked to v[id] */
-static int32_t syn_lkv(uint32_t id, int32_t base) { return (syn_lk.mask >> id) & 1u ? syn_lk.v[id] : base; }
+/* The morph (A / B): while it is on (both snapshots taken, MODE not OFF) its ten values replace the settings' at
+ * control rate, a block at a time (syn_morph); the sequencer's locks still win over it. Audio context. */
+static const uint8_t MO_ID[MO_N] = {LK_BRIGHT, LK_FB, LK_ENVSPD, LK_LEVEL, LK_DRIVE, LK_CHORUS, LK_DLYMIX, LK_REVMIX,
+                                    LK_DLYFB, LK_REVSIZE};
+static const uint16_t MO_SECS[MO_NMODES - MO_DRIFT] = {10, 20, 30, 45, 60, 90, 120, 180, 240, 300};
+static struct {
+    uint32_t mask; int16_t v[LK_N];          /* bit id: the morph sets v[id] */
+    uint32_t ph;                             /* the drift's phase (a full A -> B -> A cycle is 2^32) */
+    int32_t pos;                             /* where it is, 0..65536 (A .. B), smoothed */
+    uint8_t was_mode, rephase;               /* the mode last block; the main loop moved the knob (a drift goes on from there) */
+} syn_mo;
+static int32_t syn_lkv(uint32_t id, int32_t base)
+{
+    return (syn_lk.mask >> id) & 1u ? syn_lk.v[id] : (syn_mo.mask >> id) & 1u ? syn_mo.v[id] : base;
+}
 static int32_t syn_lock_base(uint32_t id)     /* the base value a lock overrides (the settings, the patch) */
 {
     switch (id) {
@@ -340,13 +364,67 @@ static void syn_fxv(void)
     fxv.rev_size = syn_lkv(LK_REVSIZE, syn.rev_size);
 }
 
+/* the morph's snapshot (0 = A, 1 = B) of a setting set's values now */
+static void syn_morph_take(syn_set_t *s, uint32_t which)
+{
+    const int32_t v[MO_N] = {s->bright, s->cur[FP_FB], s->env_spd, s->level, s->drive, s->chorus, s->dly_mix, s->rev_mix,
+                             s->dly_fb, s->rev_size};
+    uint32_t i;
+    for (i = 0; i < MO_N; i++)
+        (which ? s->mo_b : s->mo_a)[i] = (int8_t)v[i];
+    s->mo_cap = (uint8_t)(s->mo_cap | 1u << (which & 1u));
+}
+static int syn_morph_on(void) { return syn.mo_cap == 3u && syn.mo_mode > MO_OFF && syn.mo_mode < MO_NMODES; }
+/* once a render call of n frames: where the morph is, and its values */
+static void syn_morph(uint32_t n)
+{
+    uint32_t i, m = 0;
+    int32_t tgt;
+    if (!syn_morph_on()) {
+        if (syn_mo.mask) {
+            syn_mo.mask = 0;
+            syn_dirty = 1;
+        }
+        syn_mo.was_mode = 0;
+        return;
+    }
+    if (syn.mo_mode == MO_KNOB) {
+        tgt = (int32_t)(syn.mo_pos > 100u ? 100u : syn.mo_pos) * 65536 / 100;
+    } else {
+        uint32_t per = MO_SECS[syn.mo_mode - MO_DRIFT] * 44100u;
+        if (syn_mo.was_mode < MO_DRIFT || syn_mo.rephase)       /* a drift starts (or the knob moved): from there, to B */
+            syn_mo.ph = (uint32_t)((uint64_t)(syn.mo_pos > 100u ? 100u : syn.mo_pos) * 0x7FFFFFFFu / 100u);
+        syn_mo.ph += (uint32_t)(((uint64_t)n << 32) / per);
+        tgt = (int32_t)((syn_mo.ph < 0x80000000u ? syn_mo.ph : ~syn_mo.ph) >> 15);
+    }
+    syn_mo.rephase = 0;
+    if (!syn_mo.was_mode)
+        syn_mo.pos = tgt;                    /* (just on: no glide from wherever it was) */
+    syn_mo.was_mode = syn.mo_mode;
+    syn_mo.pos += (tgt - syn_mo.pos) / 4 + (tgt > syn_mo.pos ? 1 : tgt < syn_mo.pos ? -1 : 0);
+    if ((syn_mo.pos > tgt ? syn_mo.pos - tgt : tgt - syn_mo.pos) < 4)
+        syn_mo.pos = tgt;
+    for (i = 0; i < MO_N; i++) {
+        uint32_t id = MO_ID[i];
+        int32_t a = syn.mo_a[i], b = syn.mo_b[i], v = a + (((b - a) * syn_mo.pos + 32768) >> 16);
+        v = v < LK_LO[id] ? LK_LO[id] : v > LK_HI[id] ? LK_HI[id] : v;
+        if ((id == LK_FB || id == LK_ENVSPD) && (!((syn_mo.mask >> id) & 1u) || syn_mo.v[id] != v))
+            syn_dirty = 1;                   /* (the patch's own: the voices take them at the next sync) */
+        syn_mo.v[id] = (int16_t)v;
+        m |= 1u << id;
+    }
+    if (!syn_mo.mask)
+        syn_dirty = 1;
+    syn_mo.mask = m;
+}
+
 static void syn_sync(void)                   /* the patch, with the macros; once per block when something changed */
 {
     uint8_t *p = syn_eff;
     uint32_t k, car;
     int32_t meg = syn_clamp(syn_lkv(LK_ENVSPD, syn.env_spd), -64, 63) * 40 / 64;
     memcpy(p, syn.cur, FP_SIZE + 1u);
-    if (syn_lk.mask) {                       /* the sequencer's locks on the patch's own parameters */
+    if (syn_lk.mask | syn_mo.mask) {         /* the sequencer's locks (and the morph) on the patch's own parameters */
         p[FP_ALG] = (uint8_t)syn_lkv(LK_ALG, p[FP_ALG]);
         p[FP_FB] = (uint8_t)syn_lkv(LK_FB, p[FP_FB]);
         p[FP_LFS] = (uint8_t)syn_lkv(LK_LFOSPD, p[FP_LFS]);
@@ -764,6 +842,7 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         syn_apply_event(&syn_ev[syn_evt]);
         syn_evt = (uint8_t)((syn_evt + 1u) % SYN_EVQ);
     }
+    syn_morph(n);
     for (b = 0; b + FM6_N <= n; b += FM6_N) {
         int32_t mix[FM6_N], bus[FM6_N], lfo_v, lfo_d, lf_fine = syn.tune * 2366 / 1000, fb;
         uint32_t live = 0;
@@ -857,6 +936,8 @@ static void syn_reset_sound(void)
     syn_chan_at = 0;
     syn_active_voices = 0;
     syn_lk.mask = 0;
+    syn_mo.mask = 0;
+    syn_mo.was_mode = 0;
 }
 static void syn_swap(void)
 {
@@ -880,12 +961,15 @@ static void syn_host_defaults(syn_set_t *out)
     syn = keep;
     syn_dirty = 1;
 }
-/* a version 3 settings store with its new fields in their ranges (a version 2 one: their defaults) */
-static void syn_set_fix(syn_set_t *t, int from_v2)
+/* a version 4 settings store with its new fields in their ranges; from: the size of an older store loaded into it
+ * (SYN_SET_V2_SIZE, SYN_SET_V3_SIZE: the fields after it get their defaults), 0 = a version 4 one */
+static void syn_set_fix(syn_set_t *t, uint32_t from)
 {
-    if (from_v2) {
-        memset((uint8_t *)t + SYN_SET_V2_SIZE, 0, sizeof *t - SYN_SET_V2_SIZE);
-        t->mut_amt = 1;
+    uint32_t i;
+    if (from) {
+        memset((uint8_t *)t + from, 0, sizeof *t - from);
+        if (from <= SYN_SET_V2_SIZE)
+            t->mut_amt = 1;
         t->ver = SYN_SET_VER;
     }
     if (t->scale >= 11u) t->scale = 0;
@@ -897,6 +981,14 @@ static void syn_set_fix(syn_set_t *t, int from_v2)
     if (t->spread > 2u) t->spread = 0;
     if (t->mut_amt > 2u) t->mut_amt = 1;
     if (t->song > 1u) t->song = 0;
+    t->mo_cap &= 3u;
+    if (t->mo_mode >= MO_NMODES) t->mo_mode = MO_OFF;
+    if (t->mo_pos > 100u) t->mo_pos = 0;
+    for (i = 0; i < MO_N; i++) {
+        uint32_t id = MO_ID[i];
+        if (t->mo_a[i] < LK_LO[id] || t->mo_a[i] > LK_HI[id]) t->mo_a[i] = (int8_t)LK_LO[id];
+        if (t->mo_b[i] < LK_LO[id] || t->mo_b[i] > LK_HI[id]) t->mo_b[i] = (int8_t)LK_LO[id];
+    }
 }
 
 /* ---------------------------------------------------------- scale and chord --- */

@@ -1,0 +1,83 @@
+# The morph: HOME's second sub-page (HOME again): MORPH (A .. B), MODE (OFF, KNOB, a drift of 10 s .. 5 min there and
+# back), SET A, SET B (the HOME and FX values now). While it is on its values play instead of the settings'. The host
+# voice has its own (HV_PARAM 18 MORPH SET, 19 MODE, 20 MORPH; firmware 0.6).
+@ACK13@
+wait 100
+expect_sysex @SYNC@
+sysex_out
+@HV_ON16@
+wait 50
+@HV_MO_A@
+@HV_MO_B@
+wait 50
+expect hv_mo_cap 3
+expect mo_on 0
+@HV_MO_KNOB@
+wait 100
+expect hv_mo_mode 1
+expect mo_on 1
+expect mo_live 100
+@HV_MO_DRIFT@
+wait 1000
+expect mo_live >1
+expect mo_live <30
+# Synth mode: its own morph, off until A and B are set
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+expect mo_cap 0
+expect mo_on 0
+tap HOME
+wait 60
+expect syn_page 1
+shot morph_empty.png
+turn K2 1
+wait 60
+expect toast 1
+# A: BRIGHT -30, REVERB 10; B: BRIGHT +40, REVERB 70 (HOME 1 and FX 1, then SET on HOME 2: HOME twice from FX)
+tap HOME
+turn K1 -30
+tap FX
+turn K4 -10
+tap HOME
+tap HOME
+wait 40
+expect syn_page 1
+turn K3 1
+wait 40
+tap HOME
+turn K1 70
+tap FX
+turn K4 60
+tap HOME
+tap HOME
+wait 40
+turn K4 1
+wait 60
+expect mo_cap 3
+expect mo_on 1
+expect mo_live 0
+turn K1 50
+wait 200
+expect mo_live 50
+shot morph_knob.png
+# a drift of 10 s there and back (MODE +1): it moves, the MORPH tile follows it
+turn K2 1
+wait 2500
+expect mo_mode 2
+expect mo_live >60
+shot morph_drift.png
+turn K2 -2
+wait 100
+expect mo_on 0
+# kept over a power cycle
+wait 4500
+reboot
+wait 300
+expect mo_cap 3
+expect mo_mode 0

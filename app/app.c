@@ -10,7 +10,7 @@
 #include "tape_ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 5
+#define FW_MINOR 6
 enum { MODE_RUN4 = 0, MODE_SYNTH = 1 };      /* SEL + HOME switches (docs/PROTOCOL.md); HELLO reports it */
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
 #define HELLO_MS 1000u
@@ -425,6 +425,14 @@ static void hv_param(uint8_t id, uint8_t v)            /* HV_PARAM: one paramete
     case R4P_HVP_REVERB: s->rev_mix = v; break;
     case R4P_HVP_DRIVE: s->drive = v; break;
     case R4P_HVP_DLYTIME: s->dly_div = v; break;
+    case R4P_HVP_MORPHSET:                             /* (firmware 0.6) the morph: A, B from the values now; 2 clears */
+        if (v < 2u) syn_morph_take(s, v); else s->mo_cap = 0;
+        break;
+    case R4P_HVP_MORPHMODE: s->mo_mode = v; break;
+    case R4P_HVP_MORPH:
+        s->mo_pos = v;
+        if (s == &syn && s->mo_mode >= MO_DRIFT) syn_mo.rephase = 1;
+        break;
     default: break;
     }
     if (s == &syn)
@@ -1684,6 +1692,12 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "hv_level")) *got = hv_set()->level;
     else if (!strcmp(what, "hv_bright")) *got = hv_set()->bright;
     else if (!strcmp(what, "hv_bpm10")) *got = hv_set()->bpm10;
+    else if (!strcmp(what, "hv_mo_cap")) *got = hv_set()->mo_cap;
+    else if (!strcmp(what, "hv_mo_mode")) *got = hv_set()->mo_mode;
+    else if (!strcmp(what, "mo_cap")) *got = syn.mo_cap;
+    else if (!strcmp(what, "mo_mode")) *got = syn.mo_mode;
+    else if (!strcmp(what, "mo_live")) *got = (int)((syn_mo.pos * 100 + 32768) >> 16);   /* where the morph is, % */
+    else if (!strcmp(what, "mo_on")) *got = syn_mo.mask != 0;
     else if (!strcmp(what, "syn_level")) *got = (mode == MODE_SYNTH ? &syn : &syn_alt)->level;   /* Synth mode's own */
     else if (!strcmp(what, "render_permille")) *got = ctl.rend_frames ? (int)((uint64_t)ctl.rend_ticks / PLAT_TICKS_PER_US * 44100u / 1000u / ctl.rend_frames) : 0;
     else if (!strcmp(what, "render_reset")) { *got = 0; ctl.rend_ticks = ctl.rend_frames = 0; }

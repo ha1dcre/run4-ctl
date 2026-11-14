@@ -19,7 +19,7 @@ typedef struct {
 /* where a parameter lives. SRC_CUR: a byte of the patch (offset in `off`, plus the operator's block); SRC_SYN: a field of syn_set_t */
 enum { S_NONE, S_OPB, S_PAT, S_BRIGHT, S_ENVSPD, S_LEVEL, S_DRIVE, S_CHORUS, S_DLYMIX, S_DLYDIV, S_DLYFB, S_REVMIX, S_REVTYPE,
        S_REVSIZE, S_TRANSPOSE, S_TUNE, S_CHAN, S_BEND, S_VELSENS, S_ARPON, S_ARPMODE, S_ARPRATE, S_ARPOCT, S_ARPGATE,
-       S_MUTAMT, S_SCALE, S_ROOT, S_KEYMODE, S_MIDISCALE, S_CHORD, S_INV, S_SPREAD };
+       S_MUTAMT, S_SCALE, S_ROOT, S_KEYMODE, S_MIDISCALE, S_CHORD, S_INV, S_SPREAD, S_MPOS, S_MMODE, S_MSETA, S_MSETB };
 
 static const char *const N_WAVE[] = {"TRIANGLE", "SAW DOWN", "SAW UP", "SQUARE", "SINE", "S&H"};
 static const char *const N_ARP[] = {"UP", "DOWN", "UP-DOWN", "RANDOM", "PLAYED"};
@@ -37,6 +37,9 @@ static const char *const N_MIDISC[] = {"AS IS", "SCALE"};
 static const char *const N_CHORD[] = {"OFF", "MAJ", "MIN", "7", "MAJ7", "MIN7", "SUS2", "SUS4", "POWER", "SCALE 3", "SCALE 4"};
 static const char *const N_INV[] = {"ROOT", "1ST", "2ND", "3RD"};
 static const char *const N_SPREAD[] = {"CLOSE", "OPEN", "WIDE"};
+static const char *const N_MOMODE[] = {"OFF", "KNOB", "10 S", "20 S", "30 S", "45 S", "1 MIN", "90 S", "2 MIN", "3 MIN",
+                                       "4 MIN", "5 MIN"};      /* (MO_*: KNOB, then the drifts' periods) */
+static const char *const N_SNAP[] = {"EMPTY", "SET"};
 
 #define P(nm, kd, fm, lo, hi, sg, sr) {nm, kd, fm, lo, hi, sg, sr, 0, 0}
 #define PN(nm, fm, lo, hi, sr, arr) {nm, R4P_KIND_ENUM, fm, lo, hi, 0, sr, arr, (uint8_t)(sizeof arr / sizeof arr[0])}
@@ -45,8 +48,11 @@ static const char *const N_SPREAD[] = {"CLOSE", "OPEN", "WIDE"};
 typedef struct { const char *title; uint8_t nsub; const sp_param_t p[3][4]; uint8_t off[3][4]; } sp_page_t;
 /* `off` = the byte inside the operator's 21-byte block (S_OPB) or inside the patch (S_PAT) */
 static const sp_page_t SP[SP_N] = {
-    {"SYNTH", 1, {{P("BRIGHT", R4P_KIND_BI, F_SIGNED, -64, 63, 1, S_BRIGHT), P("FEEDBACK", R4P_KIND_UNI, F_NUM, 0, 7, 0, S_PAT),
-                   P("ENV SPEED", R4P_KIND_BI, F_SIGNED, -64, 63, 1, S_ENVSPD), P("LEVEL", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_LEVEL)}},
+    {"SYNTH", 2, {{P("BRIGHT", R4P_KIND_BI, F_SIGNED, -64, 63, 1, S_BRIGHT), P("FEEDBACK", R4P_KIND_UNI, F_NUM, 0, 7, 0, S_PAT),
+                   P("ENV SPEED", R4P_KIND_BI, F_SIGNED, -64, 63, 1, S_ENVSPD), P("LEVEL", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_LEVEL)},
+                  {P("MORPH", R4P_KIND_UNI, F_PCT, 0, 100, 0, S_MPOS), PN("MODE", F_NAMES, 0, MO_NMODES - 1, S_MMODE, N_MOMODE),
+                   {"SET A", R4P_KIND_TOGGLE, F_NAMES, 0, 1, 0, S_MSETA, N_SNAP, 2},
+                   {"SET B", R4P_KIND_TOGGLE, F_NAMES, 0, 1, 0, S_MSETB, N_SNAP, 2}}},
      {{0, FP_FB, 0, 0}, {0}, {0}}},
     {"OPERATOR", 2, {{P("RATIO", R4P_KIND_UNI, F_NUM, 0, 31, 0, S_OPB), P("FINE", R4P_KIND_UNI, F_NUM, 0, 99, 0, S_OPB),
                       P("LEVEL", R4P_KIND_UNI, F_NUM, 0, 99, 0, S_OPB), P("DETUNE", R4P_KIND_BI, F_DET, 0, 14, 0, S_OPB)},
@@ -136,13 +142,20 @@ static uint8_t *sp_ptr(const sp_param_t *q, uint32_t off, int *is_signed)
     case S_CHORD: return &syn.chord;
     case S_INV: return &syn.inv;
     case S_SPREAD: return &syn.spread;
+    case S_MPOS: return &syn.mo_pos;
+    case S_MMODE: return &syn.mo_mode;
     default: return 0;
     }
 }
 static int sp_get(const sp_param_t *q, uint32_t off)
 {
     int sg;
-    uint8_t *p = sp_ptr(q, off, &sg);
+    uint8_t *p;
+    if (q->src == S_MSETA || q->src == S_MSETB)          /* the morph's snapshots: taken or not */
+        return (syn.mo_cap >> (q->src == S_MSETB)) & 1u;
+    if (q->src == S_MPOS && syn_morph_on() && syn.mo_mode >= MO_DRIFT)
+        return (int)((syn_mo.pos * 100 + 32768) >> 16);   /* a drift: where it is now */
+    p = sp_ptr(q, off, &sg);
     return !p ? 0 : sg ? (int)(int8_t)*p : (int)*p;
 }
 static void sp_set(const sp_param_t *q, uint32_t off, int v)
@@ -218,6 +231,7 @@ static void syn_patch_label(char *t)          /* "F3" / "U05" and the name */
 
 static void sq_build(void);
 static void sq_turn(uint32_t k, int d);
+static void sp_toast(const char *a);
 /* the current page into ui.page (a host-less page) */
 static void sp_build(void)
 {
@@ -239,7 +253,7 @@ static void sp_build(void)
         u_int((unsigned)(syn.cur[FP_ALG] & 31u) + 1u, u);
         u_cat(g->track, u);
     } else {
-        strcpy(g->title, pg->title);
+        strcpy(g->title, sui.page == SP_HOME && sui.sub == 1u ? "MORPH" : pg->title);
         syn_patch_label(g->track);
     }
     g->r = SY_AR; g->g = SY_AG; g->b = SY_AB;          /* one accent for all of Synth mode (the footer's dots, toasts) */
@@ -273,6 +287,18 @@ static void sp_turn(uint32_t k, int d)
     }
     if (q->kind == R4P_KIND_EMPTY)
         return;
+    if (q->src == S_MSETA || q->src == S_MSETB) {         /* SET A / SET B: the values now, either way */
+        syn_morph_take(&syn, q->src == S_MSETB);
+        sp_toast(q->src == S_MSETB ? "B SET" : "A SET");
+        sp_touch();
+        sui.edit_at = plat_ms();
+        sp_build();
+        return;
+    }
+    if (q->src == S_MPOS && syn.mo_mode >= MO_DRIFT) {   /* MORPH while drifting: the drift goes on from there */
+        syn.mo_pos = (uint8_t)sp_get(q, 0);
+        syn_mo.rephase = 1;
+    }
     if (q->kind == R4P_KIND_TOGGLE || (q->kind == R4P_KIND_ENUM && q->hi == 1))
         d = d > 0 ? 1 : -1;
     sp_set(q, pg->off[sui.sub][k], sp_get(q, pg->off[sui.sub][k]) + d);
@@ -281,6 +307,11 @@ static void sp_turn(uint32_t k, int d)
     }
     sp_touch();
     sui.edit_at = plat_ms();
+    if (q->src == S_MMODE && syn.mo_cap != 3u && syn.mo_mode)
+        sp_toast(syn.mo_cap & 1u ? "SET B FIRST" : "SET A AND B FIRST");
+    else if (syn_morph_on() && sui.sub == 0u && (sui.page == SP_HOME || sui.page == SP_FX) &&
+             q->src != S_REVTYPE && q->src != S_DLYDIV)
+        sp_toast("MORPH IS ON (HOME 2)");      /* (its values play, not these) */
     sp_build();
 }
 static void sq_disarm(void);
@@ -351,7 +382,10 @@ static void syn_load_all(void)
     {
         int n = plat_store_load(OBJ_SYNSET, &t, sizeof t);
         if (n == (int)SYN_SET_V2_SIZE && t.ver == 2u) {   /* stored before the keys and the song: their defaults */
-            syn_set_fix(&t, 1);
+            syn_set_fix(&t, SYN_SET_V2_SIZE);
+            n = (int)sizeof t;
+        } else if (n == (int)SYN_SET_V3_SIZE && t.ver == 3u) {   /* stored before the morph */
+            syn_set_fix(&t, SYN_SET_V3_SIZE);
             n = (int)sizeof t;
         }
         if (n != (int)sizeof t)
@@ -1095,6 +1129,7 @@ static struct {
     uint32_t at;                               /* the last live frame (plat_ms) */
     uint32_t frames, bytes, skipped, ticks;    /* live frames drawn, bytes blitted, frames with nothing to send, host time */
     uint8_t lfo_odd;
+    uint32_t morph_at;                         /* the drifting MORPH tile's last refresh */
 } sy;
 static uint16_t sy_accent(int pct) { return RGB(SY_AR * 2 * pct / 100, SY_AG * 2 * pct / 100, SY_AB * 2 * pct / 100); }
 static int sp_band_view(void)
@@ -1598,6 +1633,11 @@ static void sp_live(uint32_t now)
     sy.at = now;
     if (v == BV_SCOPE || v == BV_OPS || v == BV_ENV || v == BV_LFO)
         ui.dirty |= D_LIVE;
+    if (sui.page == SP_HOME && sui.sub == 1u && !ui.setup && syn_morph_on() && syn.mo_mode >= MO_DRIFT &&
+        now - sy.morph_at >= 200u) {         /* a drift: MORPH's tile follows it, five times a second */
+        sy.morph_at = now;
+        sp_build();
+    }
     if (sy_touch_k && now - sy_touch_at >= 2000u) {           /* the turned knob's accent goes */
         sy_touch_k = 0;
         ui.dirty |= D_TILE0 << 2;

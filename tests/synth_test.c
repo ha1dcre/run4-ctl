@@ -349,9 +349,12 @@ static void step2_tests(void)
     /* settings migration: a version 2 store gets the defaults of the new fields */
     {
         syn_set_t t = syn;
-        t.ver = 2; t.scale = 9; t.mut_amt = 77; t.song = 1;
-        syn_set_fix(&t, 1);
-        CHECK(t.ver == SYN_SET_VER && t.scale == 0 && t.mut_amt == 1 && t.song == 0 && t.bpm10 == syn.bpm10);
+        t.ver = 2; t.scale = 9; t.mut_amt = 77; t.song = 1; t.mo_cap = 3; t.mo_mode = 4;
+        syn_set_fix(&t, SYN_SET_V2_SIZE);
+        CHECK(t.ver == SYN_SET_VER && t.scale == 0 && t.mut_amt == 1 && t.song == 0 && t.bpm10 == syn.bpm10 && t.mo_cap == 0);
+        t.ver = 3; t.scale = 4; t.mut_amt = 2; t.mo_cap = 3; t.mo_mode = 4; t.mo_a[0] = 9;      /* version 3: the morph off */
+        syn_set_fix(&t, SYN_SET_V3_SIZE);
+        CHECK(t.ver == SYN_SET_VER && t.scale == 4 && t.mut_amt == 2 && t.mo_cap == 0 && t.mo_mode == 0 && t.mo_a[0] == 0);
         t.chord = 99; t.inv = 7;
         syn_set_fix(&t, 0);
         CHECK(t.chord == 0 && t.inv == 0);
@@ -578,6 +581,55 @@ static uint32_t played_loops(uint32_t pat, uint32_t step, uint32_t loops, uint32
     }
     syn_seq_start(0);
     return *mask;
+}
+/* the morph: A / B snapshots, KNOB, a drift's ping-pong, the locks over it, the host voice's set its own */
+static void morph_tests(void)
+{
+    syn_set_t keep = syn;
+    uint32_t i, lo = 65536, hi = 0, t;
+    syn_event(6, 0, 0, 0);
+    syn.bright = -40; syn.level = 50; syn.rev_mix = 0; syn.cur[FP_FB] = 1;
+    syn_morph_take(&syn, 0);
+    syn.bright = 40; syn.level = 90; syn.rev_mix = 60; syn.cur[FP_FB] = 7;
+    syn_morph_take(&syn, 1);
+    CHECK(syn.mo_cap == 3 && syn.mo_a[0] == -40 && syn.mo_b[0] == 40 && syn.mo_a[1] == 1 && syn.mo_b[3] == 90);
+    syn.bright = 0; syn.level = 70; syn.rev_mix = 20; syn.cur[FP_FB] = 3;
+    syn.mo_mode = MO_OFF;
+    run_small(256);
+    CHECK(syn_mo.mask == 0 && syn_lkv(LK_BRIGHT, syn.bright) == 0);
+    syn.mo_mode = MO_KNOB; syn.mo_pos = 0;
+    run_small(256);
+    CHECK(syn_lkv(LK_BRIGHT, syn.bright) == -40 && syn_lkv(LK_LEVEL, syn.level) == 50 && syn_eff[FP_FB] == 1);
+    syn.mo_pos = 100;
+    run_small(44100 / 10);
+    CHECK(syn_lkv(LK_BRIGHT, syn.bright) == 40 && syn_lkv(LK_REVMIX, syn.rev_mix) == 60 && syn_eff[FP_FB] == 7);
+    syn.mo_pos = 50;
+    run_small(44100 / 10);
+    CHECK(syn_lkv(LK_BRIGHT, syn.bright) == 0 && syn_lkv(LK_LEVEL, syn.level) == 70 && syn_eff[FP_FB] == 4);
+    syn_lk.mask = 1u << LK_BRIGHT; syn_lk.v[LK_BRIGHT] = 11;       /* a lock wins */
+    CHECK(syn_lkv(LK_BRIGHT, syn.bright) == 11);
+    syn_lk.mask = 0;
+    /* a drift of 10 s there and back: in 10 s it reaches both ends, the middle again after a cycle */
+    syn.mo_mode = MO_DRIFT; syn.mo_pos = 0;
+    run_small(256);
+    for (t = 0; t < 44100u * 10u; t += 4096u) {
+        run_small(4096);
+        if ((uint32_t)syn_mo.pos < lo) lo = (uint32_t)syn_mo.pos;
+        if ((uint32_t)syn_mo.pos > hi) hi = (uint32_t)syn_mo.pos;
+    }
+    CHECK(lo < 2000u && hi > 63000u);
+    printf("  morph: knob A / B / middle, lock over it, drift 10 s covers %u..%u of 65536\n", lo, hi);
+    /* the host voice's set has its own snapshots (syn_swap), and a set without both of them plays its own values */
+    syn_swap();
+    CHECK(syn.mo_cap == keep.mo_cap);
+    run_small(256);
+    CHECK(syn_mo.mask == 0 || syn_morph_on());
+    syn_swap();
+    CHECK(syn.mo_cap == 3);
+    for (i = 0; i < MO_N; i++) syn.mo_a[i] = syn.mo_b[i] = 0;
+    syn = keep;
+    syn_dirty = 1;
+    run_small(256);
 }
 static void cond_gen_tests(void)
 {
@@ -839,6 +891,7 @@ int main(int argc, char **argv)
     step2_tests();
     host_voice_tests();
     cond_gen_tests();
+    morph_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);

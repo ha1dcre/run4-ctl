@@ -37,7 +37,9 @@ enum { R4P_HV_OFF, R4P_HV_SOUNDING, R4P_HV_SUSPENDED };            /* HV_STATE s
 enum { R4P_HVV_STORED, R4P_HVV_PACKED, R4P_HVV_VCED };             /* HV_VOICE kind: a stored voice, 128 / 155 bytes */
 enum { R4P_HVP_ALG, R4P_HVP_FB, R4P_HVP_BRIGHT, R4P_HVP_ENVSPD, R4P_HVP_VOLUME, R4P_HVP_VIBRATO, R4P_HVP_TREMOLO,
        R4P_HVP_LFOSPD, R4P_HVP_ATDEPTH, R4P_HVP_BEND, R4P_HVP_VELSENS, R4P_HVP_TRANSPOSE, R4P_HVP_TUNE, R4P_HVP_CHORUS,
-       R4P_HVP_DELAY, R4P_HVP_REVERB, R4P_HVP_DRIVE, R4P_HVP_DLYTIME, R4P_HVP_COUNT };   /* HV_PARAM ids */
+       R4P_HVP_DELAY, R4P_HVP_REVERB, R4P_HVP_DRIVE, R4P_HVP_DLYTIME,
+       R4P_HVP_MORPHSET, R4P_HVP_MORPHMODE, R4P_HVP_MORPH,                  /* 18..20: the morph (firmware 0.6 on) */
+       R4P_HVP_COUNT };                                                      /* HV_PARAM ids */
 extern const uint8_t R4P_HVP_MAX[R4P_HVP_COUNT];                    /* the largest wire value of each */
 #define R4P_NVOICES 40            /* 8 factory + 32 user */
 #define R4P_VOICE_HV 127          /* VOICE_GET / VOICE_DATA / HV_STATE: the host voice's own (sent or edited) voice */
@@ -90,7 +92,7 @@ typedef struct { uint8_t index, action; } r4p_pick_t;
 typedef struct { uint8_t state, chan, voice; char name[R4P_STR_MAX + 1]; } r4p_hvstate_t;   /* HV_STATE */
 typedef struct { uint8_t on, chan; } r4p_hvon_t;                                           /* HV_ON (chan 0..15) */
 typedef struct { uint8_t kind, idx; uint8_t data[R4P_VCED]; } r4p_hvvoice_t;  /* HV_VOICE: idx (STORED) or data (128 / 155) */
-typedef struct { uint8_t n, id[R4P_HVP_COUNT], val[R4P_HVP_COUNT]; } r4p_hvparam_t;        /* HV_PARAM: 1..18 pairs */
+typedef struct { uint8_t n, id[R4P_HVP_COUNT], val[R4P_HVP_COUNT]; } r4p_hvparam_t;        /* HV_PARAM: 1..21 pairs */
 typedef struct {                                                                           /* VOICE_NAMES */
     uint8_t first, total, n;
     uint8_t used[R4P_NAMES_ROWS];

@@ -444,6 +444,15 @@ static void t_v13(void)
         uint8_t over[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 1, 8, 0xF7};
         CHECK(r4p_parse(odd, sizeof odd, &b) == -1 && r4p_parse(none, sizeof none, &b) == -1 && r4p_parse(over, sizeof over, &b) == -1);
     }
+    {   /* 18..20, the morph (firmware 0.6): SET 0..2, MODE 0..11, MORPH 0..100; 21 is no id */
+        uint8_t mo[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 18, 1, 19, 11, 20, 100, 0xF7};
+        uint8_t mo_set3[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 18, 3, 0xF7}, mo_mode12[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 19, 12, 0xF7};
+        uint8_t mo_101[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 20, 101, 0xF7}, id21[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 21, 0, 0xF7};
+        CHECK(R4P_HVP_COUNT == 21 && R4P_HVP_MORPH == 20);
+        CHECK(r4p_parse(mo, sizeof mo, &b) == 1 && b.u.hvparam.n == 3 && b.u.hvparam.id[1] == R4P_HVP_MORPHMODE && b.u.hvparam.val[2] == 100);
+        CHECK(r4p_parse(mo_set3, sizeof mo_set3, &b) == -1 && r4p_parse(mo_mode12, sizeof mo_mode12, &b) == -1);
+        CHECK(r4p_parse(mo_101, sizeof mo_101, &b) == -1 && r4p_parse(id21, sizeof id21, &b) == -1);
+    }
     /* NAMES_REQ, VOICE_GET */
     m.cmd = R4P_NAMES_REQ; n = enc(&m);
     CHECK(n == 6 && buf[4] == 0x4C && r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_NAMES_REQ);
