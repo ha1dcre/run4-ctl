@@ -1,0 +1,31 @@
+# The package without AMB mode (app-noamb: R4_AMB 0): SEL + HOME goes RUN4 -> SYNTH -> RUN4; the help cards work;
+# a backup of the full package (with its AMB part) restores here and its AMB part comes back untouched in the next
+# backup (tests/scenarios_cross/ takes it back to the full package).
+expect r4_amb 0
+@ACK@
+wait 100
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 1
+press HOME
+wait 1200
+expect card 7
+shot noamb_card_home.png
+release HOME
+wait 60
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 0
+expect set_mode 0
+restore out:r4ctl_amb.bak
+expect restore_rc 0
+wait 200
+expect mode 0
+backup out:r4ctl_noamb.bak
+wait 100

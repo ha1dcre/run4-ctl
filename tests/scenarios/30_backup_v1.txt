@@ -1,0 +1,25 @@
+# A USB backup of firmware 0.6 (image version 1, no AMB part): fm1-base refuses another version (restore_rc 3, the
+# head), so tools/r4ctl_backup.py upgrades it (the AMB part absent) and that restores: everything as it was then, AMB
+# mode at its recipes. (tests/run_sim.sh makes old_v1.bak from 27_usb_backup's image, as 0.6 wrote it, and upgrades it.)
+restore out:old_v1.bak
+expect restore_rc >0
+restore out:old_v1_up.bak
+expect restore_rc 0
+wait 200
+expect seq_on 4
+expect set_vel 2
+expect ml_count 1
+expect user_bank 1
+expect mode 0
+press SEL
+wait 40
+tap HOME
+wait 100
+expect mode 1
+expect mo_cap 3
+tap HOME
+release SEL
+wait 300
+expect mode 2
+expect amb_piece 1
+expect amb_par18 72

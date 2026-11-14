@@ -10,8 +10,9 @@
 #include "tape_ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 6
-enum { MODE_RUN4 = 0, MODE_SYNTH = 1 };      /* SEL + HOME switches (docs/PROTOCOL.md); HELLO reports it */
+#define FW_MINOR 7
+enum { MODE_RUN4 = 0, MODE_SYNTH = 1, MODE_AMB = 2 };   /* SEL + HOME: the next one, round (RUN4, SYNTH, AMB); HELLO
+                                                         * says RUN4 or a local mode (SYNTH: Synth and AMB alike) */
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
 #define HELLO_MS 1000u
 #define POT_STEP 6                       /* 14-bit counts: the ADC's noise stays quiet */
@@ -36,7 +37,7 @@ typedef struct {
 _Static_assert(sizeof(setup_t) == 56u, "SETUP store layout");
 static const int8_t VEL_CURVE[VEL_N] = {-3, 0, 3, 0};              /* touch_curve(): needs tuning on the device */
 static setup_t setup;
-static uint8_t mode;                                              /* MODE_RUN4 / MODE_SYNTH */
+static uint8_t mode;                                              /* MODE_RUN4 / MODE_SYNTH / MODE_AMB */
 
 static struct {
     uint32_t btn, keys;                  /* held at the last poll */
@@ -205,7 +206,7 @@ static void setup_fill(void)                          /* the SETUP page: four ti
     strcpy(p->title, "SETUP");
     strcpy(p->track, "LOCAL");
     p->r = 127; p->g = 70; p->b = 20;
-    if (mode == MODE_SYNTH) { p->r = SY_AR; p->g = SY_AG; p->b = SY_AB; }
+    if (mode != MODE_RUN4) { p->r = SY_AR; p->g = SY_AG; p->b = SY_AB; }
     p->page_count = 4;
     p->page_idx = ctl.setup_sub;
     if (ctl.setup_sub == 1) {
@@ -388,7 +389,7 @@ static int send_frame(const uint8_t *f, size_t n)
 static void send_hello(void)
 {
     uint8_t f[16];
-    if (send_frame(f, r4p_hello(f, sizeof f, FW_MAJOR, FW_MINOR, mode == MODE_SYNTH ? R4P_MODE_SYNTH : R4P_MODE_RUN4)))
+    if (send_frame(f, r4p_hello(f, sizeof f, FW_MAJOR, FW_MINOR, mode != MODE_RUN4 ? R4P_MODE_SYNTH : R4P_MODE_RUN4)))
         ctl.hello_at = plat_ms();                      /* (no room: try again next frame, not every second) */
 }
 
@@ -831,6 +832,50 @@ static void setup_learn_save(void)
 }
 
 static void octave_step(int d);
+static int synth_step_rec(void);
+/* ------------------------------------------------------------- help cards --- */
+/* Precedence (the card is a passive overlay, it never takes a press or a release away from anything):
+ *   - it is armed when a button goes down alone: no other button held, no key held, no host LIST open;
+ *   - any other button going down or up, any key going down, any encoder turned, its own release: it is gone (or
+ *     never comes), and that input does exactly what it did before (SEL + HOME, SEL + GLO, a held step's page
+ *     buttons, SEL + SEQ's FILL, MIDI learn, a HOME double tap: all untouched);
+ *   - a hold gesture of its own that fires (AMB's SAVE held 2 s) closes it;
+ *   - the press acted as always (a page button opened its page first: the card explains that page). */
+static struct { uint8_t arm, shown, gone; uint32_t at, keys; } hc;
+static uint8_t hc_setup;                                 /* the button went down on the SETUP page */
+static uint8_t hc_turned;                                /* an encoder moved this frame */
+static int enc_get(int k)                                /* plat_enc, seen by the cards */
+{
+    int d = plat_enc(k);
+    if (d) hc_turned = 1;
+    return d;
+}
+static void ctl_card_off(void)
+{
+    if (hc.shown) {
+        ui.card = 0;
+        ui.dirty = D_ALL;
+    }
+    hc.arm = hc.shown = 0;
+}
+#include "help.c"
+#if R4_AMB
+#include "amb_ui.c"
+#else
+/* R4_AMB 0 (app-noamb/): AMB mode is not in this build. SEL + HOME goes RUN4, SYNTH, RUN4; its store object
+ * (OBJ_AMB) stays in the store map and the backup image, untouched (a backup restores both ways); none of its code,
+ * buffers or state is built (the mode arena is Synth's size). These stand in for what the mode code calls. */
+static void am_leave(void) {}
+static void am_enter(void) {}
+static void am_boot_flag(int amb) { (void)amb; }
+static void am_build(void) {}
+static void am_button(uint32_t k) { (void)k; }
+static void am_frame(uint32_t keys, uint32_t btn, uint32_t now) { (void)keys; (void)btn; (void)now; }
+static void am_lights(uint32_t *lb, uint32_t *lk, uint32_t *db, uint32_t *dk) { (void)lb; (void)lk; (void)db; (void)dk; }
+static void am_draw_head(void) {}
+static void am_draw_band(int full) { (void)full; }
+#endif
+
 /* ------------------------------------------------------------- Synth mode --- */
 static void synth_notes_off_keys(void)         /* held keys: the note-offs of the mode being left */
 {
@@ -847,12 +892,16 @@ static void synth_notes_off_keys(void)         /* held keys: the note-offs of th
         ctl.sounding[k] = 255;
     }
 }
+static volatile uint8_t mode_hold;                 /* a mode switch under way: the render is silent */
 static void mode_switch(uint8_t to)
 {
+    uint8_t from = mode;
     if (to == mode)
         return;
+    mode_hold = 1;                                 /* (from here to the end: silence; the arena changes hands) */
     synth_notes_off_keys();
-    if (mode == MODE_SYNTH) {                      /* leaving: the sound stops, the settings are kept */
+    ctl_card_off();
+    if (from == MODE_SYNTH) {                      /* leaving: the sound stops, the settings are kept */
         syn_hold = 1;                              /* (silent from here to the swap) */
         sq_start(0);
         sq.rec = 0;
@@ -865,30 +914,44 @@ static void mode_switch(uint8_t to)
             syn_save_all();
             sy_hold_store = h;
         }
-    } else if (hv.on) {
-        ctl.want_hvstate = 1;                      /* 1.3: the host voice is suspended while Synth mode plays */
+    } else if (from == MODE_AMB) {
+        am_leave();                                /* (stops it, its MIDI off, saves) */
     }
-    syn_swap();                                    /* the other mode's settings sound (synth.c): Synth mode's, or the
-                                                    * host voice's; nothing of the one rings on in the other */
+    if (from == MODE_RUN4 && hv.on)
+        ctl.want_hvstate = 1;                      /* 1.3: the host voice is suspended while a local mode plays */
+    if ((from == MODE_RUN4) != (to == MODE_RUN4))
+        syn_swap();                                /* the other set sounds (synth.c): Synth mode's, or the host voice's */
+    else
+        syn_reset_sound();                         /* (Synth <-> AMB: the arena's Synth lines and the plate silent) */
+    syn_arena_mine = (uint8_t)(to != MODE_AMB);
+    if (to == MODE_AMB)
+        am_enter();                                /* the arena is AMB's: its buffers set up */
+    syn_hold = 0;
     mode = to;
-    setup.mode = to;
+    setup.mode = to == MODE_AMB ? MODE_SYNTH : to; /* (an older firmware reads SETUP: it knows two modes) */
+    am_boot_flag(to == MODE_AMB);
     if (bk_hold) ctl.setup_owed = 1; else plat_store_save(OBJ_SETUP, &setup, sizeof setup);
     ui.setup = 0;
     ui.list_open = 0;
     ui_connect(0);                                 /* a new HELLO, with the new mode, until the host answers */
     ctl.hello_at = plat_ms() - HELLO_MS;
-    ui.local = to == MODE_SYNTH;
-    if (ui.local) {
+    ui.local = to != MODE_RUN4;
+    ui.amb = to == MODE_AMB;
+    ui.octave = ctl.octave;
+    if (to == MODE_SYNTH) {
         syn_event(6, 0, 0, 0);
         sp_build();
+    } else if (to == MODE_AMB) {
+        am_build();
     } else {
         ui_reset_page();
     }
     ui.dirty = D_ALL;
+    mode_hold = 0;
 }
 static int synth_step_rec(void)                /* step recording: the SEQ page, REC armed, stopped */
 {
-    return sui.page == SP_SEQ && sq.rec && !sq.run && !ui.setup;
+    return mode == MODE_SYNTH && sui.page == SP_SEQ && sq.rec && !sq.run && !ui.setup;
 }
 static void synth_button(uint32_t k)
 {
@@ -1094,7 +1157,7 @@ static void synth_frame(uint32_t keys, uint32_t now)
     uint32_t k;
     synth_keys(keys);
     for (k = 0; k < R4P_NENC; k++) {
-        int d = plat_enc((int)k);
+        int d = enc_get((int)k);
         if (!d)
             continue;
         if (ui.setup) {
@@ -1327,6 +1390,17 @@ static void midi_pump(uint32_t n)
             syn_timed(&(syn_ev_t){11, (uint8_t)st, 0, 0}, midi_frame);   /* MIDI clock, start, stop: the sequencer and the arp follow */
             continue;
         }
+#if R4_AMB
+        if (mode == MODE_AMB) {                        /* AMB: a clock drives the garden (START grows, STOP rests); a note
+                                                        * on channel 1 takes its note out of the scale or puts it back
+                                                        * (not the host voice's notes from RUN4: suspended) */
+            if (st == 0xF8u || st == 0xFAu || st == 0xFBu || st == 0xFCu)
+                en_clock_isr(st == 0xF8u ? EN_CLK_TICK : st == 0xFAu ? EN_CLK_START : st == 0xFBu ? EN_CLK_CONTINUE : EN_CLK_STOP);
+            else if ((st & 0xF0u) == 0x90u && d2 && ch == 0u && !(hv.on && hv.chan == 0u && (port == PORT_USB || port == PORT_BLE)))
+                am_note_in((uint8_t)d1);
+            continue;
+        }
+#endif
         {   /* 1.3: in RUN4 mode the host voice plays its channel from the host's links (not the jack) */
             int host_voice = mode == MODE_RUN4 && hv.on && (port == PORT_USB || port == PORT_BLE);
             if ((mode != MODE_SYNTH && !host_voice) || st >= 0xF0u)
@@ -1474,6 +1548,12 @@ static void input(void)
         if (ctl.txq_n >= TXQ_N)
             break;                                     /* queue full: this change is seen again next frame */
         ctl.btn = (ctl.btn & ~bit) | (btn & bit);
+        ctl_card_off();                                /* the cards: any other button, or this one let go */
+        if ((btn & bit) && btn == bit && !keys && !(ui.list_open && mode == MODE_RUN4)) {
+            hc.arm = (uint8_t)(k + 1u);                /* alone: its card in a second, if nothing else happens */
+            hc.at = now;
+            hc_setup = ui.setup;
+        }
         if (ctl.suppress & bit) {                      /* SETUP's: stays local until released */
             if (!(btn & bit)) ctl.suppress &= ~bit;
             continue;
@@ -1500,12 +1580,12 @@ static void input(void)
                     setup_save_press();
                 continue;
             }
-            if (shift && k == B_HOME) {                /* SEL + HOME: the other mode */
+            if (shift && k == B_HOME) {                /* SEL + HOME: the next mode, round: RUN4, SYNTH, AMB */
                 ctl.suppress |= bit;
-                mode_switch(mode == MODE_SYNTH ? MODE_RUN4 : MODE_SYNTH);
+                mode_switch(mode == MODE_RUN4 ? MODE_SYNTH : mode == MODE_SYNTH && R4_AMB ? MODE_AMB : MODE_RUN4);
                 return;
             }
-            if (mode == MODE_SYNTH && shift && (k == B_REC || k == B_PLAY) && ui.connected) {
+            if (mode != MODE_RUN4 && shift && (k == B_REC || k == B_PLAY) && ui.connected) {
                 ctl.fwd |= bit;                        /* SEL + REC / PLAY with a host: RUN4's transport, not the synth's */
                 ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1 | 1u);
                 sp_toast(k == B_REC ? "RUN4 REC" : "RUN4 PLAY");
@@ -1515,11 +1595,16 @@ static void input(void)
                 synth_button(k);
                 continue;
             }
+            if (mode == MODE_AMB) {                    /* so does AMB mode */
+                if (!shift)
+                    am_button(k);
+                continue;
+            }
             if (!shift && k == B_OCTDN) octave_step(-1);
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
-        if (mode == MODE_SYNTH) {
-            if (!(btn & bit) && k == B_SEQ && sq.fill) {   /* FILL ends with SEQ's release */
+        if (mode != MODE_RUN4) {
+            if (mode == MODE_SYNTH && !(btn & bit) && k == B_SEQ && sq.fill) {   /* FILL ends with SEQ's release */
                 sq.fill = 0;
                 if (sui.page == SP_SEQ)
                     ui.dirty |= D_TILE0;
@@ -1544,6 +1629,10 @@ static void input(void)
         synth_frame(keys, now);
         return;
     }
+    if (mode == MODE_AMB) {
+        am_frame(keys, btn, now);
+        return;
+    }
     keys_poll(keys);
 
     if (ctl.txq_n)
@@ -1554,7 +1643,7 @@ static void input(void)
         ctl.want_pot = 0;
 
     for (k = 0; k < R4P_NENC; k++) {                   /* encoders: the detents of this frame, one frame each; coalesced while the ring is full */
-        int d = plat_enc((int)k);
+        int d = enc_get((int)k);
         if (ui.list_open && !ui.setup) {               /* a host LIST: SELECT / PRESETS move the selection */
             if ((k == 0 || k == 2) && d)
                 list_move(d);
@@ -1672,6 +1761,8 @@ static void lights(void)
     }
     if (mode == MODE_SYNTH)
         synth_lights(&lb, &lk, &db, &dk);
+    else if (mode == MODE_AMB)
+        am_lights(&lb, &lk, &db, &dk);
     else if (!ui.connected)
         lk |= ctl.keys;
     plat_lights(lb, lk, db, dk, setup.led);
@@ -1692,7 +1783,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     switch (m.cmd) {
     case R4P_HELLO_ACK:
         ctl.want_hvstate = hv.on;                      /* 1.3: where its voice stands (sent to a 1.3 host only) */
-        if (mode == MODE_SYNTH) {                      /* the host knows we are a synth: nothing to draw or sync */
+        if (mode != MODE_RUN4) {                       /* the host knows we are a local mode: nothing to draw or sync */
             ui.connected = 1;
             ctl.host_minor = m.u.ack.minor;
             break;
@@ -1759,6 +1850,15 @@ int app_sysex(const uint8_t *p, uint32_t n)
 }
 
 /* --------------------------------------------------------------- contract --- */
+/* AMB mode's MIDI out (its KEY page's MIDI OUT: clock, or the notes too), from the render: to the host's links, as the
+ * sequencer's clock; a message that finds no room is dropped (the render never waits) */
+#if R4_AMB
+void en_midi_out(uint32_t st, uint32_t d1, uint32_t d2)
+{
+    if (plat_midi_out_room(TO_LINKS))
+        plat_midi_send(st >> 4 | st << 8 | d1 << 16 | d2 << 24, TO_LINKS);
+}
+#endif
 static void sq_send_rt(uint8_t b)                      /* the sequencer's MIDI clock out (clock OUT): render context */
 {
     if (plat_midi_out_room(TO_LINKS))
@@ -1784,6 +1884,11 @@ void app_init(void)
     ctl.names_next = 255;
     syn_host_defaults(&syn_alt);                       /* 1.3: the host voice's settings, parked */
     ml_init();
+#if R4_AMB
+    am_init();                                         /* AMB mode's engine and its store (not its buffers yet) */
+    if (mode == MODE_SYNTH && am.boot)
+        mode = MODE_AMB;                               /* (left in AMB mode: SETUP says SYNTH, the AMB store says AMB) */
+#endif
     sy_hold_store = 0;
 #if PLAT_USB_CH >= 4
     syn_stem_out = stem_out;                           /* (the app-stems build) */
@@ -1791,11 +1896,36 @@ void app_init(void)
     local_off = 0;
     if (mode == MODE_RUN4)
         syn_swap();                                    /* RUN4 mode: they are the ones that sound */
+    syn_arena_mine = (uint8_t)(mode != MODE_AMB);
+#if R4_AMB
+    if (mode == MODE_AMB) {
+        en_enter();                                    /* (the render has not started: the arena is AMB's from the start) */
+        amr.grow_at = 1;                               /* it grows at once (a garden switched on) */
+    }
+#endif
 }
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t i;
+    if (mode_hold) {                                   /* a mode switch: silence, nothing taken */
+        for (i = 0; i < 2u * n; i++)
+            lr[i] = 0;
+        return;
+    }
     midi_pump(n);
+#if R4_AMB
+    if (mode == MODE_AMB) {                            /* AMB mode: the garden (src/amb/amb.c), the overload guard on it */
+        uint32_t t0 = plat_ticks24(), dt;
+        en_shed = syn_shed;
+        en_render(lr, n, master_q12);
+        dt = plat_ticks24() - t0;
+        ctl.rend_ticks += dt;
+        ctl.rend_frames += n;
+        syn_shed_calm(n, (uint32_t)((uint64_t)dt * 44100u / PLAT_TICKS_PER_US / 1000u / n));
+        syn_timed_due(0, 0xFFFFu);
+        return;
+    }
+#endif
     /* Synth mode: the FM voices; RUN4 mode: the host voice while it is on (and until its last note has rung out).
      * MASTER is the volume either way, as for the computer's own audio (base/device/uac_mix.h) */
     if (mode == MODE_SYNTH || hv.on || syn_active_voices) {
@@ -1825,15 +1955,33 @@ void app_ui_init(void)
     ctl.hello_at = plat_ms() - HELLO_MS;
     memset(&ui, 0, sizeof ui);
     ui_reset_page();
-    ui.local = mode == MODE_SYNTH;
-    if (ui.local)
+    ui.local = mode != MODE_RUN4;
+    ui.amb = mode == MODE_AMB;
+    if (ui.amb)
+        am_build();
+    else if (ui.local)
         sp_build();
     ui.dirty = D_ALL;
     lcd_fill(0, 0, 240, 240, R4_BG);
 }
+/* the cards' clock: a key down or a knob turned ends one; a button held alone long enough shows its card */
+static void card_frame(void)
+{
+    uint32_t keys = touch_keys(), now = plat_ms();
+    if ((keys & ~hc.keys) || hc_turned)
+        ctl_card_off();
+    hc.keys = keys;
+    hc_turned = 0;
+    if (hc.arm && !hc.shown && now - hc.at >= HELP_MS && (ctl.btn == 1u << (hc.arm - 1u))) {
+        hc.shown = 1;
+        ui.card = hc.arm;
+        ui.dirty |= D_CARD;
+    }
+}
 void app_frame(void)
 {
     input();
+    card_frame();
     local_out_apply();
     shed_frame();
     setup_owed_frame();
@@ -1847,11 +1995,19 @@ void app_say(const char *a, const char *b) { (void)a; (void)b; }
 /* fm1.toml backup = true (base/device/backup.c, tools/fm1_backup.py): everything the store holds but the panel's
  * calibration (the unit's own) as one image, app.h APP_BACKUP_*. Each object carries its own layout version and loads
  * older ones (SETUP 1 / 2, settings 2 / 3 / 4, patterns 1 / 2), so a backup of an older RUN4 CTL restores. */
+#if R4_AMB
+int app_backup_playing(void) { return sq.run || (mode == MODE_AMB && en_playing); }   /* playing / growing: STOP FIRST */
+#else
 int app_backup_playing(void) { return sq.run; }      /* the sequencer plays: STOP FIRST */
+#endif
 void app_backup_flush(void)                            /* a backup starts: what is not saved yet, saved */
 {
     if (mode == MODE_SYNTH && (sui.dirty_set || syn_bank_dirty || sq_dirty))
         syn_save_all();                                /* (RUN4 mode: Synth mode's were saved when it was left) */
+#if R4_AMB
+    if (amr.dirty)
+        am_save();
+#endif
     if (ctl.setup_dirty || ctl.setup_owed) {
         plat_store_save(OBJ_SETUP, &setup, sizeof setup);
         ctl.setup_dirty = ctl.setup_owed = 0;
@@ -1863,7 +2019,20 @@ void app_backup_restored(void)                         /* a restore: everything 
     uint8_t m = mode;
     syn_set_t hvs = syn;
     setup_load();
-    setup.mode = m;                                    /* (the mode playing stays; the restored one is the next boot's) */
+    setup.mode = m == MODE_AMB ? MODE_SYNTH : m;       /* (the mode playing stays; the restored one is the next boot's) */
+#if R4_AMB
+    {
+        uint8_t boot;
+        am_load();                                     /* AMB mode's pieces (an older backup: none, the recipes) */
+        boot = am.boot;
+        am.boot = m == MODE_AMB;                       /* (in RAM: as SETUP's mode, the flash keeps the restored one) */
+        (void)boot;
+        if (m == MODE_AMB) {
+            am_apply();
+            en_regrow();
+        }
+    }
+#endif
     memset(syn_bank, 0, sizeof syn_bank);
     syn_bank_dirty = 0;
     sq_defaults();
@@ -1884,8 +2053,11 @@ void app_backup_restored(void)                         /* a restore: everything 
     ctl.setup_dirty = ctl.setup_owed = 0;
     ui.setup = 0;
     setup_apply();
+    ctl_card_off();
     if (mode == MODE_SYNTH)
         sp_build();
+    else if (mode == MODE_AMB)
+        am_build();
     ui.dirty = D_ALL;
     ui_toast("RESTORED", 20);
 }
@@ -1947,6 +2119,26 @@ int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, c
 int app_expect(const char *what, int *got)
 {
     if (!strcmp(what, "connected")) *got = ui.connected;
+    else if (!strcmp(what, "card")) *got = ui.card;                         /* the help card's button + 1, 0 = none */
+    else if (!strcmp(what, "r4_amb")) *got = R4_AMB;                       /* the build has AMB mode */
+#if R4_AMB
+    else if (!strcmp(what, "amb_piece")) *got = am.piece + 1;               /* AMB mode */
+    else if (!strcmp(what, "amb_view")) *got = amr.view;
+    else if (!strcmp(what, "amb_pool")) *got = AM_CUR->pool;
+    else if (!strcmp(what, "amb_playing")) *got = en_playing;
+    else if (!strcmp(what, "amb_frozen")) *got = en_frozen;
+    else if (!strcmp(what, "amb_ext")) *got = en_ext;
+    else if (!strcmp(what, "amb_bars")) *got = (int)en_bars;
+    else if (!strcmp(what, "amb_dirty")) *got = amr.dirty;
+    else if (!strcmp(what, "amb_saves")) *got = (int)amr.saves;
+    else if (!strcmp(what, "amb_boot")) *got = am.boot;
+    else if (!strcmp(what, "amb_midi")) *got = am.midi;
+    else if (!strcmp(what, "amb_shed")) *got = en_shed;
+    else if (!strcmp(what, "amb_bpf")) *got = amr.frames ? (int)(amr.bytes / amr.frames) : 0;
+    else if (!strcmp(what, "amb_frames")) *got = (int)amr.frames;
+    else if (!strncmp(what, "amb_par", 7)) *got = am_par(atoi(what + 7) % P_NPARAMS);   /* amb_parN: parameter N (amb.h P_*) */
+#endif
+    else if (!strcmp(what, "set_mode")) *got = setup.mode;
     else if (!strcmp(what, "octave")) *got = ctl.octave;
     else if (!strcmp(what, "shift")) *got = ui.shift;
     else if (!strcmp(what, "page_idx")) *got = ui.page.page_idx;

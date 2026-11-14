@@ -16,6 +16,7 @@ enum { D_HEAD = 1, D_TILE0 = 2, D_TILES = 2 | 4 | 8 | 16, D_FOOT = 32, D_TOAST =
        D_BIG = 512, D_GAP = 1024,             /* protocol 1.2: the big value view; the strip between the tile rows */
        D_LIVE = 2048,                         /* Synth mode: a live frame of the band (synth_ui.c) */
        D_TBAND = 4096,                        /* protocol 1.3, the tape layout: the band whole (a toast went) */
+       D_CARD = 8192,                         /* a help card (help.c) */
        D_TOAST_UNDER = 2 | 4,                 /* the two tiles of the top row: the toast sits in y 84..113 */
        D_ALL = D_HEAD | D_TILES | D_FOOT | D_CLEAR | D_DOTS };
 
@@ -30,7 +31,9 @@ typedef struct {
     uint8_t dots;                   /* the "not connected" screen's animation phase */
     uint16_t dirty;
     uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
-    uint8_t local;                  /* Synth mode: the pages are ours, no host needed (synth_ui.c) */
+    uint8_t local;                  /* Synth or AMB mode: the pages are ours, no host needed (synth_ui.c, amb_ui.c) */
+    uint8_t amb;                    /* AMB mode (amb_ui.c draws the header and the band) */
+    uint8_t card;                   /* a help card is up: its button + 1 (app.c, help.c) */
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
     r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
@@ -440,10 +443,21 @@ static void big_end(void)
 static void sp_draw_head(void);             /* synth_ui.c: Synth mode's own look (header, the band: D_TILE0 / 1, tiles: 2 / 3) */
 static void sp_draw_band(int full);
 static void sp_draw_tiles(void);
+static void am_draw_head(void);             /* amb_ui.c: AMB mode's header and band */
+static void am_draw_band(int full);
+static void help_draw(void);                /* help.c: a card over the band and the tiles */
 static void ui_draw(void)
 {
     uint32_t now = plat_ms();
     int i;
+    if (ui.card) {                                             /* a help card: it alone (the footer still follows) */
+        if (ui.dirty & (D_CARD | D_CLEAR))
+            help_draw();
+        if ((ui.dirty & D_FOOT) && (ui.local || (ui.connected && !ui.list_open)))
+            draw_foot();
+        ui.dirty &= (uint16_t)(D_HEAD | D_TILES | D_TOAST | D_BIG | D_GAP | D_TBAND | D_DOTS);   /* (kept for after) */
+        return;
+    }
     if (ui.toast_until && (int32_t)(now - ui.toast_until) >= 0) {
         ui.toast_until = 0;
         ui.dirty |= D_TOAST_UNDER | D_TBAND;                   /* the band under the toast */
@@ -484,12 +498,12 @@ static void ui_draw(void)
     if (ui.dirty & D_CLEAR)
         lcd_fill(0, 0, 240, 240, R4_BG);
     if (ui.dirty & D_HEAD)
-        ui.local ? sp_draw_head() : draw_head();
+        ui.amb ? am_draw_head() : ui.local ? sp_draw_head() : draw_head();
     if (ui.local) {
         if (ui.dirty & (D_TILE0 | D_TILE0 << 1 | D_CLEAR))
-            sp_draw_band(1);
+            ui.amb ? am_draw_band(1) : sp_draw_band(1);
         else if (ui.dirty & D_LIVE) {
-            sp_draw_band(0);
+            ui.amb ? am_draw_band(0) : sp_draw_band(0);
             if (ui.toast_until)
                 ui.dirty |= D_TOAST;                           /* (the live band drew under the toast: it again) */
         }
@@ -516,7 +530,7 @@ static void ui_draw(void)
         draw_foot();
     if ((ui.dirty & (D_TOAST | D_TOAST_UNDER)) && ui.toast_until)
         draw_toast();
-    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP | D_LIVE | D_TBAND);
+    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP | D_LIVE | D_TBAND | D_CARD);
 }
 
 /* --------------------------------------------- host frames into state --- */

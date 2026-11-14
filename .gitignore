@@ -6,3 +6,5 @@ firmware.json
 __pycache__/
 app-stems/build/
 app-stems/web/
+app-noamb/build/
+app-noamb/web/

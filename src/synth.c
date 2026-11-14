@@ -3,7 +3,8 @@
  * see NOTICE) behind a voice pool with stealing, a patch (the 155-byte DX7 voice layout), DX7 packed voice records
  * and bank / single-voice SysEx, a drive / chorus / tempo delay / reverb chain, an arpeggiator and a step sequencer
  * (synth_seq.c: 16 patterns of up to 64 steps, chords, ties, live and step recording, MIDI clock).
- * Plain C, integer only, no platform calls (the app glue is in app.c / synth_ui.c): native tests link it alone.
+ * Plain C, integer only but the reverb (the Dattorro plate, src/plate.c, float), no platform calls (the app glue is in
+ * app.c / synth_ui.c): native tests link it with plate.c.
  *
  * Threading, as on the device: syn_render() runs in the audio context; the main loop (keys, UI) calls syn_event() (a
  * small ring) and edits the settings, which the render reads at its block starts. */
@@ -13,6 +14,8 @@
 #include "synth/fm6_tables.h"
 #include "synth/fm6_core.c"
 #include "synth/fm6_factory.h"
+#include "plate.h"
+#include "arena.h"
 
 #ifndef PLAT_POOL
 #define PLAT_POOL
@@ -25,7 +28,7 @@
 
 /* ------------------------------------------------------------ settings --- */
 enum { ARP_UP, ARP_DOWN, ARP_UPDOWN, ARP_RANDOM, ARP_PLAYED, ARP_N };
-enum { REV_ROOM, REV_SPRING, REV_HALL, REV_N };
+enum { REV_ROOM, REV_PLATE, REV_HALL, REV_N };
 #define MO_N 10                              /* the morph's values (MO_ID below) */
 enum { MO_OFF, MO_KNOB, MO_DRIFT, MO_NMODES = MO_DRIFT + 10 };   /* MO_DRIFT + i: a ping-pong of MO_SECS[i] seconds */
 /* what is stored (OBJ_SYNSET) and what the pages edit */
@@ -354,6 +357,7 @@ static int32_t syn_lock_base(uint32_t id)     /* the base value a lock overrides
     }
 }
 static volatile uint8_t syn_shed;            /* the overload guard's step now, 0 = everything (below: syn_shed_calm) */
+static volatile uint8_t syn_arena_mine = 1;  /* Synth mode / the host voice own the mode arena (not AMB mode) */
 /* the effects' amounts for one block, the locks on top (the render sets it once a block) */
 static struct { int32_t drive, chorus, dly_mix, dly_div, dly_fb, rev_mix, rev_size; } fxv;
 static void syn_fxv(void)
@@ -679,7 +683,7 @@ static void syn_seq_start(int run) { sq_start(run); }
 
 /* --------------------------------------------------------- overload guard --- */
 /* When a render runs late (fm1-base calls app_overload when a block took over 90 % of its time: device/main_fm1.c), the
- * sound sheds load a step at a time: 1 the reverb on two of its four combs, 2 six voices, 3 no chorus and no delay, 4
+ * sound sheds load a step at a time: 1 the plate without its input diffusers, 2 six voices, 3 no chorus and no delay, 4
  * four voices. A step comes back after SHED_CALM_MS of renders under SHED_CALM_PM of their time (hysteresis: well
  * below where it triggered); the effects' lines start from silence again. The render's own time is measured by the
  * app (app.c app_render) and handed to syn_shed_calm. Audio context; the main loop only reads syn_shed. */
@@ -720,22 +724,46 @@ static void syn_shed_calm(uint32_t n, uint32_t load_pm)
 }
 
 /* ------------------------------------------------------------------ fx --- */
-#define DLY_N 16384u                         /* the delay line: 371 ms; longer times are cut to it */
-#define CHO_N 1024u
-#define RV_N 2048u
-static int16_t fx_dly[2][DLY_N] PLAT_POOL;
-static int16_t fx_cho[CHO_N] PLAT_POOL;
-static int16_t fx_comb[2][4][RV_N] PLAT_POOL;
-static int16_t fx_ap[2][2][512] PLAT_POOL;
+/* The delay and chorus lines live in the mode arena (src/arena.h): AMB mode uses the same RAM while it plays. */
+#define DLY_N R4_SYN_DLY_N                   /* the delay line: 371 ms; longer times are cut to it */
+#define CHO_N R4_SYN_CHO_N
+uint8_t r4_arena[R4_ARENA_BYTES] __attribute__((aligned(4))) PLAT_POOL;
+#define fx_dly ((int16_t (*)[DLY_N])(void *)r4_arena)
+#define fx_cho ((int16_t *)(void *)(r4_arena + 2u * DLY_N * 2u))
+#define FX_DLY_BYTES (2u * DLY_N * 2u)
+#define FX_CHO_BYTES (CHO_N * 2u)
 static struct {
     uint32_t dw, cw, cph;
-    uint16_t comb_i[2][4], ap_i[2][2];
-    int32_t comb_lp[2][4], cho_lp;
+    int32_t cho_lp;
+    uint8_t rev_was;                         /* the reverb sounded last block (it starts from silence again) */
 } fx_st;
-static const uint16_t RV_LEN[REV_N][4] = {   /* comb lengths in samples (L; R is +23): room, spring, hall */
-    {557, 617, 691, 773}, {211, 263, 331, 397}, {1117, 1277, 1423, 1559}};
-static const uint16_t AP_LEN[REV_N][2] = {{241, 83}, {113, 41}, {347, 163}};
 static const uint8_t DLY_DIV16[6] = {2, 3, 4, 6, 8, 12};      /* the delay time in sixteenths: 1/8, dotted 1/8 ... see syn_fx_div */
+/* The reverb: Jon Dattorro's plate (src/plate.c, AMB-1's; it took the place of four combs and two allpasses a side in
+ * firmware 0.7, tests/reverb_ab.c has the A/B). REVERB TYPE picks its character (ROOM: short and dark, PLATE: bright,
+ * the old SPRING's slot; HALL: long, dark, 20 ms before it), REVERB SIZE its decay within the type's range (short to
+ * long as before: HALL 0.75 .. 3.3 s, ROOM 0.4 .. 1.5 s; the plate's tank cannot be as short as the old combs' 0.1 s);
+ * REVERB the wet level, as before. */
+#define SYN_PL_IN 0.5f                       /* (l + r) / 2 at half level into the plate */
+static const float syn_pl_out[REV_N] = {0.48f, 0.71f, 0.71f};   /* its taps to the old reverb's wet level (ab test) */
+static void syn_plate_cfg(uint32_t type, int32_t size, int light)
+{
+    /* the decay goes with SIZE squared: the short end stays short, as the old combs' did */
+    static const float DEC_LO[REV_N] = {0.0f, 0.0f, 0.25f}, DEC_HI[REV_N] = {0.75f, 0.85f, 0.97f};
+    static const float DAMP[REV_N] = {0.45f, 0.80f, 0.50f}, BW[REV_N] = {0.70f, 0.95f, 0.62f};
+    static const uint16_t PRE[REV_N] = {0, 0, 882};
+    plate_cfg_t c;
+    uint32_t t = type % REV_N;
+    float f;
+    size = size < 0 ? 0 : size > 100 ? 100 : size;
+    f = (float)size * 0.01f;
+    c.decay = DEC_LO[t] + (DEC_HI[t] - DEC_LO[t]) * f * f;
+    c.damp = DAMP[t];
+    c.bw = BW[t];
+    c.dd2 = c.decay + 0.15f < 0.25f ? 0.25f : c.decay + 0.15f > 0.5f ? 0.5f : c.decay + 0.15f;
+    c.pre = PRE[t];
+    c.light = (uint8_t)(light != 0);
+    plate_set(&c);
+}
 
 static int32_t fx_drive(int32_t x)           /* a cubic soft clip; the amount is a pre-gain of 1x .. 8x */
 {
@@ -747,11 +775,12 @@ static int32_t fx_drive(int32_t x)           /* a cubic soft clip; the amount is
     c = (v * v >> 23) * v >> 23;
     return (int32_t)((v - c / 3) * 3 / 2);       /* the rails land at 1.0 again */
 }
-/* one frame: mono in -> stereo out (Q23-ish); the wet parts are mixed here; *dry: the voices after the drive (the
- * stems' dry part: out - dry is what the chorus, the delay and the reverb add) */
+/* one frame: mono in -> stereo out (Q23-ish); the chorus and the delay are mixed here, the reverb a sub-block at a time
+ * after (syn_render); *dry: the voices after the drive (the stems' dry part: out - dry is what the chorus, the delay and
+ * the reverb add) */
 static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
 {
-    int32_t l, r, x = in, wl = 0, wr = 0;
+    int32_t l, r, x = in;
     x = fx_drive(x);
     *dry = x;
     l = r = x;
@@ -780,36 +809,6 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
         l += (int32_t)((int64_t)dl * fxv.dly_mix / 100);
         r += (int32_t)((int64_t)dr * fxv.dly_mix / 100);
     }
-    if (fxv.rev_mix) {                         /* 4 parallel damped combs, 2 allpasses, per channel */
-        uint32_t ch, k, ty = syn.rev_type % REV_N, nc = syn_shed ? 2u : 4u;     /* (shed: two combs, twice as loud) */
-        int32_t fbk = 18000 + fxv.rev_size * 130 + (int32_t)ty * 1500;    /* Q15 feedback, ~0.55 .. 0.95 */
-        for (ch = 0; ch < 2u; ch++) {
-            int32_t s = ((ch ? r : l) >> 2), acc = 0;
-            for (k = 0; k < nc; k++) {
-                uint32_t len = RV_LEN[ty][k] + (ch ? 23u : 0u);
-                uint16_t *ci = &fx_st.comb_i[ch][k];
-                int32_t y = fx_comb[ch][k][*ci], lp;
-                lp = fx_st.comb_lp[ch][k] + ((y - fx_st.comb_lp[ch][k]) >> 1);      /* damping */
-                fx_st.comb_lp[ch][k] = lp;
-                fx_comb[ch][k][*ci] = (int16_t)syn_clamp((s >> 8) + (int32_t)((int64_t)lp * (fbk > 32000 ? 32000 : fbk) >> 15), -32768, 32767);
-                if (++*ci >= len)
-                    *ci = 0;
-                acc += y;
-            }
-            acc = acc << (nc == 4u ? 6 : 7);   /* 4 combs of int16 -> Q23 ~ (acc << 8) / 4 */
-            for (k = 0; k < 2u; k++) {         /* allpass g = 0.5 */
-                uint16_t *ai = &fx_st.ap_i[ch][k];
-                int32_t d = fx_ap[ch][k][*ai] << 8, y = d - acc / 2;
-                fx_ap[ch][k][*ai] = (int16_t)syn_clamp((acc + (d >> 1)) >> 8, -32768, 32767);
-                acc = y;
-                if (++*ai >= AP_LEN[ty][k])
-                    *ai = 0;
-            }
-            if (ch) wr = acc; else wl = acc;
-        }
-        l += (int32_t)((int64_t)wl * fxv.rev_mix / 60);
-        r += (int32_t)((int64_t)wr * fxv.rev_mix / 60);
-    }
     *outl = l;
     *outr = r;
 }
@@ -820,15 +819,11 @@ static void syn_shed_step(void)
     uint32_t i, vm = syn_vmax();
     for (i = vm; i < SYN_VOICES; i++)
         syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0;
-    if (syn_shed == 0u)                      /* the two combs that rested */
-        for (i = 0; i < 2u; i++) {
-            memset(fx_comb[i][2], 0, sizeof fx_comb[i][2]);
-            memset(fx_comb[i][3], 0, sizeof fx_comb[i][3]);
-            fx_st.comb_lp[i][2] = fx_st.comb_lp[i][3] = 0;
-        }
-    if (syn_shed == 2u) {                    /* (from 3: the chorus and the delay come back) */
-        memset(fx_dly, 0, sizeof fx_dly);
-        memset(fx_cho, 0, sizeof fx_cho);
+    if (syn_shed == 0u && fx_st.rev_was)    /* the plate's diffusers come back: from silence (no stale echoes) */
+        fx_st.rev_was = 0;
+    if (syn_shed == 2u && syn_arena_mine) { /* (from 3: the chorus and the delay come back; not while AMB owns the arena) */
+        memset(fx_dly, 0, FX_DLY_BYTES);
+        memset(fx_cho, 0, FX_CHO_BYTES);
     }
 }
 
@@ -1025,10 +1020,29 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             syn_voices_peak = live;
         {
             int32_t gain = (int32_t)(master_q12 * (uint32_t)syn_clamp(syn_lkv(LK_LEVEL, syn.level), 0, 100) / 100u);
-            int32_t sd[FM6_N], sl[FM6_N], sr[FM6_N];
+            int32_t sd[FM6_N], sl[FM6_N], sr[FM6_N], ol[FM6_N], orr[FM6_N], od[FM6_N];
+            float rin[FM6_N], wl[FM6_N], wr[FM6_N];
             for (i = 0; i < FM6_N; i++) {
-                int32_t l, r, x;
-                fx_run(mix[i], &l, &r, &x);
+                fx_run(mix[i], &ol[i], &orr[i], &od[i]);
+                rin[i] = (float)(ol[i] + orr[i]) * (SYN_PL_IN * 0.5f / 8388608.0f);
+            }
+            if (fxv.rev_mix) {                   /* the plate, a sub-block at a time */
+                float g = syn_pl_out[syn.rev_type % REV_N] * 8388608.0f * (float)fxv.rev_mix * (1.0f / 60.0f);
+                if (!fx_st.rev_was) {            /* (it starts from silence: no tail left from before) */
+                    plate_clear();
+                    fx_st.rev_was = 1;
+                }
+                syn_plate_cfg(syn.rev_type, fxv.rev_size, syn_shed >= 1u);
+                plate_run(rin, wl, wr, FM6_N);
+                for (i = 0; i < FM6_N; i++) {
+                    ol[i] += (int32_t)(wl[i] * g);
+                    orr[i] += (int32_t)(wr[i] * g);
+                }
+            } else {
+                fx_st.rev_was = 0;
+            }
+            for (i = 0; i < FM6_N; i++) {
+                int32_t l = ol[i], r = orr[i], x = od[i];
                 lr[2 * (b + i)] = syn_limit((int32_t)((int64_t)l * gain >> 12));
                 lr[2 * (b + i) + 1] = syn_limit((int32_t)((int64_t)r * gain >> 12));
                 if (syn_stem_out) {
@@ -1075,11 +1089,10 @@ static void syn_reset_sound(void)
     uint32_t i;
     for (i = 0; i < SYN_VOICES; i++)
         syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0;
-    memset(fx_dly, 0, sizeof fx_dly);
-    memset(fx_cho, 0, sizeof fx_cho);
-    memset(fx_comb, 0, sizeof fx_comb);
-    memset(fx_ap, 0, sizeof fx_ap);
+    memset(fx_dly, 0, FX_DLY_BYTES);         /* (the arena's Synth part: AMB mode may have used it) */
+    memset(fx_cho, 0, FX_CHO_BYTES);
     memset(&fx_st, 0, sizeof fx_st);
+    plate_clear();
     syn_evh = syn_evt = 0;
     syn_sq.n_held = 0;
     syn_sq.arp_note_on = 255;

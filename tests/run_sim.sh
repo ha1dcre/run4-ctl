@@ -1,6 +1,7 @@
 #!/bin/sh
 # Host-simulator tests: builds the firmware app natively (base/tools/build.py --host) and runs tests/scenarios/*.txt;
-# then the app-stems build (six USB audio channels) and tests/scenarios_stems/*.txt.
+# then the app-stems build (six USB audio channels) and tests/scenarios_stems/*.txt; then the app-noamb build (no AMB
+# mode) and tests/scenarios_noamb/*.txt, and tests/scenarios_cross/*.txt on the full build again.
 # Each scenario is expanded by tools/fake_run4.py (@NAME@ -> sysex HEX), run by the simulator ("expect" lines fail the run),
 # and its screenshots are copied to tests/screens/.
 set -e
@@ -14,6 +15,11 @@ mkdir -p build/sim tests/screens
 fail=0
 for s in tests/scenarios/*.txt; do
   n=$(basename "$s" .txt)
+  # a firmware 0.6 backup (version 1) from 27_usb_backup's image, and its upgrade (tools/r4ctl_backup.py)
+  if [ "$n" = 30_backup_v1 ]; then
+    python3 -I tools/r4ctl_backup.py downgrade build/sim/r4ctl.bak build/sim/old_v1.bak >/dev/null &&
+      python3 -I tools/r4ctl_backup.py upgrade build/sim/old_v1.bak build/sim/old_v1_up.bak >/dev/null || fail=1
+  fi
   python3 -I tools/fake_run4.py sim "$s" > build/sim/$n.script
   echo "== $n"
   if "$H" build/sim/$n.script build/sim > build/sim/$n.log 2>&1; then rc=0; else rc=$?; fi
@@ -26,6 +32,17 @@ for s in tests/scenarios_stems/*.txt; do
   python3 -I tools/fake_run4.py sim "$s" > build/sim/$n.script
   echo "== $n (app-stems)"
   if app-stems/build/host/run4ctl-stems_host build/sim/$n.script build/sim > build/sim/$n.log 2>&1; then rc=0; else rc=$?; fi
+  cat build/sim/$n.log
+  if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
+done
+# the package without AMB mode (app-noamb: R4_AMB 0), then the full package again with what it backed up
+"$PY" base/tools/build.py app-noamb --host >build/host_noamb.log 2>&1 || { cat build/host_noamb.log; exit 1; }
+for s in tests/scenarios_noamb/*.txt tests/scenarios_cross/*.txt; do
+  case "$s" in *noamb/*) n=noamb_$(basename "$s" .txt); B=app-noamb/build/host/run4ctl-noamb_host;;
+                *) n=cross_$(basename "$s" .txt); B=$H;; esac
+  python3 -I tools/fake_run4.py sim "$s" > build/sim/$n.script
+  echo "== $n"
+  if "$B" build/sim/$n.script build/sim > build/sim/$n.log 2>&1; then rc=0; else rc=$?; fi
   cat build/sim/$n.log
   if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
 done

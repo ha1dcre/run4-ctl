@@ -1,0 +1,128 @@
+# Help cards (firmware 0.7): hold a button alone for a second and a card says what it does in this mode and on this page;
+# letting go closes it. The card only explains: the press did what it does, the release too. Another button, a key or
+# a knob ends it (or it never comes), and that input does what it always did: SEL + HOME, SEL + SEQ's FILL, a held
+# step's page buttons, a HOME double tap to RUN4.
+# RUN4 mode, not connected: SAVE's card
+press SAVE
+wait 600
+expect card 0
+wait 600
+expect card 8
+shot card_run4_save.png
+release SAVE
+wait 100
+expect card 0
+# connected: a quick double tap of HOME goes to RUN4 as ever (no card)
+@ACK@
+wait 100
+sysex_out
+tap HOME
+wait 60
+tap HOME
+wait 1200
+expect card 0
+expect_sysex @BTN6_1@
+expect_sysex @BTN6_0@
+# SEL held: its card; then HOME: the card goes, SEL + HOME switches to Synth mode as ever
+press SEL
+wait 1200
+expect card 2
+shot card_run4_sel.png
+press HOME
+wait 60
+expect card 0
+expect mode 1
+release HOME
+release SEL
+wait 200
+# Synth mode: SEQ's card (the press opened the SEQ page first)
+press SEQ
+wait 1200
+expect card 10
+expect syn_page 70
+shot card_synth_seq.png
+release SEQ
+wait 100
+expect card 0
+# a knob turned while it is held: no card
+press FX
+wait 500
+turn K1 1
+wait 800
+expect card 0
+release FX
+wait 40
+# a key down while it is up: the card goes, the key plays
+press GLO
+wait 1200
+expect card 6
+key 3 down
+wait 60
+expect card 0
+key 3 up
+release GLO
+wait 40
+# a step held on the grid, then a page button: the lock page, no card
+tap SEQ
+wait 60
+expect syn_page 70
+key 0 down
+wait 40
+press HOME
+wait 1200
+expect card 0
+expect lview 1
+release HOME
+key 0 up
+wait 100
+# SEL + SEQ held: FILL, no card
+press SEL
+wait 40
+press SEQ
+wait 1200
+expect card 0
+expect seq_fill 1
+release SEQ
+release SEL
+wait 60
+expect seq_fill 0
+# the SETUP page: SAVE's card says what it does there
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 100
+expect setup 1
+press SAVE
+wait 1200
+expect card 8
+shot card_setup_save.png
+release SAVE
+wait 60
+tap HOME
+wait 100
+expect setup 0
+# AMB mode: REC's card; the press froze the garden as ever
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 1000
+expect mode 2
+press REC
+wait 1200
+expect card 12
+expect amb_frozen 1
+shot card_amb_rec.png
+release REC
+wait 60
+expect card 0
+tap REC
+wait 60
+expect amb_frozen 0
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 0

@@ -12,7 +12,7 @@ release HOME
 release SEL
 wait 100
 expect mode 1
-expect_sysex F0 7D 52 34 01 01 00 06 01 03 F7
+expect_sysex F0 7D 52 34 01 01 00 07 01 03 F7
 @ACK@
 wait 100
 expect connected 1
@@ -47,8 +47,14 @@ wait 40
 tap HOME
 release SEL
 wait 100
+# (firmware 0.7: SEL + HOME goes round RUN4, SYNTH, AMB; once more from AMB to RUN4)
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 300
 expect mode 0
-expect_sysex F0 7D 52 34 01 01 00 06 00 03 F7
+expect_sysex F0 7D 52 34 01 01 00 07 00 03 F7
 sysex_out
 @ACK@
 wait 100

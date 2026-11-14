@@ -1,0 +1,33 @@
+# RUN4 CTL without AMB mode (base/tools/build.py app-noamb): app/fm1.toml without the AMB engine's unit (R4_AMB 0 in
+# app-noamb/app.h). Keep the rest in step with app/.
+name = "RUN4CTL-NOAMB"
+id_prefix = "FM-1_74"            # package identity (own prefix, not fm1-base's template)
+usb_manufacturer = "RUN4 CTL"
+usb_product = "RUN4 CTL FM-1"   # (the same device; only the package differs)
+include = ["../src"]             # the shared protocol codec (src/r4p.[ch]) and the UI
+words = "../app/words.tsv"
+font_full = ["M"]                # lower case in the value font: the host formats the text (dB, ms, x)
+# Bluetooth MIDI (build.py --no-ble builds the USB-only NAME-usb.fwsc). The own stack (bt/, docs/bt/BLE-STACK.md in fm1-base) is
+# used because its BLE-MIDI handles SysEx both ways ("SysEx over packets" in and out), which RUN4 CTL's protocol rides on;
+# JieLi's library stack is not documented to. No pairing: macOS and iOS connect without it.
+ble = true
+ble_stack = "own"
+usb_audio_in = true              # the FM-1's output recordable over USB (RUN4 records Synth mode); fm1-base's default, stated
+usb_audio_out = true             # a computer plays through the FM-1 (fm1-base's default)
+backup = true                    # a USB backup / restore of everything stored but the panel (app.h APP_BACKUP_*)
+mirror = true                    # the screen and panel mirrored over USB (fm1-base web/mirror, tools/fm1_mirror.py)
+midi_stamp = true                # MIDI in stamped where it lands: notes and clock placed in the block (app.c midi_pump)
+o2 = ["../src/plate.c"]          # the plate reverb: its own unit at -O2 (float DSP)
+emu = ["midi"]                   # browser emulator (build.py app --web): Web MIDI in/out with SysEx (keyboard, RUN4)
+
+# firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)
+author = "TODO-OWNER author name"                 # TODO-OWNER: your name or handle as it should appear
+licence = "GPL-3.0-only"
+tagline = "RUN4 controller and FM synth, without AMB mode"
+description = "Two modes. RUN4 mode makes the M-VAVE FM-1 a hardware controller for the iOS app RUN4 over USB or Bluetooth MIDI: the app draws its pages and lights on the FM-1 and can play its FM engine as a track's instrument. Synth mode (SEL + HOME) is a six-operator FM synth with DX7 bank import, effects, an arpeggiator, an A / B morph, MIDI learn and a step sequencer (16 patterns of up to 64 steps, chords, ties, parameter locks, trig conditions, generators, MIDI clock); it plays from MIDI in, sample-accurate. Everything backs up over USB."
+tags = ["controller", "synth", "fm", "sequencer", "midi"]
+install = "https://todo-owner.example/run4-ctl/install/"   # TODO-OWNER: where the web installer will be published
+repo = "https://todo-owner.example/run4-ctl"              # TODO-OWNER: the public source repository
+site = "https://todo-owner.example/run4-ctl/"             # TODO-OWNER: the project site
+screenshot = "docs/img/screen.png"
+credits = "Built on fm1-base and felucca-bsp (MPL-2.0). Not affiliated with M-VAVE."

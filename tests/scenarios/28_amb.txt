@@ -1,0 +1,289 @@
+# AMB mode (firmware 0.7): SEL + HOME goes round RUN4 -> SYNTH -> AMB. The garden grows by itself (0.7 s after the mode
+# comes in), the keys take notes out of the scale and put them back, PLAY rests / grows, REC freezes, EDIT the next
+# chord, OCT-/OCT+ the bells' octave, PRESETS the piece, the page buttons its pages. RUN4 sees a local mode (HELLO mode
+# 1, as Synth mode): the link stays, SEL + REC / PLAY go to RUN4, the sound goes out over USB audio. Stored (OBJ_AMB),
+# kept over a reboot (it boots into AMB mode), backed up over USB. MIDI clock in drives it; the overload guard covers it.
+@ACK@
+wait 100
+expect connected 1
+expect r4_amb 1
+press SEL
+wait 40
+tap HOME
+wait 60
+tap HOME
+release SEL
+wait 100
+expect mode 2
+expect set_mode 1
+expect amb_boot 1
+expect_sysex F0 7D 52 34 01 01 00 07 01 03 F7
+@ACK@
+wait 100
+expect connected 1
+expect amb_playing 0
+wait 800
+expect amb_playing 1
+expect render_reset 0
+peakreset
+wait 4000
+expect peak_db_min -50
+expect render_permille <150
+expect amb_view 0
+shot amb_garden.png
+# the pages: ENV the pad, K1 its level
+tap ENV
+wait 60
+expect amb_view 1
+turn K1 3
+wait 60
+expect amb_par0 63
+expect amb_dirty 1
+shot amb_pad.png
+tap FX
+wait 60
+expect amb_view 5
+shot amb_space.png
+tap GLO
+wait 60
+expect amb_view 6
+shot amb_key.png
+turn K3 1
+wait 40
+expect amb_midi 1
+turn K3 -1
+wait 40
+expect amb_midi 0
+tap HOME
+wait 60
+expect amb_view 0
+# HOME held + SELECT: the tempo (72 -> 74)
+press HOME
+wait 40
+turn SELECT 2
+wait 40
+release HOME
+wait 40
+expect amb_par18 74
+# SELECT alone: the pages
+turn SELECT 1
+wait 40
+expect amb_view 1
+turn SELECT -1
+wait 40
+# the keys: F (key 0) out of D dorian, in again; the root D (key 9) stays
+expect amb_pool 1709
+key 0 down
+wait 40
+key 0 up
+wait 60
+expect amb_pool 1701
+expect toast 1
+shot amb_removed.png
+key 0 down
+wait 40
+key 0 up
+wait 40
+expect amb_pool 1709
+key 9 down
+wait 40
+key 9 up
+wait 40
+expect amb_pool 1709
+# ALGORITHM: the scale (Dorian -> Phrygian)
+turn ALGO 1
+wait 60
+expect amb_par20 2
+expect amb_pool 1451
+turn ALGO -1
+wait 60
+expect amb_pool 1709
+# a MIDI note on channel 1 does what a key does
+midi 90 41 64
+wait 40
+midi 80 41 00
+wait 60
+expect amb_pool 1701
+midi 90 41 64
+wait 40
+expect amb_pool 1709
+# REC freezes, again thaws; EDIT the next chord; OCT+ the bells
+tap REC
+wait 60
+expect amb_frozen 1
+shot amb_frozen.png
+tap REC
+wait 60
+expect amb_frozen 0
+tap EDIT
+wait 60
+expect toast 1
+tap OCT+
+wait 60
+expect amb_par21 1
+# SEL + REC with RUN4 there: RUN4's REC (the garden's REC stays its own)
+sysex_out
+press SEL
+wait 40
+tap REC
+wait 40
+release SEL
+wait 100
+expect_sysex @BTN11_1@
+expect_sysex @BTN11_0@
+expect amb_frozen 0
+# PLAY rests it (the sound rings out), again it grows
+tap PLAY
+wait 60
+expect amb_playing 0
+# resting: a change is saved by itself after a few seconds
+wait 4600
+expect amb_dirty 0
+expect amb_saves >0
+tap PLAY
+wait 60
+expect amb_playing 1
+# the piece: PRESETS (Garden -> Departures), as it was left
+turn PRESET 1
+wait 100
+expect amb_piece 2
+expect amb_par0 35
+shot amb_departures.png
+turn PRESET -1
+wait 100
+expect amb_piece 1
+expect amb_par0 63
+expect amb_par21 1
+# SAVE, then a reboot: it boots into AMB mode with everything as left
+tap SAVE
+wait 100
+expect amb_dirty 0
+reboot
+wait 1500
+expect mode 2
+expect amb_piece 1
+expect amb_par0 63
+expect amb_par21 1
+expect amb_playing 1
+# SAVE held 2 s: the piece back to its recipe (its card first, at 1 s; the reset closes it)
+press SAVE
+wait 1200
+expect card 8
+shot card_amb_save.png
+wait 1000
+expect card 0
+expect amb_par0 60
+expect amb_par21 0
+release SAVE
+wait 100
+expect card 0
+# MIDI clock in: START grows from the top, 24 ticks are a beat (four sixteenths), STOP rests
+midi FA
+wait 20
+expect amb_ext 1
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+midi F8
+wait 18
+expect amb_bars 4
+midi FC
+wait 40
+expect amb_playing 0
+wait 1000
+expect amb_ext 0
+# the overload guard covers AMB too
+tap PLAY
+wait 200
+overload 1
+wait 30
+expect shed 1
+expect amb_shed 1
+expect toast 1
+wait 3500
+expect shed 0
+# a USB backup in AMB mode: growing, the restore says STOP FIRST; resting, it restores
+turn PRESET 2
+wait 100
+expect amb_piece 3
+tap HOME
+wait 40
+turn K1 5
+wait 60
+expect amb_par18 61
+# (resting: the backup saves what is not saved yet first; growing, it would leave that out)
+tap PLAY
+wait 60
+backup out:r4ctl_amb.bak
+wait 100
+tap PLAY
+wait 60
+turn PRESET 1
+wait 100
+expect amb_piece 4
+restore out:r4ctl_amb.bak
+expect restore_rc 10
+tap PLAY
+wait 100
+restore out:r4ctl_amb.bak
+expect restore_rc 0
+wait 100
+expect amb_piece 3
+expect amb_par18 61
+expect mode 2
+# back to RUN4 mode (SEL + HOME from AMB): the link again, AMB's state kept for the next time
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 0
+expect set_mode 0
+expect amb_boot 0
+@ACK@
+wait 100
+expect connected 1
+expect_sysex @SYNC@

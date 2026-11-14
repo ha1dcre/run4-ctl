@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include "../src/synth.c"
+#include "../src/plate.c"
 
 static int checks, fails;
 #define CHECK(c) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -54,6 +55,8 @@ static void wav(const char *path, uint32_t from, uint32_t to)       /* mono 16-b
 }
 static uint8_t cksum(const uint8_t *d, uint32_t n) { uint32_t s = 0, i; for (i = 0; i < n; i++) s += d[i]; return (uint8_t)((128u - (s & 127u)) & 127u); }
 static void feed(const uint8_t *d, uint32_t n) { uint32_t i; for (i = 0; i < n; i++) syn_sysex_byte(d[i]); }
+
+#include "reverb_ab.c"
 
 /* ---------------------------------------------------------------- sequencer (src/synth_seq.c) --- */
 static int keyed(int note)                            /* voices started and not released, of this note (-1: any) */
@@ -1009,6 +1012,7 @@ int main(int argc, char **argv)
     morph_tests();
     learn_shed_tests();
     jitter_tests();
+    reverb_ab(argc > 1 ? argv[1] : 0);
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);

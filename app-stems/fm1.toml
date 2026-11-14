@@ -18,16 +18,17 @@ usb_audio_channels = 6           # the stems: 3-4 dry, 5-6 effects (44.1 kHz onl
 backup = true                    # a USB backup / restore of everything stored but the panel (app.h APP_BACKUP_*)
 mirror = true                    # the screen and panel mirrored over USB (fm1-base web/mirror, tools/fm1_mirror.py)
 midi_stamp = true                # MIDI in stamped where it lands: notes and clock placed in the block (app.c midi_pump)
+o2 = ["../src/plate.c", "../src/amb/amb.c"]   # the plate reverb (both modes) and AMB mode's engine: own units at -O2 (float DSP)
 emu = ["midi"]                   # browser emulator (build.py app --web): Web MIDI in/out with SysEx (keyboard, RUN4)
 
 # firmware.json and the release check (base/docs/FIRMWARE-JSON.md; `build.py app --release X.Y` refuses without these)
 author = "TODO-OWNER author name"                 # TODO-OWNER: your name or handle as it should appear
 licence = "GPL-3.0-only"
 tagline = "RUN4 controller and FM synth, USB stems"
-description = "Two modes. RUN4 mode makes the M-VAVE FM-1 a hardware controller for the iOS app RUN4 over USB or Bluetooth MIDI: the app draws its pages and lights on the FM-1 and can play its FM engine as a track's instrument. Synth mode (SEL + HOME) is a six-operator FM synth with DX7 bank import, effects, an arpeggiator, an A / B morph, MIDI learn and a step sequencer (16 patterns of up to 64 steps, chords, ties, parameter locks, trig conditions, generators, MIDI clock); it plays from MIDI in, sample-accurate. Everything backs up over USB."
-tags = ["controller", "synth", "fm", "sequencer", "midi"]
+description = "Three modes. RUN4 mode makes the M-VAVE FM-1 a hardware controller for the iOS app RUN4 over USB or Bluetooth MIDI: the app draws its pages and lights on the FM-1 and can play its FM engine. Synth mode is a six-operator FM synth with effects, arpeggiator, morph, MIDI learn and a step sequencer with locks and generators. AMB mode is AMB-1's generative ambient garden: pads, bells on unequal tape loops, bass, quiet pulse, tape echo, plate reverb. Hold a button for help. Everything backs up over USB."
+tags = ["controller", "synth", "fm", "sequencer", "midi", "ambient", "generative"]
 install = "https://todo-owner.example/run4-ctl/install/"   # TODO-OWNER: where the web installer will be published
 repo = "https://todo-owner.example/run4-ctl"              # TODO-OWNER: the public source repository
 site = "https://todo-owner.example/run4-ctl/"             # TODO-OWNER: the project site
 screenshot = "docs/img/screen.png"
-credits = "Built on fm1-base and felucca-bsp (MPL-2.0). Not affiliated with M-VAVE."
+credits = "Built on fm1-base and felucca-bsp (MPL-2.0). AMB mode: AMB-1 by Charles Vestal (MPL-2.0). Not affiliated with M-VAVE."

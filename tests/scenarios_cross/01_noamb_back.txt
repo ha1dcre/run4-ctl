@@ -1,0 +1,15 @@
+# The full package takes the backup the package without AMB mode made (tests/scenarios_noamb/01_noamb.txt, from
+# 28_amb's image): the AMB part went through it untouched, the pieces are as 28_amb left them.
+restore out:r4ctl_noamb.bak
+expect restore_rc 0
+wait 200
+press SEL
+wait 40
+tap HOME
+wait 60
+tap HOME
+release SEL
+wait 300
+expect mode 2
+expect amb_piece 3
+expect amb_par18 61
