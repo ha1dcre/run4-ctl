@@ -80,7 +80,7 @@ while a key is held leaves no stuck note.
 | 0x48 | FOCUS | `cursor item_idx14 item_count14` - protocol 1.2 |
 | 0x49 | HV_ON | `on, chan` - protocol 1.3, "Host voice" |
 | 0x4A | HV_VOICE | `kind` then `idx` / 128 bytes / 155 bytes - 1.3 |
-| 0x4B | HV_PARAM | `1..18 x (id, value)` - 1.3 |
+| 0x4B | HV_PARAM | `1..21 x (id, value)` - 1.3 (ids 18..20: firmware 0.6) |
 | 0x4C | NAMES_REQ | none - 1.3 |
 | 0x4D | VOICE_GET | `idx` (0..39, 127 = the host voice's) - 1.3 |
 | 0x4E | TAPE_WAVE | `track, label(str), n, n x peak` - 1.3, "Tape view" |
@@ -241,7 +241,7 @@ outside 32..126 become spaces. The sounding notes are released, then the voice r
 the rest of HV_PARAM's that are not "patch") stay. The device answers with HV_STATE (also when an empty slot changed
 nothing). At most 10 a second.
 
-**HV_PARAM (0x4B)** `id, value` pairs, 1..18 of them - host to device. No answer; applied at the next audio block
+**HV_PARAM (0x4B)** `id, value` pairs, 1..21 of them - host to device. No answer; applied at the next audio block
 without retriggering notes. A frame with any unknown `id` or a `value` above its maximum is dropped whole. Send changes
 only, coalesced to the latest value, at most 100 frames a second in all (put several pairs in one frame).
 
@@ -265,9 +265,22 @@ only, coalesced to the latest value, at most 100 frames a second in all (put sev
 | 15 | REVERB | 0..100 | % (room) | 20 | engine |
 | 16 | DRIVE | 0..100 | % | 0 | engine |
 | 17 | DELAY TIME | 0..5 | 1/8, dotted 1/8, 1/4, dotted 1/4, 1/2, dotted 1/2 | 2 | engine |
+| 18 | MORPH SET | 0..2 | 0: snapshot A, 1: snapshot B of BRIGHT, FEEDBACK, ENV SPEED, VOLUME, DRIVE, CHORUS, DELAY, REVERB (and the delay's feedback and the reverb's size) as they are now; 2: both cleared | none | engine |
+| 19 | MORPH MODE | 0..11 | 0 off, 1 knob (MORPH sets it), 2..11 a slow drift A -> B -> A of 10, 20, 30, 45, 60, 90, 120, 180, 240, 300 s | 0 | engine |
+| 20 | MORPH | 0..100 | where between A (0) and B (100); a drift goes on from there | 0 | engine |
 
 "Patch" parameters edit the loaded voice (VOICE_GET 127 returns them; the next HV_VOICE replaces them); "engine"
 parameters belong to the host voice and stay across HV_VOICE. The defaults hold after a power-on: the voice is F1.
+
+**The morph (ids 18..20, a backwards-compatible addition; the protocol stays 1.3).** RUN4 CTL firmware 0.6 and later
+(HELLO's `fw_major.fw_minor`) knows them; an older firmware drops a frame with any of them whole (the rule above), so
+a host sends them only to 0.6+, or in a frame of their own. The host voice's morph is the same as Synth mode's (MANUAL,
+"Morph"): while both snapshots are taken and MORPH MODE is not 0, the ten values come from between A and B, at control
+rate (a block, 5.8 ms), and a drift moves between them by itself; HV_PARAM's own values for those ids are then the
+base the snapshots were taken from, not what plays. The snapshots are the FM-1's RAM, like the rest of the host voice:
+after a power-on, a replug or a SYNC_REQ the host sends, in this order, the A values and `18 = 0`, the B values and
+`18 = 1`, the values it wants as base, then `19` and `20`. RUN4 needs a change to use them; without it nothing
+changes (the morph stays off).
 
 **HV_STATE (0x07)** `state, chan, voice, name(str)` - device to host (1.3 hosts only).
 

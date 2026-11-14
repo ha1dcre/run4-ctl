@@ -34,6 +34,21 @@ Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Fel
             trigger's hysteresis, the slow release of the scale, the strip-wise sending and the other views are new.
   The DX7 voice and bank formats are Yamaha's; no factory ROM data of any instrument is included.
 
+Ideas and rules from Mutable Dreams (version 2.1), the FM-1 firmware by Kid Bunka,
+https://github.com/kidbee85-beep/mutable-dreams (its own files: MIT OR GPL-3.0-only, used here under GPL-3.0-only;
+no Mutable Instruments code is used). No file of it is copied; these follow its design and are new code:
+  src/synth.c   the MIDI learn rules (syn_ml_safe: the CCs that may be learned, as its dsp/midi_learn.inc
+            learn_safe; syn_ml_pickup: pick-up / soft takeover as its learn_cc does) and the placement of MIDI in
+            within the audio block (syn_timed, syn_midi_frame: its app.c / dsp/dreams.cpp md_block_begin and md_midi_at,
+            a constant one-block latency instead of a block of jitter); the morph's drift between two snapshots
+            (its dsp/creative.inc drift_capture / creative_tick: A and B, a ping-pong of 10 to 300 s).
+  src/synth_learn.c   the learn gesture and bindings around those rules.
+  src/synth_gen.c   generators in the spirit of its sequence generators (euclid, sparse, pulse, arp from the
+            chord / scale, drift) and its phrase tools (copy, paste, transpose, mirror).
+  src/synth_seq.c   trig conditions FIRST / alternating / FILL in spare bits of a step, as its md_step keeps its rule
+            in spare bits of chance and gate.
+  app/app.c   the overload guard on fm1-base's APP_OVERLOAD hook, as its app_overload / md_overload (ECO) uses it.
+
 Files from fm1-base and felucca-bsp stay under the Mozilla Public License 2.0, file by file; the source of those
 files is the submodules at the commits recorded in this repository. MPL-2.0 is compatible with the GPL (its section
 3.3). The shape of app/ follows fm1-base's template (base/template/) and the way charlesvestal/fm1-ctl is built on it.

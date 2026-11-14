@@ -12,9 +12,10 @@ firmware platform [fm1-base](https://github.com/charlesvestal/fm1-base). See `NO
 Status: **complete in the host simulator, not yet run on an FM-1.** RUN4 mode (protocol v1.3 in `docs/PROTOCOL.md`: codec,
 LIST, non-blocking output, SETUP page, touch velocity and aftertouch, the host voice, the voice list, the tape view, the
 patch backup) and Synth mode (Felucca's FM6 engine, effects, DX7
-SysEx import, arpeggiator, sequencer with parameter locks and a song chain, scale and chord keys, mutate, pages) are
-implemented and tested in fm1-base's host simulator and in native
-tests (`make test`). Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
+SysEx import, arpeggiator, sequencer with parameter locks, trig conditions, generators, phrase tools and a song chain,
+scale and chord keys, mutate, an A / B morph, MIDI learn, pages) are implemented and tested in fm1-base's host
+simulator and in native tests (`make test`); so are the USB backup, the screen mirror, sample-accurate MIDI in, the
+overload guard, LOCAL OUT and the USB stems package. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
 the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 ## Layout
@@ -25,22 +26,49 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 | `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats) |
 | `src/ui.c` | the display: state from host frames, redraw by region |
 | `src/tape_ui.c` | RUN4 mode's tape view (protocol 1.3): waveform, loop region, playhead and meters in Synth mode's layout |
-| `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import, scales and chords, mutate; the step sequencer (16 x 64 steps, after Felucca's) with parameter locks and the song chain; its pages |
-| `app/` | the fm1-base app: `app.c` (input, local rules, host frames), `app.h`, `fm1.toml` |
+| `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import, scales and chords, mutate, the morph, sample-accurate MIDI in, the overload guard; the step sequencer (16 x 64 steps, after Felucca's) with parameter locks, trig conditions and the song chain; its pages |
+| `src/synth_gen.c`, `src/synth_learn.c` | the SEQ page's generators, phrase tools, copy / paste and undo; MIDI learn and the default CC map |
+| `app/` | the fm1-base app: `app.c` (input, local rules, host frames, USB backup hooks, LOCAL OUT, stems), `app.h`, `fm1.toml` |
+| `app-stems/` | the RUN4 CTL STEMS package: `app/` built with six USB audio input channels (its own `fm1.toml`) |
 | `tests/r4p_test.c`, `tests/synth_test.c` | codec unit tests; native tests of the synth engine (levels, polyphony, DX7 import, CPU) |
-| `tests/scenarios/*.txt`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness) |
+| `tests/scenarios/*.txt`, `tests/scenarios_stems/`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness; the stems package) |
 | `tests/screens/`, `tests/audio/` | screenshots and a short listening file the simulator wrote |
 | `tools/fake_fm1.py`, `tools/coremidi.py` | a Mac stand-in for the FM-1 (virtual CoreMIDI ports "FM-1", terminal panel); standard library only |
 | `tools/fake_run4.py` | stand-in for the RUN4 app (frames as hex, simulator scripts); standard library only |
 | `base/` | fm1-base (git submodule; it brings felucca-bsp) |
 
-Store (flash data area, two 4 KiB sectors per object, `app/app.h`): panel 0xDC000, SETUP 0xDA000, Synth settings
-0xD8000 (198 B, layout 3; a layout-2 store of 186 B loads with the new fields at their defaults), two user banks
+Store (flash data area, two 4 KiB sectors per object, `app/app.h`): panel 0xDC000, SETUP 0xDA000 (56 B, layout 2:
+LOCAL OUT, the default CC map, 16 MIDI learn bindings; a layout-1 store of 6 B loads with them at their defaults),
+Synth settings 0xD8000 (222 B, layout 4: the morph; layouts 2 (186 B) and 3 (198 B) load with the new fields at their
+defaults), two user banks
 0xD6000 / 0xD4000 (2056 B each), Bluetooth 0xDE000, and the sequencer's 16 patterns in four objects 0xD2000 / 0xD0000 /
 0xCE000 / 0xCC000 (layout 2: 3724 B each, 14896 B, still one object per sector pair, so no more flash than before; a
 layout-1 object of 2088 B loads unchanged, without locks and chain). Each object holds four patterns (520 B each),
 their parameter locks (6 lanes a pattern: a parameter id and a value per step, 392 B) and the song's chain (66 B,
-object 0's counts). RAM: patterns 8.3 KB, locks 6.1 KB (6272 B), chain 66 B.
+object 0's counts). RAM: patterns 8.3 KB, locks 6.1 KB (6272 B), chain 66 B. A step's trig condition lives in three
+spare bits of its flags (no layout change; older firmware clears them on load). No new store object: the new
+settings grew two objects inside their own sector pairs (no flash added).
+
+USB backup (`fm1.toml` backup = true, fm1-base `device/backup.c`, `tools/fm1_backup.py`): the image's magic is
+"R4CB", version 1, and holds SETUP, the settings, both banks, the four pattern objects and the Bluetooth record in
+that order (never the panel's calibration). A new object in the list needs `APP_BACKUP_VERSION` 2; a new layout of an
+existing object does not (each loads its older layouts). The restore borrows the store's 3840-byte scratch `r4_io`
+(`APP_BACKUP_BUF`), which also took the place of two 3724-byte pattern buffers.
+
+RAM added by this round (sizes measured natively; the device's linker map not made, no toolchain here): pool +1,056 B
+(a 128-byte carry per voice for sample-accurate note starts; the voices 3,488 B in all), the app's pool 112,044 B in
+all (the DX7 import buffer 4,108, the voices, the effects' lines 104,448); .bss about -1.1 KB net (pattern undo 915,
+clipboard 903, the timed MIDI queue 192, the morph 48 + 2 x 24 in the two setting sets, MIDI learn ~290, SETUP +50,
+minus 3,608 for the shared scratch). fm1-base's parts: the mirror 9,800 B of pool (row hashes 7,680, frame buffers
+2,120) and 5.1 KB of .bss (its 4 KiB ring, the frame's hashes); the backup ~0.5 KB of .bss and no pool (the scratch is
+lent). Pool estimate: the canvas 69,120 + the app 112,044 + the mirror 9,800 + the words: about 192 KB of the 336 KiB
+pool, ~150 KB spare (fm1-base insists on 8 KiB); the build's own `pool headroom` line is the authority once it runs.
+The STEMS package adds 4.5 KB of .bss (the USB ring at six channels, 6,144 B instead of 2,048, and its packet buffer).
+
+Sample-accurate MIDI in (`midi_stamp`): measured in `tests/synth_test.c` over 64 notes arriving at random points of a
+block: onset jitter 5.60 ms (as before: taken at the next block's start), 0 frames placed (a constant 257-frame
+latency); MIDI clock F8s 551 frames apart measured 524..588 before, 551 placed. The simulator's MIDI is stamped when
+read, so `midiat FRAME ..` stands in for a stamped message there.
 
 Display budget (Synth mode's live band, `src/synth_ui.c`): at most 25 frames a second, drawn in RAM and sent as 16 px
 strips only as tall as the old and new trace (measured in the simulator, scenario `14_synth_look`: ~18.5 KB a frame for
@@ -77,6 +105,8 @@ simulator's font generation (digit widths), never the device build.
 Browser emulator (play it with mouse, computer keyboard or a MIDI keyboard; needs Emscripten, e.g. emsdk in `~/emsdk`
 — not on an exFAT volume, it needs symlinks): `source ~/emsdk/emsdk_env.sh && python3 base/tools/build.py app --web`,
 then `cd app/build/emu && python3 -m http.server 8741` and open http://127.0.0.1:8741 in Chrome (Web MIDI with SysEx).
+
+The STEMS package: `python3 base/tools/build.py app-stems` (the simulator: `app-stems --host`, run by `make sim`).
 
 Run a scenario by hand: `python3 tools/fake_run4.py sim tests/scenarios/02_connected_pages.txt > /tmp/s.txt &&
 app/build/host/run4ctl_host /tmp/s.txt /tmp/out` (screenshots land in `/tmp/out`). Frames as hex:

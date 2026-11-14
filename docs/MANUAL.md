@@ -71,26 +71,39 @@ delay and reverb (room, spring, hall).
 | PLAY, REC | start / stop the sequencer; record into it (see Sequencer) |
 | SEL + a key | transpose the sequence: it plays from that key (C4 = no transpose) |
 | SEL + REC, SEL + PLAY | with RUN4 connected: RUN4's REC and PLAY (see RUN4 and Synth mode together) |
-| SAVE | store the voice in its user slot, or in the first free one (on SEQ: an armed COPY TO / CLEAR; a held step: clear its locks; SONG: insert / delete an entry) |
+| SAVE | store the voice in its user slot, or in the first free one (on SEQ: an armed COPY TO / CLEAR, GENERATE, an armed REVERSE / MIRROR; a held step: clear its locks; SONG: insert / delete an entry) |
 | SEL + EDIT | MUTATE: a random variation of the voice (see Mutate) |
-| SEL + SAVE | undo the last MUTATE (again: redo it) |
+| SEL + SAVE | undo the last MUTATE (again: redo it); on the SEQ page: undo the last pattern change (GENERATE, PHRASE, PASTE) |
+| SEL + K1..K4 | MIDI learn: the next controller (CC) you move sets that tile (see MIDI controllers) |
+| SEL + SEQ, held | FILL: steps with the condition FILL play, NOT FILL ones rest, while SEQ is held |
 
 **Pages.**
 
 | Page | Sub-page 1 | Sub-page 2 |
 | --- | --- | --- |
-| HOME (SYNTH) | BRIGHT, FEEDBACK, ENV SPEED, LEVEL | |
+| HOME (SYNTH) | BRIGHT, FEEDBACK, ENV SPEED, LEVEL | MORPH: MORPH, MODE, SET A, SET B (see Morph) |
 | EDIT (OPERATOR n) | RATIO, FINE, LEVEL, DETUNE | MODE (ratio / fixed), VEL SENS, RATE SCALE, AMP MOD |
 | ENV (ENVELOPE n) | RATE 1 to 4 | LEVEL 1 to 4 |
 | LFO | SPEED, DELAY, PITCH MOD, AMP MOD | WAVE, PITCH SENS, LFO SYNC, OSC SYNC |
 | FX | DRIVE, CHORUS, DELAY, REVERB (amounts) | DELAY TIME (1/8 to dotted 1/2), DELAY FEEDBACK, REVERB TYPE, REVERB SIZE |
 | GLO (GLOBAL) | TRANSPOSE, TUNE, MIDI CH (OMNI or 1 to 16), BEND RANGE | VELOCITY amount, MUTATE amount (SMALL, MEDIUM, WILD); third sub-page KEYS: SCALE, ROOT, KEY MODE, MIDI IN |
 | ARP | ARP on/off, MODE (up, down, up-down, random, played), RATE, OCTAVES | GATE, CHORD, INVERSION, SPREAD |
-| SEQ (SEQUENCER) | four sub-pages (the fourth is SONG) and two more views: see Sequencer | |
+| SEQ (SEQUENCER) | six sub-pages (the fourth is SONG, then GENERATE and PHRASE) and two more views: see Sequencer | |
 
 The delay is cut at 371 ms: at slow tempi the long divisions are shortened to it.
 
 **Arpeggiator.** It turns held keys into an arpeggio and shares the sequencer's tempo (and a MIDI clock coming in).
+
+### Morph
+
+HOME's second sub-page (press HOME again) morphs between two snapshots of the sound. **SET A** and **SET B** (turn
+K3 / K4 either way) take ten values as they are now: BRIGHT, FEEDBACK, ENV SPEED, LEVEL (HOME) and DRIVE, CHORUS,
+DELAY, REVERB, DELAY FDBK, REVERB SIZE (FX). **MODE**: OFF (the sound's own values), KNOB (K1 **MORPH** sets where
+between A, 0 %, and B, 100 %), or a slow drift there and back that takes 10 S, 20 S, 30 S, 45 S, 1 MIN, 90 S, 2 MIN,
+3 MIN, 4 MIN or 5 MIN; MORPH then shows where it is, and turning it moves the drift on from there. While MODE is not
+OFF and both snapshots are set, those ten values come from the morph (the HOME and FX tiles show the voice's own
+values; turning one says MORPH IS ON). A step's parameter lock still wins over the morph. The snapshots and the mode
+are kept with the settings. RUN4 can use the same on its FM-1 track (protocol: HV_PARAM 18..20).
 
 ### Scale and chord keys
 
@@ -137,6 +150,9 @@ before plays goes on through it), and has its own velocity, gate and chance. Eac
 | hold a white key + a page button | K1 to K4 lock that page's sound parameters on the step (see Parameter locks) |
 | hold a white key + play keys | the step gets those notes: the first replaces what it had, more keys while it is held make a chord (up to 4) |
 | hold a white key + K1 / K2 / K3 / K4 | its NOTE (the whole chord moves), VELOCITY, GATE, CHANCE; PAT = the pattern's value |
+| hold a white key + SEQ again | its CONDITION (K1; see Trig conditions); SEQ once more: back to NOTE .. CHANCE |
+| hold a white key + EDIT | COPY the step (with SEL + another step held: every step from the first to the last of them) |
+| hold a white key + GLO | PASTE what was copied from this step on (the pattern's length cuts it; locks come along) |
 | a black key (1 to 4) | that step page; while playing the page follows the playing step until you pick one |
 
 LEDs: a lit white key is a step that plays, a dim one is switched off with notes in it, the playing step is the other
@@ -160,6 +176,8 @@ the following steps writes TIEs there. With the arpeggiator on, what it plays is
 | 2 | RATE | GATE | VELOCITY | TRANSPOSE (-24 to +24) |
 | 3 | STEP (cursor) | COPY TO | CLEAR | CLOCK (AUTO, OUT, INT) |
 | 4 SONG | ENTRY | PATTERN | REPEATS (1-16) | SONG (OFF, ON) |
+| 5 GENERATE | TYPE (EUCLID, SPARSE, PULSE, ARP, DRIFT) | its three settings (below) | | |
+| 6 PHRASE | ROTATE | TRANSPOSE | REVERSE (SAVE) | MIRROR (SAVE) |
 
 A pattern picked while another plays starts when that one comes to its end. **Copy:** turn COPY TO to the target
 pattern and press SAVE. **Clear:** turn CLEAR right and press SAVE (either is forgotten after 8 seconds or on another
@@ -186,6 +204,34 @@ chain from its first entry, each pattern to its end as a queued pattern change d
 with any clock (AUTO, OUT, INT). The grid shows the pattern playing (turn PATTERN to edit another one meanwhile) and
 says SONG 2/5 x1/2 (entry, loop). With SONG off, patterns play as before. The chain is kept with the patterns.
 
+**Trig conditions.** Hold a step and press SEQ again: K1 sets its CONDITION. ALWAYS (the default), **1:2** (the
+first of every two loops of the pattern), **2:2** (the second), **1:4** (the first of every four), **FIRST** (only the
+first loop after PLAY), **FILL** (only while FILL is held), **NOT FILL** (only while it is not). The loops count from
+PLAY and again whenever another pattern (or song entry) takes over. A step with a condition has a notch at the bottom
+of its cell. **FILL**: hold SEL and press SEQ; FILL is on while SEQ stays held (the grid says FILL). A TIE goes on
+whatever its condition. Conditions are kept with the patterns (older patterns: ALWAYS).
+
+**GENERATE** (fifth sub-page) fills the pattern when you press SAVE, in the scale of GLO's KEYS page (with SCALE OFF:
+the minor pentatonic) from the last note entered on the grid (C4 at first):
+
+| TYPE | K2 | K3 | K4 | What it does |
+| --- | --- | --- | --- | --- |
+| EUCLID | HITS | STEPS (LEN = the pattern's length) | ROTATE | HITS spread as evenly as can be over STEPS, repeated over the pattern; a hit keeps the notes its step had (an empty one gets the note), the others are switched off (their notes kept): a rhythm over what is there |
+| SPARSE | DENSITY | RANGE (octaves) | SEED | notes of the scale here and there, the downbeats likelier |
+| PULSE | EVERY | OFFSET | LENGTH | the note every n steps from OFFSET + 1, held over LENGTH - 1 TIEs |
+| ARP | SHAPE (UP, DOWN, UP-DOWN, RANDOM) | RANGE | EVERY | the CHORD of the ARP page (OFF: the scale's seventh chord) arpeggiated, a note every n steps |
+| DRIFT | DENSITY | MOVE (scale steps) | SEED | a random walk in the scale |
+
+The same SEED gives the same pattern; turn it for another.
+
+**PHRASE** (sixth sub-page): **ROTATE** moves every step (and its locks) a step later or earlier per detent;
+**TRANSPOSE** moves every note a step of the scale (with SCALE OFF a semitone) per detent, refused if a note would
+leave the keyboard; turn **REVERSE** or **MIRROR** and press SAVE: the pattern back to front (a note and its TIEs stay
+together), or its pitches upside down (around the middle of their range, into the scale).
+
+**Undo.** SEL + SAVE on the SEQ page undoes the last GENERATE, PHRASE or PASTE (a run of ROTATE or TRANSPOSE turns is
+one change); again: redo. One level. Elsewhere SEL + SAVE stays MUTATE's undo.
+
 **Clock.** AUTO (the default): a MIDI clock coming in (USB, Bluetooth or the jack) drives the sequencer and the
 arpeggiator, its START and STOP start and stop the sequencer, and when the clock stops coming for half a second the
 FM-1's own tempo takes over again. OUT: the own tempo, and MIDI clock, START and STOP go out over USB and Bluetooth.
@@ -195,7 +241,33 @@ INT: the own tempo, a clock coming in is ignored.
 stopped (writing the flash stops the sound for a moment), and when you leave Synth mode or press SAVE.
 
 **MIDI in.** In Synth mode USB, Bluetooth and the TRS jack play the synth: notes, sustain pedal, pitch bend, all notes
-off, on the channel set in GLOBAL (OMNI by default); snapped to the scale when MIDI IN is SCALE. The notes of the keys are not sent anywhere in this mode.
+off, controllers (see MIDI controllers), on the channel set in GLOBAL (OMNI by default); snapped to the scale when
+MIDI IN is SCALE. The notes of the keys are not sent anywhere in this mode. USB and the jack are **sample-accurate**:
+each message plays at the point of the audio block where it arrived, one block (5.8 ms) later, instead of at the next
+block's start (up to 5.8 ms of jitter before); a note starts at its exact sample, a note-off, a controller or a MIDI
+clock within 0.73 ms. The same holds for RUN4's notes to the FM-1 engine in RUN4 mode. Bluetooth plays at once, as
+before.
+
+### MIDI controllers
+
+**Default CCs** (on unless SETUP > MIDI LEARN turns them off), on Synth mode's MIDI channel:
+
+| CC | Sets | CC | Sets |
+| --- | --- | --- | --- |
+| 1 (mod wheel) | LFO PITCH MOD | 76 | LFO SPEED |
+| 7 (volume) | LEVEL | 78 | LFO DELAY |
+| 12 | DRIVE | 91 | REVERB |
+| 16 | MORPH | 92 | LFO AMP MOD |
+| 71 | FEEDBACK | 93 | CHORUS |
+| 73 | ENV SPEED | 94 | DELAY |
+| 74 | BRIGHT | 64, 120, 123 | sustain, all notes off (as before) |
+
+**MIDI learn.** Hold SEL and turn the knob of the tile you want (any Synth page but SEQ; on EDIT and ENV the operator
+shown), then move a controller within 10 seconds: the screen says e.g. CC 21 > LEVEL. A learned CC answers on the
+channel it was learned on and wins over the default map. SAVE while learning removes the tile's CC; any other button
+ends learning. Up to 16; CCs 6, 32-63, 64 and 96-101 (data entry, the fine halves, the pedal, (N)RPN) and 120 and up
+cannot be learned. Every controller **picks up**: it changes a value only once it has reached it (or crossed it), so
+a knob at another position never makes the sound jump. The list is on SETUP > MIDI LEARN.
 
 **DX7 patches.** Send a DX7 **32-voice bank** (SysEx, 4104 bytes) or a **single voice** (163 bytes) to the FM-1 over USB or
 Bluetooth while it is in Synth mode, from a librarian or a DAW. A bank replaces the 32 user voices; a single voice goes
@@ -236,7 +308,7 @@ You need a Chrome or Edge browser (Web MIDI) and a USB cable.
 
 **Going back to stock.** Install M-VAVE's own firmware package (V15) with the same installer: it accepts M-VAVE's
 package. RUN4 CTL's own settings (SETUP page) and the user voices of Synth mode are not part of it and are simply gone
-afterwards.
+afterwards: take a USB backup first (see USB backup) to have them back later.
 
 ## Connect to RUN4
 
@@ -267,8 +339,9 @@ or PRESETS move, HOME or PLAY pick, any other page button or SAVE cancels.
 ## SETUP page
 
 This page lives in the firmware, not in RUN4. Hold **SEL** and press **GLO** to open it (it works with or without the
-app). K1 to K4 change the four tiles, any page button leaves it, SELECT turns to its second sub-page (VOICE BACKUP). Nothing you do on it is sent to RUN4 and the settings
-are kept when you power the FM-1 off.
+app). K1 to K4 change the four tiles, any page button leaves it, SELECT (or PRESETS) turns through its four sub-pages:
+the settings, VOICE BACKUP, AUDIO and MIDI LEARN. Nothing you do on it is sent to RUN4 and the settings are kept when
+you power the FM-1 off.
 
 | Tile | Values |
 | --- | --- |
@@ -288,7 +361,51 @@ Synth mode (U01 to U32). It needs a RUN4 that speaks protocol 1.3, connected; it
 
 Messages: **NO HOST** (RUN4 is not connected, too old, or did not answer), **NO BACKUP** (RUN4 has none yet), **BAD
 CHECKSUM** (the backup arrived damaged: nothing is written). The backup holds the voices only, not the settings or the
-sequencer's patterns.
+sequencer's patterns: for everything, use the USB backup.
+
+## USB backup
+
+Everything the FM-1 keeps (the SETUP page with MIDI learn, Synth mode's settings with the morph, the 32 user voices,
+the 16 patterns with their locks and the song, the Bluetooth record) goes into one file over USB, and back. Only the
+knobs' calibration stays with the unit. Use fm1-base's backup page or its tool on a computer:
+
+    python3 base/tools/fm1_backup.py backup run4ctl.bak --magic R4CB
+    python3 base/tools/fm1_backup.py restore run4ctl.bak
+
+A backup can be taken while the FM-1 plays (what is not saved yet is left out: stop first to have it). A restore needs
+the sequencer stopped (STOP FIRST), checks the whole file before anything changes, and asks on the screen: RESTORE FROM
+USB? SEL yes, HOME no. Then everything is as in the file; the mode you are in stays until the next power-on. A backup
+of an older RUN4 CTL restores (its parts load as they were); another firmware's does not. The VOICE BACKUP to RUN4
+(above) stays as it was.
+
+## Screen mirror
+
+The FM-1's screen and panel can be shown and played on a computer over USB (fm1-base's mirror page `web/mirror/` or
+`base/tools/fm1_mirror.py`). It costs nothing until a viewer asks; the music always goes first, and a frame that did
+not fit is drawn again.
+
+## USB stems
+
+The **RUN4 CTL STEMS** package (built from `app-stems/`) is the same firmware with six USB audio channels instead of
+two: 1-2 the mix (as ever), 3-4 the dry voices (before chorus, delay and reverb), 5-6 the effects' return, all at the
+same level (the mix is the dry plus the effects, before the output's soft ceiling). The normal package stays a stereo
+USB device, which is what RUN4 and most apps expect; install STEMS only for a recorder that takes all six. 44.1 kHz.
+
+Turn on for the third sub-page, **AUDIO**:
+
+| Tile | What it does |
+| --- | --- |
+| K1 LOCAL OUT | ON (the default), or USB ONLY: while a computer (an iPad, a Mac) is connected over USB, the FM-1's sound goes to USB at full level (MASTER does not change the recording) and its headphone / line output and speaker stay silent, so RUN4 records it without hearing it twice. The computer's own audio through the FM-1 is silent then too: listen on the iPad. Without a computer the FM-1 plays as usual |
+| K2 USB CH | the USB audio channels of this package: 2 STEREO, or 6 STEMS (the RUN4 CTL STEMS package, see USB stems) |
+| K3 LOAD SHED | NONE, or the overload guard's step (see below) |
+
+The fourth sub-page, **MIDI LEARN**: K1 the binding (1 to 16), K2 shows its CC and channel and what it sets, K3
+DEFAULT CCS on / off, K4 CLEAR (turn, then SAVE: that binding goes).
+
+**Overload guard.** If the sound ever takes too long to compute (many voices, every effect, the FM-1 busy), the FM-1
+makes it lighter a step at a time instead of crackling: 1 the reverb on half its lines, 2 six voices, 3 no chorus and
+no delay, 4 four voices. It says CPU HIGH: SOUND LIGHTER once; after 3 seconds of easy going a step comes back. On a
+normal day it never shows.
 
 Aftertouch is measured with the keys' own sensors. The velocity and pressure curves were set up without a device; if a
 setting feels too soft or too hard, pick another curve.
