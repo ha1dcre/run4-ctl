@@ -55,6 +55,264 @@ static void wav(const char *path, uint32_t from, uint32_t to)       /* mono 16-b
 static uint8_t cksum(const uint8_t *d, uint32_t n) { uint32_t s = 0, i; for (i = 0; i < n; i++) s += d[i]; return (uint8_t)((128u - (s & 127u)) & 127u); }
 static void feed(const uint8_t *d, uint32_t n) { uint32_t i; for (i = 0; i < n; i++) syn_sysex_byte(d[i]); }
 
+/* ---------------------------------------------------------------- sequencer (src/synth_seq.c) --- */
+static int keyed(int note)                            /* voices started and not released, of this note (-1: any) */
+{
+    int i, c = 0;
+    for (i = 0; i < SYN_VOICES; i++)
+        if (syn_v[i].n.live && syn_v[i].key && (note < 0 || syn_v[i].note == note))
+            c++;
+    return c;
+}
+static uint32_t until_step(uint32_t step, uint32_t max)   /* render 32 samples at a time until that step plays */
+{
+    uint32_t n = 0;
+    while (sq.step != step && n < max) {
+        syn_render(pcm + 2 * (pn % (44100 * 30)), FM6_N, 4096);
+        n += FM6_N;
+    }
+    return n;
+}
+static void run_small(uint32_t frames)
+{
+    uint32_t i;
+    for (i = 0; i < frames; i += FM6_N)
+        syn_render(pcm, FM6_N, 4096);
+}
+static int rt_count[256];
+static void rt_out(uint8_t b) { rt_count[b]++; }
+static void seq_tests(void)
+{
+    sq_pat_t *p;
+    sq_step_t *s;
+    uint32_t i, n, spt;
+    static sq_obj_t ob[SQ_OBJS];
+    static sq_pat_t keep[SQ_PATS];
+    syn_event(6, 0, 0, 0);
+    run_small(256);
+    /* defaults: pattern 1 holds the bass line, the others are empty 16-step 1/16 patterns */
+    sq_defaults();
+    CHECK(sq_count_on(&sq_pat[0]) == 10 && sq_pat[0].len == 16);
+    for (i = 1; i < SQ_PATS; i++)
+        CHECK(sq_count_on(&sq_pat[i]) == 0 && sq_pat[i].len == 16 && sq_pat[i].rate == SQR_16 && sq_pat[i].swing == 50);
+
+    /* the grid: a tap toggles a step on (with the last note) and off (its notes kept) */
+    syn.seq_pat = 1;
+    p = &sq_pat[1];
+    sq_ed.last_note = 60;
+    sq_ed_step_down(3, 6); sq_ed_step_up();
+    CHECK(sq_plays(&p->s[3]) && sq_n(&p->s[3]) == 1 && p->s[3].note[0] == 60);
+    sq_ed_step_down(3, 6); sq_ed_step_up();
+    CHECK(!sq_plays(&p->s[3]) && sq_n(&p->s[3]) == 1 && p->s[3].note[0] == 60);
+    sq_ed_step_down(3, 6); sq_ed_step_up();
+    CHECK(sq_plays(&p->s[3]));
+    CHECK(sq_dirty & 1u);
+    /* hold a step + keys: the first note replaces, the next ones make a chord of up to 4 (a fifth replaces the last) */
+    sq_ed_step_down(5, 9);
+    sq_ed_note(60); sq_ed_note(64); sq_ed_note(67); sq_ed_note(71); sq_ed_note(72);
+    sq_ed_step_up();
+    s = &p->s[5];
+    CHECK(sq_plays(s) && sq_n(s) == 4 && s->note[0] == 60 && s->note[1] == 64 && s->note[2] == 67 && s->note[3] == 72);
+    /* hold a step + K1..K4: the chord moves, velocity, gate, chance; letting go does not toggle */
+    sq_ed_step_down(5, 9);
+    sq_ed_step_turn(5, 0, 2);
+    sq_ed_step_turn(5, 1, 90);
+    sq_ed_step_turn(5, 2, 2);
+    sq_ed_step_turn(5, 3, -50);
+    sq_ed_step_up();
+    CHECK(sq_plays(s) && s->note[0] == 62 && s->note[3] == 74 && s->vel == 90 && s->gate == 10 && s->chance == 50);
+    CHECK(sq_step_get(s, 3) == 50 && sq_step_get(&p->s[0], 3) == 100 && sq_step_get(&p->s[0], 0) == -1);
+    sq_ed_step_turn(5, 3, 60);                         /* 100 % is stored as 0 (always) */
+    CHECK(s->chance == 0);
+    sq_ed_step_turn(5, 0, 100);                        /* past 127: refused, the chord keeps its shape */
+    CHECK(s->note[0] == 62 && s->note[3] == 74);
+
+    /* step recording: a chord into the cursor step, letting go moves on; EDIT a rest, GLO a TIE; the cursor wraps at the length */
+    sq_ed.cursor = 8;
+    sq_ed_entry(48, 90); sq_ed_entry(52, 100); sq_ed_entry_done();
+    CHECK(sq_plays(&p->s[8]) && sq_n(&p->s[8]) == 2 && p->s[8].note[1] == 52 && p->s[8].vel == 100 && sq_ed.cursor == 9);
+    sq_ed_rest();
+    CHECK(!sq_has(&p->s[9]) && sq_ed.cursor == 10);
+    sq_ed_tie();
+    CHECK(sq_plays(&p->s[10]) && sq_is_tie(&p->s[10]) && sq_ed.cursor == 11);
+    p->len = 12;
+    sq_ed_entry(55, 100); sq_ed_entry_done();
+    CHECK(p->s[11].note[0] == 55 && sq_ed.cursor == 0);
+    /* 64 steps: four step pages; the cursor walks into the next page and the view follows it */
+    p->len = 64;
+    sq_ed.cursor = 15;
+    sq_ed_entry(60, 100); sq_ed_entry_done();
+    CHECK(sq_ed.cursor == 16 && sq_ed.view == 1);
+    sq_ed.cursor = 63;
+    sq_ed_rest();
+    CHECK(sq_ed.cursor == 0 && sq_ed.view == 0);
+
+    /* copy and clear */
+    sq_copy(1, 7);
+    CHECK(!memcmp(&sq_pat[1], &sq_pat[7], sizeof(sq_pat_t)) && (sq_dirty & 2u));
+    sq_clear(7);
+    CHECK(sq_count_on(&sq_pat[7]) == 0 && sq_pat[7].len == 16);
+
+    /* persistence: the four objects round-trip; a damaged one is refused; bad values are put in range */
+    for (i = 0; i < SQ_OBJS; i++)
+        sq_obj_fill(i, &ob[i]);
+    memcpy(keep, sq_pat, sizeof keep);
+    sq_defaults();
+    CHECK(memcmp(keep, sq_pat, sizeof keep) != 0);
+    for (i = 0; i < SQ_OBJS; i++)
+        CHECK(sq_obj_take(i, &ob[i]) == 0);
+    CHECK(!memcmp(keep, sq_pat, sizeof keep));
+    ob[2].magic ^= 1;
+    CHECK(sq_obj_take(2, &ob[2]) < 0 && sq_obj_take(1, &ob[2]) < 0);
+    ob[2].magic ^= 1;
+    ob[2].p[0].len = 0; ob[2].p[0].rate = 9; ob[2].p[0].s[0].f = 0xFF;
+    CHECK(sq_obj_take(2, &ob[2]) == 0 && sq_pat[8].len == 16 && sq_pat[8].rate == SQR_16 && sq_n(&sq_pat[8].s[0]) <= 4);
+    printf("  seq store: %u bytes in %u objects of %u (16 patterns x 64 steps x 8 bytes)\n", (unsigned)(SQ_OBJS * sizeof(sq_obj_t)),
+           (unsigned)SQ_OBJS, (unsigned)sizeof(sq_obj_t));
+
+    /* playback: a chord, a TIE holds it over the gate into the next step, a rest ends it */
+    syn.rev_mix = 0; syn.dly_mix = 0; syn.chorus = 0; syn.arp_on = 0;
+    syn.bpm10 = 1200;
+    syn.seq_pat = 2;
+    sq_clear(2);
+    p = &sq_pat[2];
+    p->len = 4; p->gate = 50;
+    p->s[0].note[0] = 48; p->s[0].note[1] = 52; p->s[0].note[2] = 55; p->s[0].f = SQ_ON | 3u;
+    p->s[1].f = SQ_ON | SQ_TIE;
+    p->s[3].note[0] = 60; p->s[3].f = SQ_ON | 1u;
+    spt = sq_spt_internal();                          /* 120 BPM: 24 ticks a 1/16 = 5512.5 samples */
+    CHECK(spt * 24u / 256u >= 5510u && spt * 24u / 256u <= 5514u);
+    syn_event(8, 1, 0, 0);
+    run_small(5512 * 3 / 4);                          /* step 1, past the 50 % gate: the chord is held */
+    CHECK(sq.run && sq.step == 0 && keyed(-1) == 3);
+    run_small(5512);                                  /* in the TIE (step 2 of 4), past its gate: off by now */
+    CHECK(sq.step == 1 && keyed(-1) == 0);
+    until_step(0, 44100);
+    n = until_step(1, 44100);
+    run_small(5512 / 4);
+    CHECK(sq.step == 1 && keyed(-1) == 3);            /* (the next loop: still held at the TIE's start) */
+    until_step(3, 44100);
+    run_small(64);
+    CHECK(keyed(60) == 1 && keyed(48) == 0);
+    /* transpose (SEL + key): the step's notes move as they start */
+    syn.seq_trn = 5;
+    until_step(0, 44100);
+    run_small(64);
+    CHECK(keyed(53) == 1 && keyed(57) == 1 && keyed(48) == 0);
+    syn.seq_trn = 0;
+    /* the next pattern takes over at the end of the loop */
+    syn.seq_pat = 0;
+    run_small(64);
+    CHECK(sq.pat == 2);
+    until_step(1, 44100 * 2);
+    CHECK(sq.pat == 2);
+    until_step(0, 44100 * 2);
+    CHECK(sq.pat == 0);
+    syn_event(8, 0, 0, 0);
+    run_small(44100);
+    CHECK(!sq.run && keyed(-1) == 0);
+
+    /* swing 75 %: the odd steps start half a step late */
+    syn.seq_pat = 3;
+    sq_clear(3);
+    p = &sq_pat[3];
+    p->len = 4; p->swing = 75;
+    CHECK(sq_start_tick(p, 1) == 36 && sq_start_tick(p, 2) == 48 && sq_start_tick(p, 3) == 84 && sq_start_tick(p, 4) == 96);
+    syn_event(8, 1, 0, 0);
+    run_small(32);
+    n = until_step(1, 44100);
+    CHECK(n + 32u >= 36u * spt / 256u - 64u && n + 32u <= 36u * spt / 256u + 64u);
+    n = until_step(2, 44100);
+    CHECK(n >= 12u * spt / 256u - 64u && n <= 12u * spt / 256u + 64u);
+    syn_event(8, 0, 0, 0);
+    run_small(256);
+    /* chance: 50 % plays about half of the time */
+    p->swing = 50; p->len = 1; p->rate = SQR_32;
+    p->s[0].note[0] = 60; p->s[0].f = SQ_ON | 1u; p->s[0].chance = 50;
+    syn_event(8, 1, 0, 0);
+    run_small(32);
+    i = sq.played;
+    run_small(2756 * 100);                            /* 100 steps of 1/32 */
+    i = sq.played - i;
+    printf("  chance 50 %%: %u of ~100 steps sounded\n", i);
+    CHECK(i >= 30 && i <= 70);
+    syn_event(8, 0, 0, 0);
+    run_small(44100);
+
+    /* live recording: into the nearest step, chords overdub, a held note writes TIEs, an early release puts the last back */
+    syn.seq_pat = 4;
+    sq_clear(4);
+    p = &sq_pat[4];
+    p->gate = 50;
+    sq.rec = 1;
+    syn_event(8, 1, 0, 0);
+    run_small(32);
+    until_step(2, 44100);
+    run_small(1000);                                  /* early in step 3: into it */
+    syn_event(1, 60, 100, 0); run_small(64); syn_event(2, 60, 0, 0);
+    until_step(5, 44100);
+    run_small(4000);                                  /* late in step 6: into step 7, which must not play it again */
+    syn_event(1, 62, 110, 0); run_small(64);
+    until_step(6, 44100);
+    run_small(64);
+    CHECK(sq_plays(&p->s[6]) && p->s[6].note[0] == 62 && sq.n_notes == 0 && keyed(62) == 1);
+    syn_event(2, 62, 0, 0);
+    until_step(8, 44100);
+    run_small(200);
+    syn_event(1, 64, 100, 0);                         /* held for 3.2 steps: TIEs in 10, 11 (12 put back) */
+    until_step(11, 44100);
+    run_small(1000);
+    syn_event(2, 64, 0, 0);
+    run_small(64);
+    CHECK(sq_plays(&p->s[2]) && p->s[2].note[0] == 60 && sq_n(&p->s[2]) == 1);
+    CHECK(sq_plays(&p->s[8]) && p->s[8].note[0] == 64);
+    CHECK(sq_is_tie(&p->s[9]) && sq_is_tie(&p->s[10]) && !sq_has(&p->s[11]));
+    /* overdub: the next loop adds a note to step 3 */
+    until_step(2, 44100 * 3);
+    run_small(1000);
+    syn_event(1, 67, 100, 0); run_small(64); syn_event(2, 67, 0, 0);
+    run_small(64);
+    CHECK(sq_n(&p->s[2]) == 2 && p->s[2].note[1] == 67);
+    sq.rec = 0;
+    syn_event(8, 0, 0, 0);
+    run_small(44100);
+    CHECK(keyed(-1) == 0);
+
+    /* MIDI clock out: FA, then 24 clocks a quarter note; FC at the stop */
+    syn.seq_clock = SQC_OUT;
+    sq_midi_out = rt_out;
+    memset(rt_count, 0, sizeof rt_count);
+    syn_event(8, 1, 0, 0);
+    run_small(44100);                                 /* 1 s at 120 BPM: 2 beats = 48 clocks */
+    syn_event(8, 0, 0, 0);
+    run_small(64);
+    printf("  clock out: FA %d, F8 %d in 1 s, FC %d\n", rt_count[0xFA], rt_count[0xF8], rt_count[0xFC]);
+    CHECK(rt_count[0xFA] == 1 && rt_count[0xFC] == 1 && rt_count[0xF8] >= 47 && rt_count[0xF8] <= 50);
+    /* MIDI clock in (clock AUTO): FA starts, each F8 is 4 ticks (a 1/16 = 6 clocks), the tempo is measured and the arp
+     * follows it; when the clocks stop the tempo takes over; FC stops */
+    syn.seq_clock = SQC_AUTO;
+    sq_realtime(0xFA);
+    CHECK(sq.run && sq.step == 0);
+    for (i = 0; i < 24; i++) {
+        sq_realtime(0xF8);
+        run_small(1024);                              /* 1024 samples a clock: 107.7 BPM */
+    }
+    printf("  clock in: %u ticks, step %u, %u.%u BPM measured\n", (unsigned)sq.ticks, sq.step, sq_ext_bpm10() / 10, sq_ext_bpm10() % 10);
+    CHECK(sq.ticks == 96 && sq.step == 4 && sq_ext_bpm10() >= 1070 && sq_ext_bpm10() <= 1085 && sq_ext());
+    CHECK(syn_step_samples(1) >= 6130 && syn_step_samples(1) <= 6160);     /* the arp's 1/16 at 107.7 BPM */
+    run_small(22050 + 44100);                         /* the clock is gone: 1 s more at 120 BPM after the half second */
+    printf("  clock lost: %u ticks after 1.5 s more (internal 120 BPM)\n", (unsigned)sq.ticks);
+    CHECK(!sq_ext() && sq.run && sq.ticks >= 96 + 180 && sq.ticks <= 96 + 200 && syn_step_samples(1) == 5512);
+    sq_realtime(0xFC);
+    CHECK(!sq.run);
+    syn.seq_clock = SQC_INT;                          /* INT: an incoming clock changes nothing */
+    sq_realtime(0xFA);
+    CHECK(!sq.run);
+    syn.seq_clock = SQC_AUTO;
+    sq_midi_out = 0;
+    run_small(44100);
+}
+
 int main(int argc, char **argv)
 {
     double rms, pk, rms2;
@@ -178,10 +436,12 @@ int main(int argc, char **argv)
     syn_seq_start(1);
     t0 = pn;
     run(44100 * 2);
-    CHECK(peak_since(t0, pn, 0) > 0.01 && syn_sq.seq_count > 8);
-    printf("  seq: %u steps in 2 s at %u.%u BPM\n", (unsigned)syn_sq.seq_count, syn.bpm10 / 10, syn.bpm10 % 10);
+    CHECK(peak_since(t0, pn, 0) > 0.01 && sq.ticks / 24u > 8);
+    printf("  seq: %u steps in 2 s at %u.%u BPM (%u sounded)\n", (unsigned)(sq.ticks / 24u), syn.bpm10 / 10, syn.bpm10 % 10,
+           (unsigned)sq.played);
     syn_seq_start(0);
     run(44100 * 2);
+    seq_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);

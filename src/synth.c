@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * RUN4 CTL, Synth mode: the sound. A six-operator FM engine (Felucca's fm6_core.c, a C port of Dexed's msfa, Apache-2.0,
  * see NOTICE) behind a voice pool with stealing, a patch (the 155-byte DX7 voice layout), DX7 packed voice records
- * and bank / single-voice SysEx, a drive / chorus / tempo delay / reverb chain, an arpeggiator and a 16-step sequencer.
+ * and bank / single-voice SysEx, a drive / chorus / tempo delay / reverb chain, an arpeggiator and a step sequencer
+ * (synth_seq.c: 16 patterns of up to 64 steps, chords, ties, live and step recording, MIDI clock).
  * Plain C, integer only, no platform calls (the app glue is in app.c / synth_ui.c): native tests link it alone.
  *
  * Threading, as on the device: syn_render() runs in the audio context; the main loop (keys, UI) calls syn_event() (a
@@ -24,7 +25,6 @@
 /* ------------------------------------------------------------ settings --- */
 enum { ARP_UP, ARP_DOWN, ARP_UPDOWN, ARP_RANDOM, ARP_PLAYED, ARP_N };
 enum { REV_ROOM, REV_SPRING, REV_HALL, REV_N };
-typedef struct { uint8_t note, on; } syn_step_t;
 /* what is stored (OBJ_SYNSET) and what the pages edit */
 typedef struct {
     uint8_t ver;
@@ -37,11 +37,12 @@ typedef struct {
     uint8_t chan;                            /* 0 = omni, 1..16 */
     uint8_t bend, vel_sens;                  /* bend range 0..12 semitones; velocity amount 0..100 */
     uint8_t arp_on, arp_mode, arp_rate, arp_oct, arp_gate;     /* rate 0..2 (1/8, 1/16, 1/16T), oct 1..3, gate 10..100 */
-    uint8_t seq_len, seq_gate, seq_vel;      /* 1..16; gate 10..100; velocity */
+    uint8_t seq_pat, seq_clock;              /* the selected pattern 0..15; the clock (SQC_AUTO, SQC_OUT, SQC_INT) */
+    int8_t seq_trn;                          /* the sequencer's transpose, -24..24 (SEL + a key) */
+    uint8_t rsv;
     uint16_t bpm10;                          /* 400..2400 */
-    syn_step_t step[16];
 } syn_set_t;
-#define SYN_SET_VER 1
+#define SYN_SET_VER 2                        /* 2: the patterns moved to their own objects (synth_seq.c) */
 static syn_set_t syn;
 static uint8_t syn_dirty = 1;                /* an edit: the next block copies the patch again */
 
@@ -400,24 +401,31 @@ static void syn_event(uint8_t kind, uint8_t a, uint8_t b, uint8_t src)
     syn_evh = n;
 }
 
-/* --------------------------------------------------- arp and sequencer --- */
+/* ------------------------------------------------------------ sequencer --- */
+#include "synth_seq.c"
+static uint32_t sq_clock_mode(void) { return syn.seq_clock < SQC_N ? syn.seq_clock : SQC_AUTO; }
+static int32_t sq_transpose(void) { return syn.seq_trn; }
+static uint32_t sq_sel_pat(void) { return syn.seq_pat % SQ_PATS; }
+static uint32_t sq_bpm10(void) { return syn.bpm10 < 400u ? 400u : syn.bpm10 > 2400u ? 2400u : syn.bpm10; }
+static uint32_t syn_bpm10_now(void)          /* the tempo that plays: a MIDI clock's while one comes (clock AUTO) */
+{
+    uint32_t b = sq_ext_bpm10();
+    return b ? (b < 400u ? 400u : b > 2400u ? 2400u : b) : sq_bpm10();
+}
+
+/* ---------------------------------------------------------- arpeggiator --- */
 static struct {
     uint8_t held[8], n_held;                 /* the played notes (arp), in the order played */
-    uint8_t seq_note_on;                     /* the note the sequencer holds now (255 = none) */
     uint8_t arp_note_on;                     /* ... and the arp's */
     int8_t arp_pos, arp_dir;                 /* position in the (octave-extended) list; direction for up/down */
-    uint32_t arp_phase, seq_phase;           /* samples into the current step */
-    uint8_t arp_step_open, seq_step_open;
-    uint8_t seq_run, seq_rec;                /* the transport (PLAY, REC) */
-    uint8_t seq_step;                        /* 0..15: the step that sounds or sounded last */
-    uint32_t seq_count;                      /* steps since the start (bar / beat for the screen) */
+    uint32_t arp_phase;                      /* samples into the current step */
+    uint8_t arp_step_open;
     uint32_t rnd;
-    uint8_t cursor;                          /* the step the pages edit */
-} syn_sq = {{0}, 0, 255, 255, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 12345u, 0};
+} syn_sq = {{0}, 0, 255, 0, 1, 0, 0, 12345u};
 
 static uint32_t syn_step_samples(uint32_t rate)    /* samples per step: rate 0 = 1/8, 1 = 1/16, 2 = 1/16 triplet */
 {
-    uint32_t bpm10 = syn.bpm10 < 400u ? 400u : syn.bpm10 > 2400u ? 2400u : syn.bpm10;
+    uint32_t bpm10 = syn_bpm10_now();
     uint32_t beat = (uint32_t)(44100ull * 600ull / bpm10);     /* samples per quarter note */
     return rate == 0u ? beat / 2u : rate == 1u ? beat / 4u : beat / 6u;
 }
@@ -481,8 +489,12 @@ static void syn_clock(uint32_t n)
         if (!syn_sq.arp_step_open && syn_sq.n_held) {
             uint8_t nt = syn_arp_pick();
             if (nt != 255) {
-                if (syn_sq.arp_note_on != 255) syn_note_off_now(syn_sq.arp_note_on);
+                if (syn_sq.arp_note_on != 255) {
+                    syn_note_off_now(syn_sq.arp_note_on);
+                    if (sq.run && sq.rec) sq_rec_release(syn_sq.arp_note_on);
+                }
                 syn_note_on_now(nt, 100);
+                if (sq.run && sq.rec) sq_rec_note(nt, 100);       /* recording with the arp on: what it plays */
                 syn_sq.arp_note_on = nt;
                 syn_sq.arp_step_open = 1;
                 syn_sq.arp_phase = 0;
@@ -491,6 +503,7 @@ static void syn_clock(uint32_t n)
             syn_sq.arp_phase += n;
             if (syn_sq.arp_note_on != 255 && syn_sq.arp_phase * 100u >= step * (syn.arp_gate < 10u ? 10u : syn.arp_gate)) {
                 syn_note_off_now(syn_sq.arp_note_on);
+                if (sq.run && sq.rec) sq_rec_release(syn_sq.arp_note_on);
                 syn_sq.arp_note_on = 255;
             }
             if (syn_sq.arp_phase >= step)
@@ -501,46 +514,9 @@ static void syn_clock(uint32_t n)
         syn_sq.arp_note_on = 255;
         syn_sq.arp_step_open = 0;
     }
-    if (syn_sq.seq_run) {
-        step = syn_step_samples(1);
-        if (!syn_sq.seq_step_open) {              /* a step starts */
-            const syn_step_t *s = &syn.step[syn_sq.seq_step];
-            if (syn_sq.seq_note_on != 255) { syn_note_off_now(syn_sq.seq_note_on); syn_sq.seq_note_on = 255; }
-            if (s->on) {
-                syn_note_on_now(s->note, syn.seq_vel ? syn.seq_vel : 100u);
-                syn_sq.seq_note_on = s->note;
-            }
-            syn_sq.seq_step_open = 1;
-            syn_sq.seq_phase = 0;
-        } else {
-            syn_sq.seq_phase += n;
-            if (syn_sq.seq_note_on != 255 && syn_sq.seq_phase * 100u >= step * (syn.seq_gate < 10u ? 10u : syn.seq_gate)) {
-                syn_note_off_now(syn_sq.seq_note_on);
-                syn_sq.seq_note_on = 255;
-            }
-            if (syn_sq.seq_phase >= step) {
-                syn_sq.seq_step_open = 0;
-                syn_sq.seq_count++;
-                syn_sq.seq_step = (uint8_t)((syn_sq.seq_step + 1u) % (syn.seq_len < 1u ? 1u : syn.seq_len > 16u ? 16u : syn.seq_len));
-            }
-        }
-    } else if (syn_sq.seq_note_on != 255) {
-        syn_note_off_now(syn_sq.seq_note_on);
-        syn_sq.seq_note_on = 255;
-        syn_sq.seq_step_open = 0;
-    }
+    sq_clock(n);
 }
-static void syn_seq_start(int run)
-{
-    if (run == syn_sq.seq_run)
-        return;
-    syn_sq.seq_run = (uint8_t)run;
-    if (run) {
-        syn_sq.seq_step = 0;
-        syn_sq.seq_count = 0;
-        syn_sq.seq_step_open = 0;
-    }
-}
+static void syn_seq_start(int run) { sq_start(run); }
 
 /* ------------------------------------------------------------------ fx --- */
 #define DLY_N 16384u                         /* the delay line: 371 ms; longer times are cut to it */
@@ -653,10 +629,14 @@ static void syn_apply_event(const syn_ev_t *e)
     case 1:
         if (e->src == 0u && syn.arp_on) syn_arp_press(note, 1);
         else syn_note_on_now(note, e->b ? e->b : 100u);
+        if (e->src == 0u && !syn.arp_on && sq.run && sq.rec)      /* live recording (the arp records what it plays) */
+            sq_rec_note(note, e->b ? e->b : 100u);
         break;
     case 2:
         if (e->src == 0u && syn.arp_on) syn_arp_press(note, 0);
         else syn_note_off_now(note);
+        if (e->src == 0u && !syn.arp_on)
+            sq_rec_release(note);
         break;
     case 3:
         syn_arp_clear();
@@ -676,7 +656,9 @@ static void syn_apply_event(const syn_ev_t *e)
         for (i = 0; i < SYN_VOICES; i++)
             syn_v[i].n.live = 0;
         syn_arp_clear();
-        syn_sq.arp_note_on = syn_sq.seq_note_on = 255;
+        syn_sq.arp_note_on = 255;
+        sq.n_notes = 0;
+        sq.hold = 0;
         break;
     }
     default:
@@ -746,16 +728,8 @@ static void syn_defaults(void)
     syn.rev_size = 50;
     syn.bend = 2; syn.vel_sens = 100;
     syn.arp_mode = ARP_UP; syn.arp_rate = 1; syn.arp_oct = 1; syn.arp_gate = 60;
-    syn.seq_len = 16; syn.seq_gate = 60; syn.seq_vel = 100;
+    syn.seq_pat = 0; syn.seq_clock = SQC_AUTO; syn.seq_trn = 0;
     syn.bpm10 = 1200;
-    {
-        static const uint8_t PAT[16] = {36, 0, 48, 0, 36, 0, 51, 48, 36, 0, 48, 0, 34, 0, 46, 43};
-        int i;
-        for (i = 0; i < 16; i++) {
-            syn.step[i].note = PAT[i] ? PAT[i] : 48;
-            syn.step[i].on = PAT[i] != 0;
-        }
-    }
     syn_load_patch(0);
     syn_dirty = 1;
 }
@@ -767,8 +741,9 @@ static void syn_init(void)
     syn_bank_dirty = 0;
     syn_evh = syn_evt = 0;
     syn_sq.n_held = 0;
-    syn_sq.seq_run = syn_sq.seq_rec = 0;
-    syn_sq.seq_note_on = syn_sq.arp_note_on = 255;
+    syn_sq.arp_note_on = 255;
+    memset(&sq, 0, sizeof sq);
+    sq_defaults();
     syn_sustain = 0;
     syn_bend = 0;
     syn_defaults();
