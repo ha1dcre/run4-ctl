@@ -1,12 +1,18 @@
 # RUN4 CTL
 
-RUN4 CTL is a firmware for the M-VAVE FM-1. It turns the FM-1 into a hardware controller for the iOS app RUN4: the 27
-keys, 14 buttons, 7 encoders and the MASTER knob are sent to the app over USB-MIDI, and the app draws its pages and
-lights on the FM-1's 240 x 240 screen and LEDs. The FM-1 makes no sound in this mode.
+RUN4 CTL is a firmware for the M-VAVE FM-1 with two modes:
+
+* **RUN4 mode** turns the FM-1 into a hardware controller for the iOS app RUN4: the 27 keys, 14 buttons, 7 encoders
+  and the MASTER knob are sent to the app over USB-MIDI or Bluetooth MIDI, and the app draws its pages and lights on
+  the FM-1's 240 x 240 screen and LEDs. The FM-1 makes no sound in this mode.
+* **Synth mode** turns the FM-1 into a standalone six-operator FM synthesizer with effects, an arpeggiator and a
+  16-step sequencer. It also plays from MIDI in, so it works as a sound module for RUN4, TOLF or any MIDI source.
+
+Switch between them with **SEL + HOME**. The FM-1 remembers the mode it was left in.
 
 RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
 
-## What it does
+## RUN4 mode
 
 * **Keys** play notes (MIDI channel 1 by default) with velocity, whether or not the app is there. F3 is the lowest key;
   OCT- and OCT+ shift the keyboard by octaves (-3 to +3).
@@ -15,6 +21,68 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
   page dots, tempo, bar and beat, transport and octave.
 * **LEDs** show what RUN4 tells them to. Without the app, a held key lights itself.
 * Keys still play without the app. If the app is not there, the screen says NOT CONNECTED and the notes go on.
+
+## Synth mode
+
+SEL + HOME enters it; the screen then shows the Synth pages in the same style as RUN4's: a header in the page colour
+(orange for sound, teal for effects, blue for arpeggiator and sequencer), four tiles with a value and a bar, and a
+footer with the page dots, tempo, bar and beat, transport and octave.
+
+**Sound.** Eight voices (the oldest, released one is stolen first), Dexed's FM engine (Felucca's port) with the 32 DX7
+algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo
+delay and reverb (room, spring, hall).
+
+**Controls.**
+
+| Control | Use |
+| --- | --- |
+| Keys | play (OCT- / OCT+ shift them); velocity as set on the SETUP page |
+| ALGORITHM encoder | the algorithm of the voice (1 to 32) |
+| PRESETS encoder | the voice (F1 to F8, then the user voices that exist) |
+| SELECT encoder | the operator (OP1 to OP6) on EDIT and ENV; on those pages the six lowest black keys pick it too |
+| K1 to K4 | the four values on screen |
+| MASTER | volume |
+| HOME, EDIT, ENV, LFO, FX, GLO, ARP, SEQ | the pages; press the same button again for its second sub-page |
+| PLAY, REC | start / stop the sequencer; step recording |
+| SAVE | store the voice in its user slot, or in the first free one |
+
+**Pages.**
+
+| Page | Sub-page 1 | Sub-page 2 |
+| --- | --- | --- |
+| HOME (SYNTH) | BRIGHT, FEEDBACK, ENV SPEED, LEVEL | |
+| EDIT (OPERATOR n) | RATIO, FINE, LEVEL, DETUNE | MODE (ratio / fixed), VEL SENS, RATE SCALE, AMP MOD |
+| ENV (ENVELOPE n) | RATE 1 to 4 | LEVEL 1 to 4 |
+| LFO | SPEED, DELAY, PITCH MOD, AMP MOD | WAVE, PITCH SENS, LFO SYNC, OSC SYNC |
+| FX | DRIVE, CHORUS, DELAY, REVERB (amounts) | DELAY TIME (1/8 to dotted 1/2), DELAY FEEDBACK, REVERB TYPE, REVERB SIZE |
+| GLO (GLOBAL) | TRANSPOSE, TUNE, MIDI CH (OMNI or 1 to 16), BEND RANGE | VELOCITY amount |
+| ARP | ARP on/off, MODE (up, down, up-down, random, played), RATE, OCTAVES | GATE |
+| SEQ (SEQUENCER) | STEP (cursor), NOTE, STEP on/off, TEMPO | LENGTH, GATE, VELOCITY |
+
+The delay is cut at 371 ms: at slow tempi the long divisions are shortened to it.
+
+**Sequencer.** 16 steps of 1/16 notes. PLAY starts and stops it; the footer counts bars and beats and the keys'
+LEDs show the steps (steps that are on are dim, the cursor and the playing step are lit). With REC on, a key played on
+the SEQ page writes its note into the cursor step and moves on. The arpeggiator turns held keys into an arpeggio and
+shares the tempo.
+
+**MIDI in.** In Synth mode USB, Bluetooth and the TRS jack play the synth: notes, sustain pedal, pitch bend, all notes
+off, on the channel set in GLOBAL (OMNI by default). The notes of the keys are not sent anywhere in this mode.
+
+**DX7 patches.** Send a DX7 **32-voice bank** (SysEx, 4104 bytes) or a **single voice** (163 bytes) to the FM-1 over USB or
+Bluetooth while it is in Synth mode, from a librarian or a DAW. A bank replaces the 32 user voices; a single voice goes
+into the current user slot or the first free one. The screen says IMPORTED 32 VOICES (or 1 VOICE). A bad checksum or a
+cut dump imports nothing. The voices are kept when the FM-1 is switched off.
+
+**Not like a DX7.** The engine reads the patch parameters but has no DX7 operator switches, MIDI controllers other than
+those above, microtuning or portamento. The factory voices are Felucca's own, not a DX7 ROM.
+
+## Bluetooth
+
+Bluetooth MIDI starts when the FM-1 is switched on. Connect from your computer or tablet (the FM-1 shows up as a
+Bluetooth MIDI device named like its USB name); no pairing is needed. In RUN4 mode the app talks to the FM-1 over
+Bluetooth exactly as over USB; in Synth mode the MIDI in and DX7 dumps work over it. A USB-only package (without
+Bluetooth) exists for those who want no radio. There is no switch for Bluetooth in the menus.
 
 ## Install
 
@@ -27,11 +95,12 @@ You need a Chrome or Edge browser (Web MIDI) and a USB cable.
 3. After the install the FM-1 restarts and shows RUN4 CTL.
 
 **Going back to stock.** Install M-VAVE's own firmware package (V15) with the same installer: it accepts M-VAVE's
-package. RUN4 CTL's own settings (SETUP page) are not part of it and are simply gone afterwards.
+package. RUN4 CTL's own settings (SETUP page) and the user voices of Synth mode are not part of it and are simply gone
+afterwards.
 
 ## Connect to RUN4
 
-Plug the FM-1 into the iPad or iPhone (or use a Mac session), open RUN4 and enable the FM-1 in its settings. The FM-1
+Plug the FM-1 into the iPad or iPhone (or connect over Bluetooth, or use a Mac session), open RUN4 and enable the FM-1 in its settings. The FM-1
 sends HELLO every second until RUN4 answers; then the screen switches to the RUN4 page. Unplug and replug: it starts
 over.
 
@@ -51,9 +120,9 @@ The FM-1's controls keep the same meaning on every page. The **fixed layer**:
 | OCT-, OCT+ | shift the keys by an octave (local); also sent to RUN4 |
 | SEL | SHIFT: hold it for the second function of the other buttons |
 
-The **page buttons** open the page of the same name: HOME, ENV, LFO, FX, EDIT, GLO, ARP, SEQ.
-
-What each page shows is decided by RUN4 and by the track you are on.
+The **page buttons** open the page of the same name: HOME, ENV, LFO, FX, EDIT, GLO, ARP, SEQ. What each page shows is decided
+by RUN4 and by the track you are on. Press HOME twice quickly for RUN4's mode list (Tape, Poly, Disc, Perform, TOLF): SELECT
+or PRESETS move, HOME or PLAY pick, any other page button or SAVE cancels.
 
 ## SETUP page
 

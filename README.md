@@ -7,8 +7,11 @@ USB-MIDI, and the app draws pages (four labelled values with bars, track colour,
 **Not affiliated with M-VAVE.** FM-1 is M-VAVE's product name; this is an independent project built on the community
 firmware platform [fm1-base](https://github.com/charlesvestal/fm1-base). See `NOTICE`.
 
-Status: **phase 0**. The protocol (`docs/PROTOCOL.md`), the shared codec, the firmware skeleton and its tests run on a
-computer in fm1-base's host simulator. It has not been built for or run on an FM-1.
+Status: **complete in the host simulator, not yet run on an FM-1.** RUN4 mode (protocol v1.1 in `docs/PROTOCOL.md`: codec,
+LIST, non-blocking output, SETUP page, touch velocity and aftertouch) and Synth mode (Felucca's FM6 engine, effects, DX7
+SysEx import, arpeggiator, sequencer, pages) are implemented and tested in fm1-base's host simulator and in native
+tests (`make test`). Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
+the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 ## Layout
 
@@ -17,10 +20,11 @@ computer in fm1-base's host simulator. It has not been built for or run on an FM
 | `docs/PROTOCOL.md` | the wire protocol v1 |
 | `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats) |
 | `src/ui.c` | the display: state from host frames, redraw by region |
+| `src/synth.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, sequencer, DX7 import; its pages |
 | `app/` | the fm1-base app: `app.c` (input, local rules, host frames), `app.h`, `fm1.toml` |
-| `tests/r4p_test.c` | codec unit tests |
+| `tests/r4p_test.c`, `tests/synth_test.c` | codec unit tests; native tests of the synth engine (levels, polyphony, DX7 import, CPU) |
 | `tests/scenarios/*.txt`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness) |
-| `tests/screens/` | screenshots the simulator wrote |
+| `tests/screens/`, `tests/audio/` | screenshots and a short listening file the simulator wrote |
 | `tools/fake_fm1.py`, `tools/coremidi.py` | a Mac stand-in for the FM-1 (virtual CoreMIDI ports "FM-1", terminal panel); standard library only |
 | `tools/fake_run4.py` | stand-in for the RUN4 app (frames as hex, simulator scripts); standard library only |
 | `base/` | fm1-base (git submodule; it brings felucca-bsp) |
@@ -29,7 +33,7 @@ computer in fm1-base's host simulator. It has not been built for or run on an FM
 
     git clone --recursive <this repo>          # or: git submodule update --init --recursive
     python3 -m venv .venv && .venv/bin/pip install pillow    # fm1-base's font generator needs Pillow
-    make test        # codec unit tests (ASan/UBSan), then the simulator scenarios
+    make test        # codec unit tests (ASan/UBSan), synth tests, the simulator scenarios, the fake FM-1's self-test
     make unit        # only the codec tests
     make sim         # only the simulator (builds app/build/host/run4ctl_host)
 
