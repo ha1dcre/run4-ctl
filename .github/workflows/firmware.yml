@@ -1,0 +1,57 @@
+name: Firmware
+# Builds the FM-1 packages on GitHub's Linux x86-64 runners, where JieLi's toolchain runs natively (no Docker).
+# The .fwsc files and the build logs (flash, RAM and pool headroom) are attached to each run as artifacts.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Python packages
+        run: python3 -m pip install --user pillow
+      - name: Cache the JieLi toolchain and SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.jieli
+          key: jieli-${{ hashFiles('base/tools/get_toolchain.sh', 'base/bsp/tools/get_sdk.sh') }}
+      - name: Toolchain and SDK
+        run: |
+          [ -e ~/.jieli/toolchain ] || sh base/tools/get_toolchain.sh
+          [ -d ~/.jieli/ac79-sdk/.git ] || sh base/bsp/tools/get_sdk.sh
+      - name: Build all packages
+        env:
+          JIELI_TOOLCHAIN: /home/runner/.jieli/toolchain
+          AC79_SDK: /home/runner/.jieli/ac79-sdk
+        run: |
+          mkdir -p logs
+          status=0
+          build() {  # NAME APP_DIR [ARGS...]
+            n=$1; shift
+            if python3 base/tools/build.py "$@" > "logs/$n.log" 2>&1; then r=ok; else r=FAILED; status=1; fi
+            {
+              echo "### $n: $r"
+              echo '```'
+              grep -iE "flash|sram|ram |ram:|pool|headroom|slot|overflow|error|\.fwsc" "logs/$n.log" | tail -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          build full app
+          build usb-only app --no-ble
+          build no-amb app-noamb
+          build stems app-stems
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: firmware-${{ github.sha }}
+          path: |
+            app*/build/*.fwsc
+            app*/build/firmware*.json
+            logs/
+          if-no-files-found: warn
