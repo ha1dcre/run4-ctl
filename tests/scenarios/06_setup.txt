@@ -1,0 +1,68 @@
+# The firmware-local SETUP page: SEL + GLO opens it, K1..K4 edit, a page button leaves, settings survive a power cycle.
+@ACK@
+wait 100
+@TAPE@
+wait 50
+# velocity follows the key's reading (normal curve) and a key sounds on channel 1
+key 3 down 90 0
+wait 40
+key 3 up
+wait 40
+out
+sysex_out
+press SEL
+wait 40
+press GLO
+wait 40
+release GLO
+wait 40
+expect setup 1
+shot setup.png
+# nothing of SETUP goes to the host: SEL went out, GLO did not
+expect_sysex @BTN1_1@
+turn K1 1
+turn K2 1
+turn K3 -1
+turn K4 2
+wait 100
+expect set_vel 2
+expect set_at 1
+expect set_led 1
+expect set_chan 3
+# a button pressed meanwhile stays local, and a page button leaves
+tap PLAY
+release SEL
+tap HOME
+wait 100
+expect setup 0
+shot setup_left.png
+# the host saw SEL down/up only, none of PLAY, HOME, GLO
+expect_sysex @BTN1_0@
+# hard curve + channel 3 + poly aftertouch
+key 5 down 100 80
+wait 800
+expect_out USB 92 3A 64
+expect_out USB A2 3A 4F
+key 5 up
+wait 40
+out
+# power cycle: the settings are still there
+reboot
+wait 100
+expect set_vel 2
+expect set_at 1
+expect set_led 1
+expect set_chan 3
+# fixed velocity, channel 1 again
+press SEL
+tap GLO
+release SEL
+turn K1 1
+turn K4 -2
+tap FX
+expect set_vel 3
+key 3 down 20 0
+wait 40
+key 3 up
+wait 40
+out

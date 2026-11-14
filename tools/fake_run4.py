@@ -124,7 +124,7 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 1, 0]), "SYNC": frame("SYNC_REQ"),
+        "HELLO": frame("HELLO", [1, 0, 2, 0]), "SYNC": frame("SYNC_REQ"),
         "POT_8192": frame("POT", v14(8192)), "POT_MAX": frame("POT", v14(16383)),
     }
     for i in range(14):
@@ -159,7 +159,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 1, 0]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 2, 0]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

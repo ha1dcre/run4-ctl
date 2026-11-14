@@ -26,8 +26,11 @@ typedef struct {
     uint8_t shift;
     uint8_t dots;                   /* the "not connected" screen's animation phase */
     uint16_t dirty;
+    uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
+    r4p_page_t setup_page;          /* what it shows (app.c fills it) */
 } ui_t;
 static ui_t ui;
+#define PG (ui.setup ? &ui.setup_page : &ui.page)   /* the page being drawn */
 
 static void ui_reset_page(void)
 {
@@ -96,7 +99,7 @@ static uint16_t scale(uint16_t c565_dummy, int r, int g, int b, int pct)
 }
 static void accent_rgb(int *r, int *g, int *b)       /* 0..127 on the wire, x2 on the screen */
 {
-    *r = ui.page.r * 2; *g = ui.page.g * 2; *b = ui.page.b * 2;
+    *r = PG->r * 2; *g = PG->g * 2; *b = PG->b * 2;
 }
 static uint16_t accent(int pct)
 {
@@ -106,7 +109,7 @@ static uint16_t accent(int pct)
 }
 static uint16_t on_accent(void)                       /* text on the accent: black or white by luminance */
 {
-    return (ui.page.r * 299 + ui.page.g * 587 + ui.page.b * 114) / 1000 >= 56 ? RGB(10, 10, 14) : RGB(250, 250, 250);
+    return (PG->r * 299 + PG->g * 587 + PG->b * 114) / 1000 >= 56 ? RGB(10, 10, 14) : RGB(250, 250, 250);
 }
 
 /* ------------------------------------------------------------- header --- */
@@ -115,11 +118,11 @@ static void draw_head(void)
     int32_t w;
     cv_begin(240, 34, accent(100));
     cv_rect(0, 32, 240, 2, accent(55));
-    ptext(8, 8, &FONT_B, ui.page.title, on_accent());
-    if (ui.page.track[0]) {                          /* the track in a dark pill, in the track colour */
-        w = pwidth(&FONT_B, ui.page.track) + 14;
+    ptext(8, 8, &FONT_B, PG->title, on_accent());
+    if (PG->track[0]) {                          /* the track in a dark pill, in the track colour */
+        w = pwidth(&FONT_B, PG->track) + 14;
         cv_rect(232 - w, 5, w, 22, R4_BG);
-        ptext(232 - w + 7, 8, &FONT_B, ui.page.track, accent(100));
+        ptext(232 - w + 7, 8, &FONT_B, PG->track, accent(100));
     }
     cv_blit(0, 0);
 }
@@ -165,7 +168,7 @@ static void draw_bar(const r4p_slot_t *s, int32_t y)
 }
 static void draw_tile(int i)
 {
-    const r4p_slot_t *s = &ui.page.slot[i];
+    const r4p_slot_t *s = &PG->slot[i];
     int empty = s->kind == R4P_KIND_EMPTY;
     int32_t x = (i & 1) ? 120 : 4, y = (i & 2) ? 118 : 38;
     cv_begin(116, 76, R4_BG);
@@ -188,20 +191,20 @@ static void draw_tile(int i)
 static void draw_foot(void)
 {
     char t[24], u[12];
-    int32_t x, i, n = ui.page.page_count;
+    int32_t x, i, n = PG->page_count;
     cv_begin(240, 40, R4_BG);
     cv_rect(0, 0, 240, 1, R4_EDGE);
     if (n > 0 && n <= 12) {                                    /* page dots */
         for (i = 0; i < n; i++)
-            cv_rect(8 + i * 12, 7, 8, 8, i == ui.page.page_idx ? accent(100) : R4_EDGE);
+            cv_rect(8 + i * 12, 7, 8, 8, i == PG->page_idx ? accent(100) : R4_EDGE);
     } else if (n > 12) {
         t[0] = 'P'; t[1] = 0;
-        u_int((unsigned)ui.page.page_idx + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int((unsigned)n, u); u_cat(t, u);
+        u_int((unsigned)PG->page_idx + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int((unsigned)n, u); u_cat(t, u);
         ptext(8, 5, &FONT_XS, t, R4_LABEL);
     }
-    if (ui.page.bank_count > 1) {                              /* bank, right-aligned */
-        t[0] = 0; u_cat(t, "BK "); u_int((unsigned)ui.page.bank_idx + 1u, u); u_cat(t, u); u_cat(t, "/");
-        u_int((unsigned)ui.page.bank_count, u); u_cat(t, u);
+    if (PG->bank_count > 1) {                              /* bank, right-aligned */
+        t[0] = 0; u_cat(t, "BK "); u_int((unsigned)PG->bank_idx + 1u, u); u_cat(t, u); u_cat(t, "/");
+        u_int((unsigned)PG->bank_count, u); u_cat(t, u);
         ptext(232 - pwidth(&FONT_XS, t), 5, &FONT_XS, t, R4_LABEL);
     }
     if (ui.shift) {
@@ -278,7 +281,7 @@ static void ui_draw(void)
         ui.toast_until = 0;
         ui.dirty |= D_TOAST_UNDER;                             /* the band under the toast */
     }
-    if (!ui.connected) {
+    if (!ui.connected && !ui.setup) {
         uint8_t ph = (uint8_t)((now / 500u) & 3u);
         if (ph != ui.dots) {
             ui.dots = ph;

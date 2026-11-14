@@ -50,9 +50,10 @@ queue of 32 (oldest first; nothing is dropped, a change beyond 32 stays in the b
 is room), ENC and POT go out only behind them (ENC deltas keep adding up meanwhile), HELLO and SYNC_REQ wait for room. If
 the host stops reading, the keys still play and the screen still draws; when it reads again the frames arrive in order.
 
-Keys: plain Note On / Note Off, channel 1, `note = 53 + key + 12 * octave` (key 0 = F3), velocity fixed at 100 in
-phase 0 (`key_velocity()` in `app/app.c` is the hook for fm1-base's touch sensing, `APP_TOUCH`, off by default;
-poly pressure would go out as Poly Aftertouch). A note-off uses the note the key started with, so an octave change
+Keys: plain Note On / Note Off, by default channel 1, `note = 53 + key + 12 * octave` (key 0 = F3). The velocity comes
+from fm1-base's touch sensing (`APP_TOUCH`, `lib/touch.c`: the 20 keys on the analog rows are measured, the 7 top keys
+by a probe), shaped by the SETUP page's curve; the aftertouch, when switched on there, goes out as Poly Aftertouch
+(`An note pressure`) or Channel Pressure (`Dn pressure`, the strongest held key). A note-off uses the note the key started with, so an octave change
 while a key is held leaves no stuck note.
 
 ## Host to device
@@ -91,6 +92,14 @@ while a key is held leaves no stuck note.
 * SEL held is SHIFT (drawn in the footer). SEL is still sent as BTN.
 * OCT- / OCT+ without SHIFT shift the keyboard octave locally (-3..+3) and are still sent as BTN. With SHIFT held they
   do not change the octave (and are sent).
+* **SETUP page** (local, never sent to the host): SEL held + GLO opens it, on any screen, connected or not. The press of
+  GLO, every button pressed while the page is open and the encoders stay local (the SEL press itself was already sent).
+  K1 VELOCITY: SOFT / NORMAL / HARD (touch curve -3 / 0 / +3) / FIXED 100. K2 AFTERTOUCH: OFF (default) / POLY /
+  CHANNEL. K3 LED LEVEL: OFF / LOW / HIGH, the brightness of the dim LEDs (the lit ones keep their level). K4 KEY
+  CHANNEL: MIDI channel 1..16 for the keys (default 1). A page button (HOME ENV LFO FX EDIT GLO ARP SEQ) leaves; the
+  settings are written to the store when the page is left and survive a power cycle. A held key keeps the channel and
+  note it started with. MASTER still works while the page is open. The curve values are first guesses and need tuning
+  on the device.
 * Everything else is forwarded as BTN / ENC / POT.
 * The lights are exactly what LEDS says; with no host, held keys light themselves.
 
