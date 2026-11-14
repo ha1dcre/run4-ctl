@@ -141,8 +141,9 @@ parameter in the app: the device shows the big value view for this slot). Other 
 the firmware frames that slot's tile at once (and sends the ENC as before). When a VALUE for that slot arrives within
 1.5 s of the turn, or any VALUE with flags bit 0 arrives, the tile area shows the slot enlarged: the path (or title),
 the slot's name, its value text in the large font and a wide bar of its kind. Each further VALUE for that slot
-redraws it; 1.2 s after the last one the four tiles come back. A PAGE ends the view at once; another slot's VALUE
-ends it and updates its tile. Everything is redrawn by region (no full-screen clear).
+redraws it; 1.2 s after the last one the four tiles come back. A PAGE ends the view at once. Another slot's VALUE
+only updates that slot (seen when the tiles come back), unless it qualifies itself (turned, or flags bit 0): then the
+view switches to it. Everything is redrawn by region (no full-screen clear).
 
 ## Connection
 
