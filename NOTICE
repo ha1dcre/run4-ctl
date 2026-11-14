@@ -49,6 +49,21 @@ no Mutable Instruments code is used). No file of it is copied; these follow its 
             in spare bits of chance and gate.
   app/app.c   the overload guard on fm1-base's APP_OVERLOAD hook, as its app_overload / md_overload (ECO) uses it.
 
+AMB mode and the plate reverb use code from AMB-1 by Charles Vestal, https://github.com/charlesvestal/fm1-amb
+(MPL-2.0, file by file; its LICENSING.md), at commit da0047dc:
+  src/amb/amb.c, src/amb/amb.h   AMB-1's engine (app/dsp/amb.c, amb.h): the garden, its pieces, the echo chain.
+            Copyright (C) 2026 Charles Vestal. MPL-2.0, its header kept; modified for RUN4 CTL (the buffers in the mode
+            arena, the plate as a shared unit, MIDI out off / clock / notes, MIDI clock from the audio context, the
+            overload guard's steps); each modified file says so at its top.
+  src/plate.c, src/plate.h   Jon Dattorro's plate as AMB-1 has it (from FoMni-1), taken out of amb.c into a unit of its
+            own, with int16 lines and its settings as parameters. MPL-2.0, Copyright (C) 2026 Charles Vestal;
+            modified as its header says. The reverb's design: J. Dattorro, "Effect Design, Part 1", JAES 45 (9), 1997.
+  The Euclidean rhythms are Godfried Toussaint's reading of Bjorklund's algorithm; the idea of the garden is Brian
+  Eno's generative music (Music for Airports, Discreet Music). AMB-1 is not affiliated with Brian Eno.
+  src/amb_ui.c (AMB mode's pages and store) is new code (GPL-3.0-only) after AMB-1's project.c / ui.c play model
+  (the pieces kept as left, the keys as the scale, SAVE held for the recipe); the help cards (src/help.c) follow
+  AMB-1's (hold a button for a card), new code. The MPL-2.0 text is in LICENSES/MPL-2.0.txt.
+
 Files from fm1-base and felucca-bsp stay under the Mozilla Public License 2.0, file by file; the source of those
 files is the submodules at the commits recorded in this repository. MPL-2.0 is compatible with the GPL (its section
 3.3). The shape of app/ follows fm1-base's template (base/template/) and the way charlesvestal/fm1-ctl is built on it.

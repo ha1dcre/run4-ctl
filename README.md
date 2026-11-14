@@ -4,7 +4,9 @@ Open-source firmware (GPL-3.0) that turns the **M-VAVE FM-1** into a thin hardwa
 Its 27 keys, 14 buttons, 7 encoders and the MASTER pot are sent to the app over USB-MIDI, and the app draws pages (four
 labelled values with bars, track colour, transport, a tape view) and the LEDs on the FM-1. The FM-1 is silent in this
 mode unless RUN4 plays it as an instrument: the **host voice** (protocol 1.3) lets a RUN4 track play the FM-1's own FM
-engine. RUN4 also keeps a backup of the FM-1's user voices.
+engine. RUN4 also keeps a backup of the FM-1's user voices. Two more modes play on their own: **Synth mode**, a
+six-operator FM synth with a step sequencer, and **AMB mode**, AMB-1's generative ambient garden (Charles Vestal,
+MPL-2.0). SEL + HOME goes round RUN4 -> SYNTH -> AMB. Holding any button for a second shows a help card.
 
 **Not affiliated with M-VAVE.** FM-1 is M-VAVE's product name; this is an independent project built on the community
 firmware platform [fm1-base](https://github.com/charlesvestal/fm1-base). See `NOTICE`.
@@ -15,7 +17,8 @@ patch backup) and Synth mode (Felucca's FM6 engine, effects, DX7
 SysEx import, arpeggiator, sequencer with parameter locks, trig conditions, generators, phrase tools and a song chain,
 scale and chord keys, mutate, an A / B morph, MIDI learn, pages) are implemented and tested in fm1-base's host
 simulator and in native tests (`make test`); so are the USB backup, the screen mirror, sample-accurate MIDI in, the
-overload guard, LOCAL OUT and the USB stems package. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
+overload guard, LOCAL OUT and the USB stems package; firmware 0.7 adds AMB mode, the Dattorro plate as Synth mode's
+reverb and the help cards. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
 the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 ## Layout
@@ -28,16 +31,27 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 | `src/tape_ui.c` | RUN4 mode's tape view (protocol 1.3): waveform, loop region, playhead and meters in Synth mode's layout |
 | `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import, scales and chords, mutate, the morph, sample-accurate MIDI in, the overload guard; the step sequencer (16 x 64 steps, after Felucca's) with parameter locks, trig conditions and the song chain; its pages |
 | `src/synth_gen.c`, `src/synth_learn.c` | the SEQ page's generators, phrase tools, copy / paste and undo; MIDI learn and the default CC map |
+| `src/amb/amb.[ch]` | AMB mode's engine: AMB-1's (fm1-amb `app/dsp/amb.c` at da0047dc, MPL-2.0, modified: see its header), an o2 unit |
+| `src/amb_ui.c` | AMB mode's pages, keys, store (OBJ_AMB) and screen in RUN4 CTL's look |
+| `src/plate.[ch]` | Jon Dattorro's plate (AMB-1's, MPL-2.0, int16 lines): Synth mode's reverb and AMB mode's, one buffer; an o2 unit |
+| `src/arena.h` | the mode arena: Synth's delay / chorus lines or AMB's tape loop, Echoplex and buffers, in one pool buffer |
+| `src/help.c` | the help cards' texts and drawing (the rules of precedence: `app/app.c`, "help cards") |
 | `app/` | the fm1-base app: `app.c` (input, local rules, host frames, USB backup hooks, LOCAL OUT, stems), `app.h`, `fm1.toml` |
 | `app-stems/` | the RUN4 CTL STEMS package: `app/` built with six USB audio input channels (its own `fm1.toml`) |
+| `app-noamb/` | the package without AMB mode (`R4_AMB 0`, see "AMB mode off") |
 | `tests/r4p_test.c`, `tests/synth_test.c` | codec unit tests; native tests of the synth engine (levels, polyphony, DX7 import, CPU) |
-| `tests/scenarios/*.txt`, `tests/scenarios_stems/`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness; the stems package) |
-| `tests/screens/`, `tests/audio/` | screenshots and a short listening file the simulator wrote |
+| `tests/reverb_ab.c`, `tests/reverb_ref.c` | the reverb A/B (part of `make synth`): the old combs (kept as a reference) against the plate |
+| `tests/amb_test.c` | native tests of AMB mode's engine (`make amb`) |
+| `tools/r4ctl_backup.py` | the USB backup tool over fm1-base's: restores / upgrades a firmware 0.6 (version 1) backup |
+| `tests/scenarios/*.txt`, `tests/scenarios_stems/`, `tests/scenarios_noamb/`, `tests/scenarios_cross/`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness; the stems package; the package without AMB and a backup between the two) |
+| `tests/screens/`, `tests/audio/` | screenshots; listening files (the synth; the reverb A/B: `ir_*_hall.wav`, `reverb_*_hall.wav`) |
 | `tools/fake_fm1.py`, `tools/coremidi.py` | a Mac stand-in for the FM-1 (virtual CoreMIDI ports "FM-1", terminal panel); standard library only |
 | `tools/fake_run4.py` | stand-in for the RUN4 app (frames as hex, simulator scripts); standard library only |
 | `base/` | fm1-base (git submodule; it brings felucca-bsp) |
 
-Store (flash data area, two 4 KiB sectors per object, `app/app.h`): panel 0xDC000, SETUP 0xDA000 (56 B, layout 2:
+Store (flash data area, two 4 KiB sectors per object, `app/app.h`): AMB mode's pieces 0xCA000 (firmware 0.7, layout 1,
+476 B: the eight pieces as left, the piece, TUNE, MIDI OUT, and whether the FM-1 was left in AMB mode; SETUP keeps
+SYNTH then, so an older firmware still reads SETUP; +8 KiB of flash), panel 0xDC000, SETUP 0xDA000 (56 B, layout 2:
 LOCAL OUT, the default CC map, 16 MIDI learn bindings; a layout-1 store of 6 B loads with them at their defaults),
 Synth settings 0xD8000 (222 B, layout 4: the morph; layouts 2 (186 B) and 3 (198 B) load with the new fields at their
 defaults), two user banks
@@ -50,9 +64,12 @@ spare bits of its flags (no layout change; older firmware clears them on load). 
 settings grew two objects inside their own sector pairs (no flash added).
 
 USB backup (`fm1.toml` backup = true, fm1-base `device/backup.c`, `tools/fm1_backup.py`): the image's magic is
-"R4CB", version 1, and holds SETUP, the settings, both banks, the four pattern objects and the Bluetooth record in
-that order (never the panel's calibration). A new object in the list needs `APP_BACKUP_VERSION` 2; a new layout of an
-existing object does not (each loads its older layouts). The restore borrows the store's 3840-byte scratch `r4_io`
+"R4CB", version 2 since firmware 0.7, and holds SETUP, the settings, both banks, the four pattern objects, the
+Bluetooth record and AMB mode's pieces in that order (never the panel's calibration). fm1-base restores only its own
+version, so a version 1 image (0.6 and older: the same without the AMB part) goes through `tools/r4ctl_backup.py`
+(`restore` upgrades it on the way, `upgrade OLD NEW` for the web page): the AMB part absent, AMB at its recipes; the
+simulator restores such an upgraded image (`30_backup_v1`) and refuses the raw one. A new layout of an existing object
+needs no new version (each loads its older layouts). The restore borrows the store's 3840-byte scratch `r4_io`
 (`APP_BACKUP_BUF`), which also took the place of two 3724-byte pattern buffers.
 
 RAM added by this round (sizes measured natively; the device's linker map not made, no toolchain here): pool +1,056 B
@@ -91,11 +108,37 @@ moving, the sum is no more than Synth mode with its scope. The USB audio from th
 fm1-base after the USB recording's tap (`base/device/uac_mix.h`): the iPad records the FM-1 alone and hears both.
 RAM added: the parked settings (186 B); the restore's 32 voices wait in the DX7 import's 4 KiB buffer.
 
+RAM of firmware 0.7 (sizes measured natively, `make amb` prints them; no device link map, no toolchain here): the
+mode arena 150,496 B of pool (AMB's tape loop 124,000, Echoplex 14,200, sine table and mix buffers 12,296; Synth's
+delay and chorus lines, 67,584 B, live in the same bytes, which is all Synth mode needs), the plate's lines 69,412 B
+of pool (the old reverb's combs and allpasses, 36,864 B, are gone): the app's pool 227,504 B (0.6: 112,044). With the
+canvas (69,120) and the mirror (9,800): about 306 KB of the 336 KiB pool, ~37 KB spare (fm1-base wants 8 KiB); the
+build's `pool headroom` line is the authority. .bss: AMB's engine ~2.0 KB, its UI and store ~0.5 KB, the cards ~20 B,
+the plate's state ~0.2 KB. AMB's 5.6 s tape loop fits at full length: nothing had to be shortened. The arena changes
+hands at a mode switch with the render held silent: Synth's lines and the plate cleared for Synth / RUN4, AMB's
+buffers set up for AMB (`app.c` mode_switch); the overload guard never touches the arena while AMB has it.
+
+CPU (this Mac, -O2): AMB mode 0.43 % of real time at its busiest piece (VOICES, everything up; step 2 0.35 %, step 4
+0.30 %); in the simulator 0.4 %. The plate alone 0.10 % against the old reverb's 0.08 % (+0.02 % of real time); Synth
+mode's whole engine with 8 voices and every effect 0.58 % (0.6: 0.63 %, the difference is noise). On the device not
+measured; AMB-1 runs the same engine (with float lines) on the same hardware.
+
+### AMB mode off
+
+AMB mode is a build-time switch, `R4_AMB` (`app/app.h`, default 1). The package without it is `app-noamb/` (`app/`
+with `R4_AMB 0` and without the engine's o2 unit): `python3 base/tools/build.py app-noamb` (simulator: `app-noamb
+--host`, run by `make sim`). Without it: SEL + HOME goes RUN4 -> SYNTH -> RUN4, no AMB code, cards or RAM (the arena
+is Synth's 67,584 B: the app's pool 144,592 B); its store object stays in the store map and in the backup image
+(version 2) untouched, so a backup goes from one package to the other and back (`tests/scenarios_noamb/`,
+`tests/scenarios_cross/`). The plate and the help cards are in both.
+
 ## Build and test (macOS or Linux, host only)
 
     git clone --recursive <this repo>          # or: git submodule update --init --recursive
     python3 -m venv .venv && .venv/bin/pip install pillow    # fm1-base's font generator needs Pillow
-    make test        # codec unit tests (ASan/UBSan), synth tests, the simulator scenarios, the fake FM-1's self-test
+    make test        # codec unit tests (ASan/UBSan), synth tests (with the reverb A/B), AMB tests, the simulator
+                     # scenarios (all three packages), the fake FM-1's and the backup tool's self-tests
+    make audio       # the listening files in tests/audio/ (the reverb A/B)
     make unit        # only the codec tests
     make sim         # only the simulator (builds app/build/host/run4ctl_host)
 
@@ -151,4 +194,5 @@ The JieLi toolchain is Linux x86-64 only; on macOS fm1-base's `tools/build.py` r
 
 ## Licence
 
-GPL-3.0 (`LICENSE`). Files from fm1-base and felucca-bsp stay MPL-2.0 (see `NOTICE`).
+GPL-3.0 (`LICENSE`). Files from fm1-base and felucca-bsp, and AMB-1's engine and plate (`src/amb/`, `src/plate.[ch]`),
+stay MPL-2.0, file by file (see `NOTICE`, `LICENSES/MPL-2.0.txt`).

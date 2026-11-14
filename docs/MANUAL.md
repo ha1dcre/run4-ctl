@@ -1,6 +1,6 @@
 # RUN4 CTL
 
-RUN4 CTL is a firmware for the M-VAVE FM-1 with two modes:
+RUN4 CTL is a firmware for the M-VAVE FM-1 with three modes:
 
 * **RUN4 mode** turns the FM-1 into a hardware controller for the iOS app RUN4: the 27 keys, 14 buttons, 7 encoders
   and the MASTER knob are sent to the app over USB-MIDI or Bluetooth MIDI, and the app draws its pages and lights on
@@ -8,8 +8,16 @@ RUN4 CTL is a firmware for the M-VAVE FM-1 with two modes:
   (the **FM-1 engine** of a RUN4 track, see "The FM-1 as RUN4's instrument").
 * **Synth mode** turns the FM-1 into a standalone six-operator FM synthesizer with effects, an arpeggiator and a
   step sequencer (16 patterns of up to 64 steps, chords, ties, live and step recording). It also plays from MIDI in, so it works as a sound module for RUN4, TOLF or any MIDI source.
+* **AMB mode** turns the FM-1 into a generative ambient machine (AMB-1's garden, after Brian Eno's *Music for
+  Airports*): breathing pads, bells on tape loops of unequal length, a gliding bass, quiet Euclidean percussion, a
+  tape echo and a plate reverb, in eight pieces. You tend it rather than play it.
 
-Switch between them with **SEL + HOME**. The FM-1 remembers the mode it was left in.
+Switch with **SEL + HOME**: each press goes to the next mode, round: RUN4 -> SYNTH -> AMB -> RUN4. The FM-1 remembers
+the mode it was left in. (Before firmware 0.7 SEL + HOME went back and forth between RUN4 and Synth; from Synth mode
+back to RUN4 it is now two presses, through AMB mode, which stays quiet if you pass through it in under 0.7 s.)
+
+**Hold any button for a second** (alone, touching nothing else) and a **help card** says what it does in this mode and
+on this page; let go and the card closes. See "Help cards".
 
 RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
 
@@ -55,7 +63,10 @@ bright, the stage the newest note is in lit); on LFO its **wave** with a dot whe
 
 **Sound.** Eight voices (the oldest, released one is stolen first), Dexed's FM engine (Felucca's port) with the 32 DX7
 algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo
-delay and reverb (room, spring, hall).
+delay and reverb: since firmware 0.7 a **plate** (Jon Dattorro's, as AMB-1 has it) with three characters, ROOM (short,
+dark), PLATE (bright; a sound stored with the old SPRING gets it) and HALL (long and dark, 20 ms before it starts).
+REVERB SIZE still goes from short to long (HALL about 0.6 to 2.7 s, ROOM 0.4 to 1.5 s) and REVERB keeps its level; the
+shortest sizes ring a little longer than the old reverb's did.
 
 **Controls.**
 
@@ -277,10 +288,81 @@ cut dump imports nothing. The voices are kept when the FM-1 is switched off.
 **Not like a DX7.** The engine reads the patch parameters but has no DX7 operator switches, MIDI controllers other than
 those above, microtuning or portamento. The factory voices are Felucca's own, not a DX7 ROM.
 
+## AMB mode
+
+AMB mode is AMB-1, Charles Vestal's generative ambient machine for the FM-1 (after Brian Eno's *Music for
+Airports* and the echo chain of *Discreet Music*), in RUN4 CTL's look. It starts growing by itself 0.7 s after you
+enter it. Four layers draw on one scale and one slowly drifting chord: the **pad** (four voices breathing on unequal
+cycles, a Rhodes or sung voices), the **bells** (four tape loops of 13, 17, 23 and 29 beats, each with a few notes),
+the **bass** (the chord's root, gliding, now and then the fifth) and the **pulse** (a soft thump and two hi-hats on
+Euclidean patterns of 16, 12 and 7 sixteenths). A slow tide swings it between sparse and full; with EVOLVE the layers
+take rests. Then a short echo, a long tape loop (5.6 s, two heads) and the plate.
+
+| Control | Use |
+| --- | --- |
+| Keys | the scale: a lit key's note is in it. Press a key to take its note out, again to put it back (every octave of a note is one key). The root stays, and three notes at least |
+| PLAY | the garden grows / rests (resting, it rings out slowly) |
+| REC | FREEZE: the chord holds and the reverb rings on, the bells and the pulse go on above it; again: thaw |
+| EDIT | the next chord, on the next bar (at once while resting) |
+| HOME, ENV, ARP, LFO, SEQ, FX, GLO | the pages GARDEN, PAD, BELLS, BASS, PULSE, SPACE, KEY |
+| SELECT | the previous / next page; with HOME held: the tempo |
+| ALGORITHM | the scale: IONIAN, DORIAN, PHRYGIAN, LYDIAN, MIXOLYDIAN, AEOLIAN, the pentatonics (CUSTOM once you changed it with the keys) |
+| PRESETS | the piece |
+| K1 to K4 | the page's four values |
+| OCT-, OCT+ | the bells an octave down / up (-2 to +2; the footer's OCT shows it) |
+| SAVE | saves all eight pieces; **held 2 s**: the piece back to its recipe (saved with the next save) |
+| SEL + HOME, SEL + GLO, SEL + REC / PLAY | the next mode, the SETUP page, RUN4's REC / PLAY (as in Synth mode) |
+
+| Page | K1 | K2 | K3 | K4 |
+| --- | --- | --- | --- | --- |
+| GARDEN (HOME) | TEMPO (30-120) | EVOLVE | MOTION | DRIFT (20 S to 5:00 a chord) |
+| PAD (ENV) | LEVEL | SWELL | BRIGHT | COLOUR (RHODES, VOICES) |
+| BELLS (ARP) | LEVEL | DENSITY (0 to 5 notes a loop) | TONE | OCTAVE |
+| BASS (LFO) | LEVEL | OCTAVE | GLIDE | FIFTH |
+| PULSE (SEQ) | LEVEL | HITS | SWING | HATS |
+| SPACE (FX) | ECHO | ECHO TIME (1/4. to 4 BARS) | REVERB | SIZE |
+| KEY (GLO) | ROOT | TUNE | MIDI OUT (OFF, CLOCK, NOTES) | SCALE |
+
+**The pieces** (PRESETS): GARDEN (D Dorian, 72), DEPARTURES (C# Ionian, 60), VOICES (F Aeolian, 56), AFTERNOON
+(G Lydian, 84), NIGHT BUS (A Aeolian, 96), SHORELINE (E pentatonic major, 64), GLASS (Eb pentatonic minor, 76), TIDES
+(Bb Mixolydian, 70). Each remembers how you left it; TUNE and MIDI OUT are shared.
+
+**The screen.** The header: the page, the piece, the seven pages as a strip, a dot while something is not saved. The
+band: the twelve notes as a ring (C on top, the scale grey, the chord in the accent, the root framed, the chord's name
+and the state inside: GROWING, RESTING, FROZEN, EXT CLOCK, WAKING); the four bell loops as rows of beats (a block is a
+note, the playhead lit, in the accent when it rings); the three pulse rows; the four layers' levels (pad, bells, bass,
+pulse); a line filling up on the way to the next chord. The footer: the tempo, bar and beat, the play triangle while
+it grows, the red disc while frozen, the bells' octave.
+
+**Kept.** All eight pieces, the piece playing, TUNE and MIDI OUT are kept in the FM-1: a few seconds after a change
+while it rests (writing the flash interrupts the sound for a moment, so never while it grows), with SAVE, and when you
+leave AMB mode. If you switch off in AMB mode, it starts in AMB mode.
+
+**MIDI.** In: a MIDI clock (USB, Bluetooth, the jack) drives the garden's beat (EXT CLOCK), START grows it from the
+top, STOP rests it; half a second without clock and its own tempo takes over. A note on channel 1 takes its note out
+of the scale or puts it back, as a key does (not RUN4's notes for its FM-1 track: those are suspended here). Out
+(KEY > MIDI OUT, to USB and Bluetooth): OFF (the default), CLOCK (clock, start and stop while it runs on its own
+tempo), NOTES (also the pad on channel 1, the bells on 2, the bass on 3, the pulse on 10).
+
+**With RUN4.** RUN4 sees a local mode, as with Synth mode: the link stays, SEL + REC / SEL + PLAY are RUN4's REC and
+PLAY, and the garden goes to RUN4 over the USB cable (choose the FM-1 as the input; LOCAL OUT works too). RUN4 needs no
+update for it.
+
+## Help cards
+
+Hold a button alone for a second: a card over the screen says what it does, in this mode and on this page (on the
+SETUP page: there). Let go and it closes. The card only explains; the press did what it always does (a page button
+opened its page, PLAY started, REC armed or froze) and so does the release. It never comes, or goes at once, when
+another button, a key or a knob is touched; that touch does what it always did. So nothing about the gestures that hold
+a button changed: SEL with another button (SHIFT), a step held on the grid with a page button, SEL + SEQ held (FILL),
+MIDI learn (SEL + a knob), RUN4's HOME double tap, and AMB's SAVE held 2 s (the card shows at 1 s and closes when the
+piece goes back to its recipe).
+
 ## RUN4 and Synth mode together
 
 Switching modes keeps the link: after SEL + HOME the FM-1 says hello to RUN4 at once, so RUN4 knows which mode it is in
-and takes over the screen again as soon as you are back in RUN4 mode. While RUN4 is connected in Synth mode:
+and takes over the screen again as soon as you are back in RUN4 mode. While RUN4 is connected in Synth mode (and in
+AMB mode, see there):
 
 * **SEL + REC** and **SEL + PLAY** are RUN4's REC and PLAY (the screen says RUN4 REC / RUN4 PLAY); REC and PLAY alone
   stay the synth's. So you can arm a RUN4 track and record the synth without touching the app.
@@ -366,17 +448,27 @@ sequencer's patterns: for everything, use the USB backup.
 ## USB backup
 
 Everything the FM-1 keeps (the SETUP page with MIDI learn, Synth mode's settings with the morph, the 32 user voices,
-the 16 patterns with their locks and the song, the Bluetooth record) goes into one file over USB, and back. Only the
+the 16 patterns with their locks and the song, AMB mode's pieces, the Bluetooth record) goes into one file over USB,
+and back. Only the
 knobs' calibration stays with the unit. Use fm1-base's backup page or its tool on a computer:
 
     python3 base/tools/fm1_backup.py backup run4ctl.bak --magic R4CB
     python3 base/tools/fm1_backup.py restore run4ctl.bak
 
 A backup can be taken while the FM-1 plays (what is not saved yet is left out: stop first to have it). A restore needs
-the sequencer stopped (STOP FIRST), checks the whole file before anything changes, and asks on the screen: RESTORE FROM
-USB? SEL yes, HOME no. Then everything is as in the file; the mode you are in stays until the next power-on. A backup
-of an older RUN4 CTL restores (its parts load as they were); another firmware's does not. The VOICE BACKUP to RUN4
-(above) stays as it was.
+the sequencer stopped and, in AMB mode, the garden resting (STOP FIRST), checks the whole file before anything
+changes, and asks on the screen: RESTORE FROM USB? SEL yes, HOME no. Then everything is as in the file; the mode you are
+in stays until the next power-on. Another firmware's backup does not restore. The VOICE BACKUP to RUN4 (above) stays
+as it was.
+
+**A backup of firmware 0.6 or older** (before AMB mode) is restored with RUN4 CTL's own tool, which adds the AMB part
+as absent (AMB mode at its recipes; everything else as in the file):
+
+    python3 tools/r4ctl_backup.py restore old.bak
+    python3 tools/r4ctl_backup.py upgrade old.bak new.bak     (for fm1-base's backup page: then restore new.bak there)
+
+The FM-1's own restore takes only backups of its own format (version 2 since firmware 0.7). The package without AMB
+mode (see the README) makes and takes the same format, so a backup goes back and forth between the two.
 
 ## Screen mirror
 
@@ -403,9 +495,10 @@ The fourth sub-page, **MIDI LEARN**: K1 the binding (1 to 16), K2 shows its CC a
 DEFAULT CCS on / off, K4 CLEAR (turn, then SAVE: that binding goes).
 
 **Overload guard.** If the sound ever takes too long to compute (many voices, every effect, the FM-1 busy), the FM-1
-makes it lighter a step at a time instead of crackling: 1 the reverb on half its lines, 2 six voices, 3 no chorus and
-no delay, 4 four voices. It says CPU HIGH: SOUND LIGHTER once; after 3 seconds of easy going a step comes back. On a
-normal day it never shows.
+makes it lighter a step at a time instead of crackling. Synth mode (and RUN4's FM-1 track): 1 the reverb without its
+input diffusion, 2 six voices, 3 no chorus and no delay, 4 four voices. AMB mode: 1 the same for its reverb, 2 three
+pad voices, 3 no hi-hats and no octave doublings of the bells, 4 two pad voices and four bells. It says CPU HIGH: SOUND
+LIGHTER once; after 3 seconds of easy going a step comes back. On a normal day it never shows.
 
 Aftertouch is measured with the keys' own sensors. The velocity and pressure curves were set up without a device; if a
 setting feels too soft or too hard, pick another curve.

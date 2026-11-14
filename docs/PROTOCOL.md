@@ -32,7 +32,7 @@ cross-check it.
 
 | cmd | name | payload |
 | --- | --- | --- |
-| 0x01 | HELLO | `proto_ver, fw_major, fw_minor, mode, [proto_minor]` (mode 0 = RUN4, 1 = SYNTH; `proto_minor` since 1.1, absent = 0) |
+| 0x01 | HELLO | `proto_ver, fw_major, fw_minor, mode, [proto_minor]` (mode 0 = RUN4, 1 = a local mode: Synth or, since firmware 0.7, AMB; `proto_minor` since 1.1, absent = 0) |
 | 0x02 | BTN | `id (0..13), state (1 down / 0 up)` |
 | 0x03 | ENC | `id (0..6), delta` |
 | 0x04 | POT | `value14` (MASTER) |
@@ -286,13 +286,22 @@ changes (the morph stays off).
 
 | field | values |
 | --- | --- |
-| `state` | 0 off, 1 sounding (on, RUN4 mode), 2 suspended (on, but the FM-1 is in Synth mode) |
+| `state` | 0 off, 1 sounding (on, RUN4 mode), 2 suspended (on, but the FM-1 is in Synth or AMB mode) |
 | `chan` | the channel, 0..15 (as last set; 15 before any HV_ON) |
 | `voice` | where the voice came from: 0..39 a stored voice, 127 the host's (HV_VOICE kind 1 / 2) |
 | `name` | the voice's name, up to 10 characters, spaces at the end cut |
 
 Sent after each HV_ON and HV_VOICE, when the FM-1 switches to Synth mode while the host voice is on (state 2, before
 the HELLO with mode 1), and after each HELLO_ACK while it is on (state 1 in RUN4 mode, 2 in Synth mode).
+
+**AMB mode (firmware 0.7).** The FM-1 has a third mode, AMB (a generative ambient machine, MANUAL "AMB mode"). Its
+HELLO says mode 1, as Synth mode's: for the host both are a local mode that sounds on its own, nothing to draw or
+sync, the host voice suspended (HV_STATE 2), SEL + REC / SEL + PLAY sent as BTN 11 / 10, the sound on the USB audio
+input as ever. Nothing new on the wire; a host needs no change. In AMB mode a MIDI clock from the host drives the
+garden (START grows it, STOP rests it), and a note on channel 1 changes its scale (unless it is the host voice's
+channel: those notes are ignored there); its MIDI OUT is off unless the player sets it (clock, or notes on channels 1,
+2, 3 and 10). SEL + HOME goes RUN4 -> SYNTH -> AMB -> RUN4: from Synth mode back to RUN4 the host sees two HELLOs
+(mode 1, then 0).
 
 **Synth mode.** When the player switches to Synth mode (SEL + HOME) Synth mode takes over: the host voice's notes are
 cut, HV_STATE says 2, and Synth mode plays with its own voice and settings. What the host sends meanwhile (HV_ON,
