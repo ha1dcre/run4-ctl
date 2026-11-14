@@ -561,6 +561,151 @@ static void host_voice_tests(void)
     printf("  host voice: pressure, poly pressure, hold, swap ok\n");
 }
 
+/* ------------------------------------------------------- trig conditions, generators, phrase tools (synth_gen.c) --- */
+static uint32_t played_loops(uint32_t pat, uint32_t step, uint32_t loops, uint32_t *mask)   /* bit l: step played in loop l */
+{
+    uint32_t l;
+    *mask = 0;
+    syn.seq_pat = (uint8_t)pat;
+    syn_seq_start(1);
+    for (l = 0; l < loops; l++) {
+        uint32_t guard = 0;
+        until_step(step, 44100 * 4);
+        if (sq.n_notes && sq.step == step)
+            *mask |= 1u << l;
+        while (sq.step == step && guard++ < 2000)            /* past it */
+            syn_render(pcm, FM6_N, 4096);
+    }
+    syn_seq_start(0);
+    return *mask;
+}
+static void cond_gen_tests(void)
+{
+    sq_pat_t *p = &sq_pat[2];
+    uint32_t i, m, full, hits;
+    char d[32];
+    static sq_obj_t ob;
+    syn_event(6, 0, 0, 0);
+    run_small(256);
+    sq_pat_init(p);
+    sq_lanes_init(&sq_lk[2]);
+    p->len = 4;
+    for (i = 0; i < 4; i++) { p->s[i].note[0] = (uint8_t)(60 + i); p->s[i].f = SQ_ON | 1u; }
+    /* conditions: step 2 1:2 (loops 0, 2), 2:2 (1, 3), 1:4 (0, 4), FIRST (0), FILL / NOT FILL */
+    sq_set_cond(&p->s[1], SQK_1OF2);
+    CHECK(sq_cond(&p->s[1]) == SQK_1OF2 && sq_n(&p->s[1]) == 1 && sq_plays(&p->s[1]));
+    CHECK(played_loops(2, 1, 4, &m) == 0x5u);
+    sq_set_cond(&p->s[1], SQK_2OF2);
+    CHECK(played_loops(2, 1, 4, &m) == 0xAu);
+    sq_set_cond(&p->s[1], SQK_1OF4);
+    CHECK(played_loops(2, 1, 6, &m) == 0x11u);
+    sq_set_cond(&p->s[1], SQK_FIRST);
+    CHECK(played_loops(2, 1, 3, &m) == 0x1u);
+    sq_set_cond(&p->s[1], SQK_FILL);
+    sq.fill = 0;
+    CHECK(played_loops(2, 1, 2, &m) == 0u);
+    sq.fill = 1;
+    CHECK(played_loops(2, 1, 2, &m) == 0x3u);
+    sq_set_cond(&p->s[1], SQK_NOFILL);
+    CHECK(played_loops(2, 1, 2, &m) == 0u);
+    sq.fill = 0;
+    CHECK(played_loops(2, 1, 2, &m) == 0x3u);
+    /* kept in the store (spare bits of the flags: no layout change), and an editing of the notes keeps it */
+    sq_obj_fill(0, &ob);
+    sq_set_cond(&p->s[1], SQK_ALWAYS);
+    CHECK(sq_obj_take(0, &ob, sizeof ob) == 0 && sq_cond(&sq_pat[2].s[1]) == SQK_NOFILL);
+    ob.p[2].s[1].f |= SQ_CMASK;                            /* 7: no such condition: loads as ALWAYS */
+    CHECK(sq_obj_take(0, &ob, sizeof ob) == 0 && sq_cond(&sq_pat[2].s[1]) == SQK_ALWAYS && sq_n(&sq_pat[2].s[1]) == 1);
+    sq_set_cond(&p->s[1], SQK_FILL);
+    syn.seq_pat = 2;
+    sq_ed_step_down(1, 0); sq_ed_note(50); sq_ed_step_up();
+    CHECK(sq_cond(&p->s[1]) == SQK_FILL && p->s[1].note[0] == 50);
+    sq_set_cond(&p->s[1], SQK_ALWAYS);
+
+    /* EUCLID: 3 hits over 8, rotated; hits keep their notes, the others are switched off with theirs kept */
+    sq_pat_init(p);
+    p->len = 8;
+    p->s[3].note[0] = 70; p->s[3].f = 1u;
+    sq_ed.last_note = 62;
+    syn.scale = SCL_CHROM;
+    sgg.gen = GEN_EUCLID; sgg.par[GEN_EUCLID][0] = 3; sgg.par[GEN_EUCLID][1] = 0; sgg.par[GEN_EUCLID][2] = 0;
+    sg_generate(2, d);
+    CHECK(!strcmp(d, "EUCLID 3/8"));
+    CHECK(sq_plays(&p->s[0]) && sq_plays(&p->s[3]) && sq_plays(&p->s[6]) && sq_count_on(p) == 3);
+    CHECK(p->s[0].note[0] == 62 && p->s[3].note[0] == 70);
+    sgg.par[GEN_EUCLID][2] = 1;
+    sg_generate(2, d);
+    CHECK(sq_plays(&p->s[1]) && sq_plays(&p->s[4]) && sq_plays(&p->s[7]) && sq_count_on(p) == 3 && sq_has(&p->s[3]));
+    for (hits = 0; hits <= 8; hits++) {                   /* E(k, n): exactly k hits, as evenly as can be */
+        sgg.par[GEN_EUCLID][0] = (uint8_t)hits; sgg.par[GEN_EUCLID][2] = 0;
+        sg_generate(2, d);
+        CHECK(sq_count_on(p) == hits);
+    }
+    /* undo: one level, again = redo */
+    CHECK(sg_undo() == 1 && sq_count_on(p) == 7);
+    CHECK(sg_undo() == 0 && sq_count_on(p) == 8);
+    /* SPARSE / DRIFT / ARP / PULSE in D dorian: every note in the scale; the same seed the same pattern */
+    syn.scale = SCL_DORIAN; syn.root = 2; sq_ed.last_note = 62;
+    p->len = 32;
+    for (i = 0; i < 5; i++) {
+        static const uint8_t G[5] = {GEN_SPARSE, GEN_DRIFT, GEN_ARP, GEN_PULSE, GEN_SPARSE};
+        uint32_t k, sum = 0, n = 0, out = 0, sum2 = 0;
+        sgg.gen = G[i];
+        sg_generate(2, d);
+        for (k = 0; k < 32; k++)
+            if (sq_n(&p->s[k])) { n++; sum += p->s[k].note[0] * (k + 1); out += !syn_in_scale(p->s[k].note[0], SCL_DORIAN, 2); }
+        CHECK(n > 0 && out == 0);
+        sg_generate(2, d);
+        for (k = 0; k < 32; k++)
+            if (sq_n(&p->s[k])) sum2 += p->s[k].note[0] * (k + 1);
+        CHECK(sum == sum2);
+    }
+    sgg.gen = GEN_PULSE; sgg.par[GEN_PULSE][0] = 4; sgg.par[GEN_PULSE][1] = 1; sgg.par[GEN_PULSE][2] = 3;
+    sg_generate(2, d);
+    CHECK(sq_n(&p->s[1]) == 1 && sq_is_tie(&p->s[2]) && sq_is_tie(&p->s[3]) && !sq_has(&p->s[4]) && sq_n(&p->s[5]) == 1);
+    sgg.gen = GEN_ARP; sgg.par[GEN_ARP][0] = 0; sgg.par[GEN_ARP][1] = 1; sgg.par[GEN_ARP][2] = 1;
+    syn.chord = CH_OFF;
+    sg_generate(2, d);                                     /* D dorian's seventh chord on D: D F A C, up */
+    CHECK(p->s[0].note[0] == 62 && p->s[1].note[0] == 65 && p->s[2].note[0] == 69 && p->s[3].note[0] == 72 && p->s[4].note[0] == 62);
+    syn.scale = SCL_CHROM; syn.root = 0;
+
+    /* phrase tools: rotate (locks with their steps), transpose (scale steps), reverse by phrases, mirror */
+    sq_pat_init(p);
+    sq_lanes_init(&sq_lk[2]);
+    p->len = 8;
+    p->s[0].note[0] = 60; p->s[0].f = SQ_ON | 1u;
+    p->s[1].f = SQ_ON | SQ_TIE;
+    p->s[4].note[0] = 67; p->s[4].f = SQ_ON | 1u;
+    CHECK(sq_lock_set(2, 4, LK_BRIGHT, 20) == 0);
+    sg_rotate(2, 1);
+    CHECK(p->s[1].note[0] == 60 && sq_is_tie(&p->s[2]) && p->s[5].note[0] == 67 && sq_lock_get(2, 5, LK_BRIGHT) == 20 &&
+          sq_lock_get(2, 4, LK_BRIGHT) == -1000);
+    sg_rotate(2, -1);
+    CHECK(p->s[0].note[0] == 60 && sq_lock_get(2, 4, LK_BRIGHT) == 20);
+    sg_reverse(2);                                         /* runs: [0,1] [2] [3] [4] [5] [6] [7] -> 7 6 5 4 3 2 [0,1] */
+    CHECK(p->s[3].note[0] == 67 && sq_lock_get(2, 3, LK_BRIGHT) == 20 && p->s[6].note[0] == 60 && sq_is_tie(&p->s[7]));
+    sg_reverse(2);
+    CHECK(p->s[0].note[0] == 60 && sq_is_tie(&p->s[1]) && p->s[4].note[0] == 67);
+    CHECK(sg_transpose(2, 2) == 0 && p->s[0].note[0] == 62 && p->s[4].note[0] == 69);
+    syn.scale = SCL_MAJOR;
+    CHECK(sg_transpose(2, 1) == 0 && p->s[0].note[0] == 64 && p->s[4].note[0] == 71);   /* D -> E, A -> B in C major */
+    CHECK(sg_transpose(2, 100) == -1 && p->s[0].note[0] == 64);
+    sg_mirror(2);
+    CHECK(p->s[0].note[0] == 71 && p->s[4].note[0] == 64);
+    syn.scale = SCL_CHROM;
+    /* copy steps 1..2 (a note and its TIE, with locks) and paste them at 6 */
+    CHECK(sq_lock_set(2, 0, LK_DRIVE, 50) == 0);
+    sg_copy(2, 0, 1);
+    CHECK(sgc.n == 2 && sg_paste(2, 6, &full) == 2 && full == 0);
+    CHECK(p->s[6].note[0] == 71 && sq_is_tie(&p->s[7]) && sq_lock_get(2, 6, LK_DRIVE) == 50);
+    CHECK(sg_paste(2, 7, &full) == 1);                     /* cut at the length */
+    CHECK(sg_undo() == 1 && sq_is_tie(&p->s[7]));
+    sq_pat_init(p);
+    sq_lanes_init(&sq_lk[2]);
+    syn.seq_pat = 0;
+    printf("  seq tools: conditions, 5 generators, rotate / transpose / reverse / mirror, copy / paste, undo ok\n");
+}
+
 int main(int argc, char **argv)
 {
     double rms, pk, rms2;
@@ -693,6 +838,7 @@ int main(int argc, char **argv)
 
     step2_tests();
     host_voice_tests();
+    cond_gen_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);

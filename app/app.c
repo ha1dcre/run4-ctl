@@ -704,6 +704,7 @@ static void mode_switch(uint8_t to)
         syn_hold = 1;                              /* (silent from here to the swap) */
         sq_start(0);
         sq.rec = 0;
+        sq.fill = 0;
         sq_ed.held = -1;
         sq_ed.entry_open = 0;
         if (sui.dirty_set || syn_bank_dirty || sq_dirty)
@@ -741,18 +742,30 @@ static void synth_button(uint32_t k)
         if (k == B_HOME) sq_ed.lview = 1;
         else if (k == B_LFO) sq_ed.lview = 2;
         else if (k == B_FX) sq_ed.lview = sq_ed.lview == 3 ? 4 : 3;
-        else if (k == B_SEQ) sq_ed.lview = 0;
+        else if (k == B_SEQ) sq_ed.lview = sq_ed.lview == 0 ? SQ_LV_COND : 0;   /* SEQ: its own page, again: COND */
+        else if (k == B_EDIT) sq_copy_held();       /* EDIT: COPY the held steps; GLO: PASTE from the held step */
+        else if (k == B_GLO) { sq_paste_held(); return; }
         else if (k != B_SEL) sp_toast("NO LOCKS ON THAT PAGE");
         sq_ed.held_used = 1;
         sp_build();
+        return;
+    }
+    if (shift && k == B_SEQ) {                     /* SEL + SEQ held: FILL (trig conditions FILL / NOT FILL) */
+        sq.fill = 1;
+        sp_toast("FILL");
+        if (sui.page == SP_SEQ)
+            ui.dirty |= D_TILE0;
         return;
     }
     if (shift && k == B_EDIT) {                    /* SEL + EDIT: MUTATE the voice; SEL + SAVE: undo / redo it */
         sp_mutate();
         return;
     }
-    if (shift && k == B_SAVE) {
-        sp_mutate_undo();
+    if (shift && k == B_SAVE) {                    /* (on the SEQ page: the last pattern change, if there is one) */
+        if (sui.page == SP_SEQ && sgu.valid)
+            sq_undo_press();
+        else
+            sp_mutate_undo();
         return;
     }
     if (synth_step_rec() && (k == B_EDIT || k == B_GLO)) {   /* step recording: EDIT a rest, GLO a TIE */
@@ -1299,6 +1312,11 @@ static void input(void)
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
         if (mode == MODE_SYNTH) {
+            if (!(btn & bit) && k == B_SEQ && sq.fill) {   /* FILL ends with SEQ's release */
+                sq.fill = 0;
+                if (sui.page == SP_SEQ)
+                    ui.dirty |= D_TILE0;
+            }
             if (!(btn & bit) && (ctl.fwd & bit)) {     /* the release of a forwarded SEL + REC / PLAY */
                 ctl.fwd &= ~bit;
                 ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1);
@@ -1622,6 +1640,17 @@ int app_expect(const char *what, int *got)
     else if (!strncmp(what, "lock", 4) && what[4] >= '0' && what[4] <= '9' && strchr(what, '_'))   /* lockS_ID: step S's lock */
         *got = sq_lock_get(sq_sel_pat(), (uint32_t)(atoi(what + 4) - 1) & 63u, (uint32_t)atoi(strchr(what, '_') + 1));
     else if (!strcmp(what, "lview")) *got = sq_ed.lview;
+    else if (!strcmp(what, "seq_fill")) *got = sq.fill;
+    else if (!strcmp(what, "gen_type")) *got = sgg.gen;
+    else if (!strcmp(what, "undo_valid")) *got = sgu.valid;
+    else if (!strcmp(what, "clip_n")) *got = sgc.n;
+    else if (!strcmp(what, "seq_sum")) {                                   /* the selected pattern's notes, summed by step */
+        uint32_t i, k, c = 0;
+        for (i = 0; i < SQ_STEPS; i++) for (k = 0; k < sq_n(&sq_ed_pat()->s[i]); k++) c += sq_ed_pat()->s[i].note[k] * (i + 1u);
+        *got = (int)c;
+    }
+    else if (!strncmp(what, "seq_cond", 8) && what[8]) *got = (int)sq_cond(&sq_ed_pat()->s[(atoi(what + 8) - 1) & 63]);
+    else if (!strcmp(what, "seq_played")) *got = (int)sq.played;
     else if (!strcmp(what, "held_n")) *got = (int)sq_ed_held_n();
     else if (!strcmp(what, "eff_alg")) *got = (int)syn_eff_alg + 1;
     else if (!strcmp(what, "arp_held")) *got = syn_sq.n_held;

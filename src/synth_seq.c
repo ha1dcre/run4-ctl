@@ -32,6 +32,12 @@
 #define SQ_ON 0x80u                          /* step flags: it plays */
 #define SQ_TIE 0x40u                         /* ... it is a TIE: what sounds goes on */
 #define SQ_NMASK 0x07u                       /* ... the notes in use (0..4) */
+#define SQ_CMASK 0x38u                       /* ... its trig condition (SQK_*, bits 3..5; 0 = always): stores written
+                                              * before the conditions have 0 there (the bits were cleared on load) */
+#define SQ_CSHIFT 3
+/* trig conditions (Elektron's idea): a note step plays only when its condition holds. The pattern's loops count from
+ * 0 at PLAY and again whenever another pattern (or song entry) takes over; FILL is held by the main loop (SEL + SEQ) */
+enum { SQK_ALWAYS, SQK_1OF2, SQK_2OF2, SQK_1OF4, SQK_FIRST, SQK_FILL, SQK_NOFILL, SQK_N };
 enum { SQR_8, SQR_16, SQR_16T, SQR_32, SQR_N };
 /* the clock: AUTO follows a MIDI clock coming in (and its start / stop) while one comes, else the tempo; OUT plays the
  * tempo and sends MIDI clock; INT plays the tempo and ignores MIDI clock */
@@ -94,6 +100,8 @@ static int sq_is_on(const sq_step_t *s) { return (s->f & SQ_ON) != 0; }
 static int sq_has(const sq_step_t *s) { return sq_is_tie(s) || sq_n(s) > 0u; }       /* holds something */
 static int sq_plays(const sq_step_t *s) { return sq_is_on(s) && sq_has(s); }
 static void sq_set_n(sq_step_t *s, uint32_t n) { s->f = (uint8_t)((s->f & ~SQ_NMASK) | (n > SQ_NOTES ? SQ_NOTES : n)); }
+static uint32_t sq_cond(const sq_step_t *s) { return (uint32_t)(s->f & SQ_CMASK) >> SQ_CSHIFT; }
+static void sq_set_cond(sq_step_t *s, uint32_t c) { s->f = (uint8_t)((s->f & ~SQ_CMASK) | ((c < SQK_N ? c : 0u) << SQ_CSHIFT)); }
 static void sq_touch(uint32_t pat) { sq_dirty = (uint8_t)(sq_dirty | 1u << (pat / SQ_OBJ_PATS)); }
 
 static void sq_lanes_init(sq_lanes_t *l) { memset(l, SQ_NOLOCK, sizeof *l); }
@@ -116,8 +124,9 @@ static void sq_pat_sanitize(sq_pat_t *p)
     if (p->vel < 1u || p->vel > 127u) p->vel = 100;
     for (i = 0; i < SQ_STEPS; i++) {
         sq_step_t *s = &p->s[i];
-        s->f &= (uint8_t)(SQ_ON | SQ_TIE | SQ_NMASK);
+        s->f &= (uint8_t)(SQ_ON | SQ_TIE | SQ_NMASK | SQ_CMASK);
         if (sq_n(s) > SQ_NOTES) sq_set_n(s, SQ_NOTES);
+        if (sq_cond(s) >= SQK_N) sq_set_cond(s, SQK_ALWAYS);
         if (sq_is_tie(s)) sq_set_n(s, 0);
         for (k = 0; k < SQ_NOTES; k++) s->note[k] &= 0x7Fu;
         s->vel &= 0x7Fu;
@@ -328,6 +337,9 @@ static struct {
     uint8_t ci;                              /* the chain entry playing */
     uint8_t rep_n;                           /* its loops played so far */
     uint8_t in_song;                         /* the song plays (set at a start or a loop end) */
+    /* trig conditions */
+    uint32_t ploops;                         /* loops of the pattern playing since it took over (0 = its first) */
+    volatile uint8_t fill;                   /* FILL is held (the main loop's: SEL + SEQ) */
 } sq;
 static void (*sq_midi_out)(uint8_t rt);      /* the app's: a MIDI real-time byte out (F8, FA, FC); 0 = none */
 
@@ -396,6 +408,19 @@ static void sq_rec_hold(sq_pat_t *p, uint32_t idx)
     sq_touch(sq.pat);
 }
 
+/* a note step's trig condition, now */
+static int sq_cond_ok(const sq_step_t *s)
+{
+    switch (sq_cond(s)) {
+    case SQK_1OF2: return (sq.ploops & 1u) == 0u;
+    case SQK_2OF2: return (sq.ploops & 1u) == 1u;
+    case SQK_1OF4: return (sq.ploops & 3u) == 0u;
+    case SQK_FIRST: return sq.ploops == 0u;
+    case SQK_FILL: return sq.fill != 0;
+    case SQK_NOFILL: return sq.fill == 0;
+    default: return 1;
+    }
+}
 /* step idx starts: its notes on (or a TIE goes on, or a rest ends what sounds) */
 static void sq_fire(uint32_t idx)
 {
@@ -421,7 +446,7 @@ static void sq_fire(uint32_t idx)
         return;
     }
     sq_release();
-    if (!sq_plays(s) || (s->chance && sq_rand() % 100u >= s->chance)) {
+    if (!sq_plays(s) || !sq_cond_ok(s) || (s->chance && sq_rand() % 100u >= s->chance)) {
         sq.rskip_n = 0;
         return;
     }
@@ -463,6 +488,7 @@ static void sq_tick(void)
     if (sq.pos < sq.nstart)
         return;
     if ((uint32_t)sq.step + 1u >= p->len) {  /* the end of the loop: the selected pattern takes over, or the song goes on */
+        uint32_t was_pat = sq.pat, was_ci = sq.ci;
         sq.pos = 0;
         sq.loops++;
         if (sq_song()) {
@@ -484,6 +510,7 @@ static void sq_tick(void)
                 sq.rh_n = 0;
             }
         }
+        sq.ploops = sq.pat != was_pat || sq.ci != was_ci ? 0u : sq.ploops + 1u;   /* (the trig conditions' count) */
         sq_fire(0);
     } else {
         sq_fire(sq.step + 1u);
@@ -508,6 +535,7 @@ static void sq_start(int run)
         sq.ext_ticks = 0;
         sq.rh_n = 0;
         sq.rskip_n = 0;
+        sq.ploops = 0;
         sq.run = 1;
         if (sq_midi_out && sq_clock_mode() == SQC_OUT) {
             sq_midi_out(0xFAu);
@@ -712,7 +740,7 @@ static void sq_ed_note(uint8_t note)
     s = &sq_ed_pat()->s[sq_ed.held];
     if (sq_ed.held_fresh) {
         memset(s->note, 0, sizeof s->note);
-        s->f = SQ_ON;
+        s->f = (uint8_t)(SQ_ON | (s->f & SQ_CMASK));     /* (the notes replaced, its condition kept) */
         sq_ed.held_fresh = 0;
     }
     s->f |= SQ_ON;
@@ -740,7 +768,7 @@ static void sq_ed_step_turn(uint32_t i, uint32_t k, int d)
     case 0:
         if (!sq_n(s)) {                             /* nothing to move: it gets the last note */
             s->note[0] = sq_ed.last_note;
-            s->f = (uint8_t)(SQ_ON | 1u);
+            s->f = (uint8_t)(SQ_ON | 1u | (s->f & SQ_CMASK));
             break;
         }
         for (j = 0; j < sq_n(s); j++)

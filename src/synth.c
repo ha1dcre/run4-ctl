@@ -1095,6 +1095,8 @@ static uint32_t syn_mutate(uint8_t *v, uint32_t amt, uint32_t *r)
     return chg;
 }
 
+#include "synth_gen.c"                       /* the SEQ page's generators and phrase tools */
+
 static void syn_init(void)
 {
     memset(syn_v, 0, sizeof syn_v);

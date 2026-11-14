@@ -80,7 +80,7 @@ static const sp_page_t SP[SP_N] = {
                 {P("GATE", R4P_KIND_UNI, F_PCT, 10, 100, 0, S_ARPGATE), PN("CHORD", F_NAMES, 0, 10, S_CHORD, N_CHORD),
                  PN("INVERSION", F_NAMES, 0, 3, S_INV, N_INV), PN("SPREAD", F_NAMES, 0, 2, S_SPREAD, N_SPREAD)}},
      {{0}, {0}, {0}}},
-    {"SEQUENCER", 4, {{EMPTYP, EMPTYP, EMPTYP, EMPTYP}}, {{0}, {0}, {0}}},     /* its own pages: sq_build (below) */
+    {"SEQUENCER", 6, {{EMPTYP, EMPTYP, EMPTYP, EMPTYP}}, {{0}, {0}, {0}}},     /* its own pages: sq_build (below) */
 };
 
 #define SY_AR 127                            /* Synth mode's one accent, on the wire scale (x2 on screen): warm amber */
@@ -284,9 +284,11 @@ static void sp_turn(uint32_t k, int d)
     sp_build();
 }
 static void sq_disarm(void);
+static void sq_phrase_reset(void);
 static void sp_page_press(uint32_t page)
 {
     sq_disarm();
+    sq_phrase_reset();
     sy_touch_k = 0;
     if (page == sui.page)
         sui.sub = (uint8_t)((sui.sub + 1u) % SP[page].nsub);
@@ -458,6 +460,9 @@ static struct {
     uint8_t drawn_ci, drawn_rep;             /* ... and the song's entry */
     uint8_t chain_cur;                       /* the SONG sub-page's entry (0..len; len = a new one) */
     uint8_t del_arm;                         /* SONG: DELETE armed (SAVE deletes the entry) */
+    uint8_t rev_arm, mir_arm;                /* PHRASE: REVERSE / MIRROR armed (SAVE does it) */
+    int8_t rot, trn;                         /* PHRASE: the rotation and transposition since the sub-page opened */
+    uint8_t run_k;                           /* PHRASE: the knob of the run of turns the undo was kept for + 1 */
 } sqi;
 /* a held step's lock pages: the page button pressed while the step is held picks one (synth.c LK_*; 255 = none) */
 static const struct { uint8_t page, sub, id[4]; const char *name; } LKV[4] = {
@@ -466,6 +471,8 @@ static const struct { uint8_t page, sub, id[4]; const char *name; } LKV[4] = {
     {SP_FX, 0, {LK_DRIVE, LK_CHORUS, LK_DLYMIX, LK_REVMIX}, "FX"},
     {SP_FX, 1, {LK_DLYTIME, LK_DLYFB, 255, LK_REVSIZE}, "FX 2"}};
 static const char *const N_SQRATE[SQR_N] = {"1/8", "1/16", "1/16T", "1/32"};
+static const char *const N_COND[SQK_N] = {"ALWAYS", "1:2", "2:2", "1:4", "FIRST", "FILL", "NOT FILL"};
+#define SQ_LV_COND 5                         /* sq_ed.lview: the held step's second own page (its trig condition) */
 static const char *const N_CLOCK[SQC_N] = {"AUTO", "OUT", "INT"};
 
 static int sq_view(void)
@@ -476,11 +483,14 @@ static int sq_view(void)
         return SQV_REC;
     return SQV_PAGE;
 }
+static void sq_phrase_reset(void) { sqi.rot = sqi.trn = 0; }
 static void sq_disarm(void)
 {
     sqi.copy_to = 0;
     sqi.clear = 0;
     sqi.del_arm = 0;
+    sqi.rev_arm = sqi.mir_arm = 0;
+    sqi.run_k = 0;
 }
 static void sq_note_text(const sq_step_t *s, char *t)     /* "C4", "C4 +2" (a chord of three), "TIE", "--" */
 {
@@ -638,7 +648,11 @@ static void sq_build(void)
         } else {
             strcpy(g->title, "STEP "); u_int((unsigned)sq_ed.held + 1u, u); u_cat(g->title, u);
         }
-        if (sq_ed.lview) {
+        if (sq_ed.lview == SQ_LV_COND) {          /* the step's trig condition (SEQ again on a held step) */
+            uint32_t c = sq_cond(&pt->s[sq_ed.held]);
+            u_cat(g->title, " COND");
+            sq_tile(0, "CONDITION", R4P_KIND_ENUM, sq_enum((int)c, SQK_N), N_COND[c % SQK_N]);
+        } else if (sq_ed.lview) {
             u_cat(g->title, " "); u_cat(g->title, LKV[(sq_ed.lview - 1u) % 4u].name);
             sq_lock_tiles(sel);
         } else {
@@ -654,10 +668,35 @@ static void sq_build(void)
         sq_num(t, pt->len, "");
         sq_tile(2, "LENGTH", R4P_KIND_UNI, sq_uni(pt->len, 1, 64), t);
         sq_tempo_tile(3);
+    } else if (sui.sub == 4) {                   /* GENERATE: SAVE fills the pattern (synth_gen.c) */
+        uint32_t gi = sgg.gen % GEN_N, k;
+        strcpy(g->title, "GENERATE");
+        g->page_count = 6;
+        g->page_idx = 4;
+        sq_tile(0, "TYPE", R4P_KIND_ENUM, sq_enum((int)gi, GEN_N), GEN_NAME[gi]);
+        for (k = 0; k < 3u; k++) {
+            int pv = sgg.par[gi][k];
+            if (gi == GEN_EUCLID && k == 1 && !pv) strcpy(t, "LEN");
+            else if ((gi == GEN_SPARSE || gi == GEN_DRIFT) && k == 0) sq_num(t, pv, "%");
+            else if ((gi == GEN_SPARSE || gi == GEN_ARP) && k == 1) sq_num(t, pv, " OCT");
+            else if (gi == GEN_ARP && k == 0) strcpy(t, GEN_SHAPE[pv % 4]);
+            else sq_num(t, pv, "");
+            sq_tile(k + 1u, GEN_PNAME[gi][k], R4P_KIND_UNI, sq_uni(pv, GEN_LO[gi][k], GEN_HI[gi][k]), t);
+        }
+    } else if (sui.sub == 5) {                   /* PHRASE: ROTATE, TRANSPOSE at once; REVERSE, MIRROR with SAVE */
+        strcpy(g->title, "PHRASE");
+        g->page_count = 6;
+        g->page_idx = 5;
+        sq_num(t, sqi.rot, ""); if (sqi.rot > 0) { strcpy(u, t); strcpy(t, "+"); u_cat(t, u); }
+        sq_tile(0, "ROTATE", R4P_KIND_BI, (uint16_t)(8192 + sqi.rot * 8191 / 64), t);
+        sq_num(t, sqi.trn, syn.scale % SCL_N != SCL_CHROM ? " DEG" : " ST"); if (sqi.trn > 0) { strcpy(u, t); strcpy(t, "+"); u_cat(t, u); }
+        sq_tile(1, "TRANSPOSE", R4P_KIND_BI, (uint16_t)(8192 + (sqi.trn < -24 ? -24 : sqi.trn > 24 ? 24 : sqi.trn) * 8191 / 24), t);
+        sq_tile(2, "REVERSE", R4P_KIND_TOGGLE, sqi.rev_arm, sqi.rev_arm ? "SURE?" : "--");
+        sq_tile(3, "MIRROR", R4P_KIND_TOGGLE, sqi.mir_arm, sqi.mir_arm ? "SURE?" : "--");
     } else if (sui.sub == 3) {                   /* SONG: the chain */
         uint32_t c = sqi.chain_cur, len = sq_ch.len;
         strcpy(g->title, "SONG");
-        g->page_count = 4;
+        g->page_count = 6;
         g->page_idx = 3;
         if (c < len) { u_int(c + 1u, u); strcpy(t, u); u_cat(t, "/"); u_int(len, u); u_cat(t, u); }
         else strcpy(t, len >= SQ_CHAIN ? "FULL" : "NEW");
@@ -671,7 +710,7 @@ static void sq_build(void)
         sq_tile(3, "SONG", R4P_KIND_TOGGLE, syn.song, syn.song ? "ON" : "OFF");
     } else {
         strcpy(g->title, "SEQUENCER");
-        g->page_count = 4;
+        g->page_count = 6;
         g->page_idx = sui.sub;
         if (sui.sub == 0) {
             sq_pat_name(t, sel);
@@ -719,13 +758,60 @@ static void sq_turn(uint32_t k, int d)
     uint32_t sel = sq_sel_pat();
     int v = sq_view(), x;
     if (v == SQV_STEP) {
-        if (sq_ed.lview) {
+        if (sq_ed.lview == SQ_LV_COND) {         /* K1: the held steps' trig condition */
+            if (k == 0) {
+                uint32_t i;
+                int c = (int)sq_cond(&pt->s[sq_ed.held]) + (d > 0 ? 1 : -1);
+                c = c < 0 ? 0 : c >= SQK_N ? SQK_N - 1 : c;
+                for (i = 0; i < SQ_STEPS; i++)
+                    if (sq_ed_is_held(i))
+                        sq_set_cond(&pt->s[i], (uint32_t)c);
+                sq_ed.held_used = 1;
+                sq_touch(sel);
+            }
+        } else if (sq_ed.lview) {
             sq_lock_turn(k, d);
         } else {
             uint32_t i;
             for (i = 0; i < SQ_STEPS; i++)
                 if (sq_ed_is_held(i))
                     sq_ed_step_turn(i, k, d);
+        }
+    } else if (sui.sub == 4) {                   /* GENERATE: the type, its three settings */
+        uint32_t gi = sgg.gen % GEN_N;
+        if (k == 0) {
+            x = (int)gi + (d > 0 ? 1 : -1);
+            sgg.gen = (uint8_t)(x < 0 ? 0 : x >= GEN_N ? GEN_N - 1 : x);
+        } else {
+            int step = (gi == GEN_SPARSE || gi == GEN_DRIFT) && k == 1u ? 5 : 1;
+            x = (int)sgg.par[gi][k - 1u] + step * d;
+            x = x < GEN_LO[gi][k - 1u] ? GEN_LO[gi][k - 1u] : x > GEN_HI[gi][k - 1u] ? GEN_HI[gi][k - 1u] : x;
+            sgg.par[gi][k - 1u] = (uint8_t)x;
+        }
+    } else if (sui.sub == 5) {                   /* PHRASE */
+        if (k <= 1u) {
+            if (sqi.run_k != k + 1u) {            /* a new run of turns: the undo keeps the pattern before it */
+                sg_keep(sel);
+                sqi.run_k = (uint8_t)(k + 1u);
+            }
+            sqi.rev_arm = sqi.mir_arm = 0;
+            if (k == 0) {
+                sg_rotate(sel, d);
+                x = sqi.rot + d;
+                sqi.rot = (int8_t)(x < -64 ? -64 : x > 64 ? 64 : x);
+            } else if (sg_transpose(sel, d) == 0) {
+                x = sqi.trn + d;
+                sqi.trn = (int8_t)(x < -99 ? -99 : x > 99 ? 99 : x);
+            } else {
+                sp_toast("OUT OF RANGE");
+            }
+        } else {
+            sqi.rev_arm = k == 2u && d > 0;
+            sqi.mir_arm = k == 3u && d > 0;
+            sqi.run_k = 0;
+            sqi.arm_at = plat_ms();
+            if (sqi.rev_arm || sqi.mir_arm)
+                sp_toast(sqi.rev_arm ? "SAVE: REVERSE" : "SAVE: MIRROR");
         }
     } else if (sui.sub == 3) {                   /* SONG: ENTRY, PATTERN, REPEATS, SONG on / off */
         uint32_t c = sqi.chain_cur, len = sq_ch.len;
@@ -845,6 +931,25 @@ static int sq_save_press(void)
         sq_build();
         return 1;
     }
+    if (sui.page == SP_SEQ && sui.sub == 4 && sq_ed.held < 0 && !(sq.rec && !sq.run)) {   /* GENERATE: fill it */
+        char d[32];
+        sg_generate(sq_sel_pat(), d);
+        sqi.run_k = 0;
+        sui.edit_at = plat_ms();
+        sp_toast(d);
+        sq_build();
+        return 1;
+    }
+    if (sui.page == SP_SEQ && sui.sub == 5 && sq_ed.held < 0 && (sqi.rev_arm || sqi.mir_arm)) {   /* PHRASE: armed */
+        sg_keep(sq_sel_pat());
+        if (sqi.rev_arm) sg_reverse(sq_sel_pat()); else sg_mirror(sq_sel_pat());
+        sp_toast(sqi.rev_arm ? "REVERSED" : "MIRRORED");
+        sqi.rev_arm = sqi.mir_arm = 0;
+        sqi.run_k = 0;
+        sui.edit_at = plat_ms();
+        sq_build();
+        return 1;
+    }
     if (sui.page == SP_SEQ && sui.sub == 3 && sq_ed.held < 0) {   /* SONG: SAVE deletes (armed) or inserts a copy */
         if (sqi.del_arm) {
             sq_chain_delete(sqi.chain_cur);
@@ -896,10 +1001,55 @@ static void sq_transpose_key(int note)        /* SEL + a key: the sequence plays
     if (sui.page == SP_SEQ)
         sq_build();
 }
+/* a held step (and the steps held with it) + EDIT: COPY the range from the first to the last of them; + GLO: PASTE it
+ * from the held step on (synth_gen.c, with their locks; undo: SEL + SAVE) */
+static void sq_copy_held(void)
+{
+    uint32_t i, lo = SQ_STEPS, hi = 0;
+    char t[24];
+    for (i = 0; i < SQ_STEPS; i++)
+        if (sq_ed_is_held(i)) {
+            if (i < lo) lo = i;
+            if (i > hi) hi = i;
+        }
+    if (lo > hi)
+        return;
+    sg_copy(sq_sel_pat(), lo, hi);
+    strcpy(t, "COPIED ");
+    if (hi > lo) { sg_cat_u(t, hi - lo + 1u); sg_cat(t, " STEPS"); } else { sg_cat(t, "STEP "); sg_cat_u(t, lo + 1u); }
+    sq_ed.held_used = 1;
+    sp_toast(t);
+}
+static void sq_paste_held(void)
+{
+    uint32_t i, at = SQ_STEPS, n, full;
+    char t[24] = "PASTED ";
+    for (i = 0; i < SQ_STEPS && at == SQ_STEPS; i++)
+        if (sq_ed_is_held(i))
+            at = i;
+    sq_ed.held_used = 1;
+    if (!sgc.n) {
+        sp_toast("NOTHING COPIED");
+        return;
+    }
+    n = sg_paste(sq_sel_pat(), at, &full);
+    sg_cat_u(t, n); sg_cat(t, n == 1u ? " STEP" : " STEPS");
+    sp_toast(full ? "LOCK LANES FULL" : t);
+    sui.edit_at = plat_ms();
+    sq_build();
+}
+static void sq_undo_press(void)                 /* SEL + SAVE on the SEQ page: the last pattern change undone / redone */
+{
+    int r = sg_undo();
+    sqi.run_k = 0;
+    sp_toast(r < 0 ? "NOTHING TO UNDO" : r ? "UNDO PATTERN" : "REDO PATTERN");
+    sui.edit_at = plat_ms();
+    sq_build();
+}
 /* the main loop, once a frame on the SEQ page: the view follows the playing step; the grid redraws when it moved */
 static void sq_frame(uint32_t now)
 {
-    if ((sqi.copy_to || sqi.clear) && now - sqi.arm_at > 8000u) {
+    if ((sqi.copy_to || sqi.clear || sqi.rev_arm || sqi.mir_arm) && now - sqi.arm_at > 8000u) {
         sq_disarm();
         if (sui.page == SP_SEQ) sq_build();
     }
@@ -1344,6 +1494,8 @@ static void sq_draw_grid(void)
             }
             if (on && has && s->chance)
                 cv_rect(x + 9, y + 1, 2, 2, R4_BG);              /* a chance: a notch in the corner */
+            if (has && sq_cond(s))
+                cv_rect(x + 1, y + h - 3, 3, 2, on ? R4_BG : R4_DIM);   /* a trig condition: a notch below */
         }
         if (playing && sq.step == idx)
             cv_rect(x, y + h + 2, 12, 4, sy_accent(100));
@@ -1375,7 +1527,9 @@ static void sq_draw_grid(void)
     u_cat(t, "  SW "); u_int(pt->swing, u); u_cat(t, u); u_cat(t, "%");
     if (syn.seq_trn) { u_cat(t, "  "); if (syn.seq_trn > 0) u_cat(t, "+"); sq_num(u, syn.seq_trn, " ST"); u_cat(t, u); }
     ptext(10, 67, &FONT_XS, t, R4_LABEL);
-    if (sq.run && sq.in_song) {               /* the song: entry n of len, loop r of its repeats */
+    if (sq.fill) {                            /* FILL held (SEL + SEQ) */
+        ptext(230 - pwidth(&FONT_XS, "FILL"), 67, &FONT_XS, "FILL", sy_accent(100));
+    } else if (sq.run && sq.in_song) {        /* the song: entry n of len, loop r of its repeats */
         strcpy(t, "SONG "); u_int(sq.ci + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int(sq_ch.len, u); u_cat(t, u);
         u_cat(t, " x"); u_int(sq.rep_n + 1u, u); u_cat(t, u); u_cat(t, "/"); u_int(sq_ch.rep[sq.ci % SQ_CHAIN], u); u_cat(t, u);
         ptext(230 - pwidth(&FONT_XS, t), 67, &FONT_XS, t, sy_accent(100));

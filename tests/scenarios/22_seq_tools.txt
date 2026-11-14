@@ -1,0 +1,137 @@
+# The SEQ page's tools: a held step + SEQ again: its trig condition (COND); SEL + SEQ held: FILL; the fifth sub-page
+# GENERATE (TYPE, three settings; SAVE fills the pattern), the sixth PHRASE (ROTATE / TRANSPOSE at once, REVERSE /
+# MIRROR armed, SAVE does them); a held step + EDIT copies (with SEL + more steps: the range), + GLO pastes; SEL + SAVE
+# on the SEQ page undoes the last pattern change (again: redo).
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+tap SEQ
+wait 100
+expect syn_page 70
+expect seq_on 10
+# step 3 held, SEQ, SEQ: the COND page; 1:2
+key w2 down
+wait 40
+tap SEQ
+wait 40
+expect lview 5
+turn K1 1
+wait 60
+expect seq_cond3 1
+shot seq_cond.png
+tap SEQ
+wait 40
+expect lview 0
+key w2 up
+wait 60
+expect seq_plays3 1
+expect seq_cond3 1
+# step 5 to FILL; SEL + SEQ held: FILL on, the grid says so
+key w4 down
+wait 40
+tap SEQ
+turn K1 5
+wait 60
+key w4 up
+wait 60
+expect seq_cond5 5
+press SEL
+wait 20
+press SEQ
+wait 60
+expect seq_fill 1
+expect syn_page 70
+shot seq_fill.png
+release SEQ
+wait 40
+release SEL
+expect seq_fill 0
+# GENERATE (SEQ x 4 from the first sub-page): EUCLID 5 hits over the length, SAVE
+tap SEQ
+tap SEQ
+tap SEQ
+tap SEQ
+wait 60
+expect syn_page 74
+expect gen_type 0
+turn K2 1
+wait 60
+shot seq_generate.png
+tap SAVE
+wait 100
+expect seq_on 5
+expect undo_valid 1
+expect toast 1
+shot seq_generated.png
+# SEL + SAVE: undo (the bass line again), again: redo
+press SEL
+wait 20
+tap SAVE
+wait 40
+release SEL
+wait 60
+expect seq_on 10
+press SEL
+wait 20
+tap SAVE
+wait 40
+release SEL
+wait 60
+expect seq_on 5
+# SPARSE (TYPE +1) fills from the last note in the scale
+turn K1 1
+wait 60
+expect gen_type 1
+tap SAVE
+wait 100
+expect seq_on >0
+# PHRASE: ROTATE +2, TRANSPOSE +1, REVERSE armed + SAVE
+tap SEQ
+wait 60
+expect syn_page 75
+turn K1 2
+wait 60
+turn K2 1
+wait 60
+turn K3 1
+wait 60
+shot seq_phrase.png
+tap SAVE
+wait 100
+expect toast 1
+# copy step 1 .. 3 (step 1 held, SEL + step 3) and paste at 9 (step 9 held + GLO)
+tap SEQ
+wait 60
+expect syn_page 70
+key w0 down
+wait 40
+press SEL
+wait 20
+key w2 down
+wait 40
+release SEL
+tap EDIT
+wait 40
+key w2 up
+key w0 up
+wait 60
+expect clip_n 3
+key w8 down
+wait 40
+tap GLO
+wait 60
+key w8 up
+wait 60
+shot seq_pasted.png
+# the condition notches on the grid, the generated pattern kept over a power cycle
+wait 4500
+expect seq_dirty 0
+reboot
+wait 300
+expect mode 1
+expect seq_on >0

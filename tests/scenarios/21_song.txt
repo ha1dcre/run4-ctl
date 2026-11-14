@@ -54,7 +54,9 @@ expect song_ci 3
 wait 2000
 expect seq_playing 2
 expect song_ci 1
-# the grid follows the pattern playing, its line says where the song is
+# the grid follows the pattern playing, its line says where the song is (SEQ: sub-pages 5, 6, then 1)
+tap SEQ
+tap SEQ
 tap SEQ
 wait 100
 expect seq_pat 2
