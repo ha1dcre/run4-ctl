@@ -2,7 +2,7 @@
 PY ?= .venv/bin/python
 B  := build
 
-test: unit sim
+test: unit sim tools
 
 unit: $(B)/r4p_test
 	$(B)/r4p_test
@@ -14,7 +14,10 @@ $(B)/r4p_test: tests/r4p_test.c src/r4p.c src/r4p.h
 sim:
 	sh tests/run_sim.sh
 
+tools:
+	python3 tools/fake_fm1.py --selftest
+
 host:
 	$(PY) base/tools/build.py app --host
 
-.PHONY: test unit sim host
+.PHONY: test unit sim tools host

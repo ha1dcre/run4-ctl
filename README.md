@@ -21,6 +21,7 @@ computer in fm1-base's host simulator. It has not been built for or run on an FM
 | `tests/r4p_test.c` | codec unit tests |
 | `tests/scenarios/*.txt`, `tests/run_sim.sh` | host-simulator scenarios (boot, pages, input, robustness) |
 | `tests/screens/` | screenshots the simulator wrote |
+| `tools/fake_fm1.py`, `tools/coremidi.py` | a Mac stand-in for the FM-1 (virtual CoreMIDI ports "FM-1", terminal panel); standard library only |
 | `tools/fake_run4.py` | stand-in for the RUN4 app (frames as hex, simulator scripts); standard library only |
 | `base/` | fm1-base (git submodule; it brings felucca-bsp) |
 
@@ -38,6 +39,25 @@ simulator's font generation (digit widths), never the device build.
 Run a scenario by hand: `python3 tools/fake_run4.py sim tests/scenarios/02_connected_pages.txt > /tmp/s.txt &&
 app/build/host/run4ctl_host /tmp/s.txt /tmp/out` (screenshots land in `/tmp/out`). Frames as hex:
 `python3 tools/fake_run4.py hex`.
+
+## Try RUN4 without the hardware (fake FM-1)
+
+`python3 tools/fake_fm1.py` opens a virtual MIDI source and destination called **FM-1** on the Mac, answers like the
+firmware (HELLO every second until RUN4 answers, then SYNC_REQ) and turns the terminal into the panel (`?` lists the
+keys; TAB is piano mode). It prints every PAGE / VALUE / LEDS / STATUS / TOAST that RUN4 sends. To reach an iPad or
+iPhone:
+
+1. Mac: Audio MIDI Setup -> Window -> Show MIDI Studio -> the Network icon (double-click) -> in "My Sessions" tick
+   **Enabled**, and note the session name.
+2. Start `tools/fake_fm1.py`, so that "FM-1" exists; in the session window press **+** under Directories if needed.
+   The session's inputs/outputs list the ports: the session sends and receives what the virtual "FM-1" ports carry.
+3. iPad: connect to the session (RUN4 shows Network MIDI sessions among its MIDI ports, or connect in another app
+   that lists them), then enable the FM-1 port in RUN4's settings.
+
+Self-tests without MIDI: `python3 tools/fake_fm1.py --selftest` (part of `make test`); `--loopback` makes a CoreMIDI
+round trip in one process. python-rtmidi does not build here (RtMidi lacks `sem_timedwait` on this macOS), so
+`tools/coremidi.py` binds CoreMIDI through ctypes. The interactive mode was run only through a pseudo-terminal, not
+against RUN4.
 
 ## Device build (Apple silicon Mac with Docker) — not tried yet
 
