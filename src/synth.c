@@ -351,6 +351,7 @@ static int32_t syn_lock_base(uint32_t id)     /* the base value a lock overrides
     default: return syn.rev_size;
     }
 }
+static volatile uint8_t syn_shed;            /* the overload guard's step now, 0 = everything (below: syn_shed_calm) */
 /* the effects' amounts for one block, the locks on top (the render sets it once a block) */
 static struct { int32_t drive, chorus, dly_mix, dly_div, dly_fb, rev_mix, rev_size; } fxv;
 static void syn_fxv(void)
@@ -362,6 +363,8 @@ static void syn_fxv(void)
     fxv.dly_fb = syn_lkv(LK_DLYFB, syn.dly_fb);
     fxv.rev_mix = syn_lkv(LK_REVMIX, syn.rev_mix);
     fxv.rev_size = syn_lkv(LK_REVSIZE, syn.rev_size);
+    if (syn_shed >= 3u)                      /* (the overload guard's third step) */
+        fxv.chorus = fxv.dly_mix = 0;
 }
 
 /* the morph's snapshot (0 = A, 1 = B) of a setting set's values now */
@@ -452,20 +455,21 @@ static void syn_voice_off(syn_voice_t *v)
     v->key = 0;
     v->held = 0;
 }
-static syn_voice_t *syn_alloc(void)          /* a free voice, else the oldest released one, else the oldest */
+static uint32_t syn_vmax(void);
+static syn_voice_t *syn_alloc(void)          /* a free voice, else the oldest released one, else the oldest (of syn_vmax) */
 {
-    uint32_t i;
+    uint32_t i, vm = syn_vmax();
     syn_voice_t *best = 0;
-    for (i = 0; i < SYN_VOICES; i++)
+    for (i = 0; i < vm; i++)
         if (!syn_v[i].n.live)
             return &syn_v[i];
-    for (i = 0; i < SYN_VOICES; i++)
+    for (i = 0; i < vm; i++)
         if (!syn_v[i].key && !syn_v[i].held && (!best || syn_v[i].age < best->age))
             best = &syn_v[i];
     if (best)
         return best;
     best = &syn_v[0];
-    for (i = 1; i < SYN_VOICES; i++)
+    for (i = 1; i < vm; i++)
         if (syn_v[i].age < best->age)
             best = &syn_v[i];
     return best;
@@ -664,6 +668,48 @@ static void syn_clock(uint32_t n)
 }
 static void syn_seq_start(int run) { sq_start(run); }
 
+/* --------------------------------------------------------- overload guard --- */
+/* When a render runs late (fm1-base calls app_overload when a block took over 90 % of its time: device/main_fm1.c), the
+ * sound sheds load a step at a time: 1 the reverb on two of its four combs, 2 six voices, 3 no chorus and no delay, 4
+ * four voices. A step comes back after SHED_CALM_MS of renders under SHED_CALM_PM of their time (hysteresis: well
+ * below where it triggered); the effects' lines start from silence again. The render's own time is measured by the
+ * app (app.c app_render) and handed to syn_shed_calm. Audio context; the main loop only reads syn_shed. */
+#define SHED_MAX 4u
+#define SHED_CALM_MS 3000u
+#define SHED_CALM_PM 500u                    /* 50 % of a block's time */
+static volatile uint8_t syn_shed_hit;        /* app_overload: a late render since the last block */
+static uint32_t syn_shed_calm_smp, syn_shed_peak;
+static uint32_t syn_vmax(void) { return syn_shed >= 4u ? 4u : syn_shed >= 2u ? 6u : 8u; }
+static void syn_shed_overload(void) { syn_shed_hit = 1; }
+static void syn_shed_step(void);             /* (below the effects: their lines) */
+/* once a render of n frames that took load_pm per mille of its time (0..): a late one sheds, calm ones bring back */
+static void syn_shed_calm(uint32_t n, uint32_t load_pm)
+{
+    if (syn_shed_hit) {
+        syn_shed_hit = 0;
+        syn_shed_calm_smp = 0;
+        if (syn_shed < SHED_MAX) {
+            syn_shed++;
+            if (syn_shed > syn_shed_peak)
+                syn_shed_peak = syn_shed;
+            syn_shed_step();
+        }
+        return;
+    }
+    if (!syn_shed)
+        return;
+    if (load_pm >= SHED_CALM_PM) {
+        syn_shed_calm_smp = 0;
+        return;
+    }
+    syn_shed_calm_smp += n;
+    if (syn_shed_calm_smp >= SHED_CALM_MS * 441u / 10u) {
+        syn_shed_calm_smp = 0;
+        syn_shed--;
+        syn_shed_step();
+    }
+}
+
 /* ------------------------------------------------------------------ fx --- */
 #define DLY_N 16384u                         /* the delay line: 371 ms; longer times are cut to it */
 #define CHO_N 1024u
@@ -724,11 +770,11 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
         r += (int32_t)((int64_t)dr * fxv.dly_mix / 100);
     }
     if (fxv.rev_mix) {                         /* 4 parallel damped combs, 2 allpasses, per channel */
-        uint32_t ch, k, ty = syn.rev_type % REV_N;
+        uint32_t ch, k, ty = syn.rev_type % REV_N, nc = syn_shed ? 2u : 4u;     /* (shed: two combs, twice as loud) */
         int32_t fbk = 18000 + fxv.rev_size * 130 + (int32_t)ty * 1500;    /* Q15 feedback, ~0.55 .. 0.95 */
         for (ch = 0; ch < 2u; ch++) {
             int32_t s = ((ch ? r : l) >> 2), acc = 0;
-            for (k = 0; k < 4u; k++) {
+            for (k = 0; k < nc; k++) {
                 uint32_t len = RV_LEN[ty][k] + (ch ? 23u : 0u);
                 uint16_t *ci = &fx_st.comb_i[ch][k];
                 int32_t y = fx_comb[ch][k][*ci], lp;
@@ -739,7 +785,7 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
                     *ci = 0;
                 acc += y;
             }
-            acc = acc << 6;                    /* 4 combs of int16 -> Q23 ~ (acc << 8) / 4 */
+            acc = acc << (nc == 4u ? 6 : 7);   /* 4 combs of int16 -> Q23 ~ (acc << 8) / 4 */
             for (k = 0; k < 2u; k++) {         /* allpass g = 0.5 */
                 uint16_t *ai = &fx_st.ap_i[ch][k];
                 int32_t d = fx_ap[ch][k][*ai] << 8, y = d - acc / 2;
@@ -755,6 +801,24 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr)
     }
     *outl = l;
     *outr = r;
+}
+
+/* a shed step taken or given back (audio context): voices over the limit stop; effects coming back start silent */
+static void syn_shed_step(void)
+{
+    uint32_t i, vm = syn_vmax();
+    for (i = vm; i < SYN_VOICES; i++)
+        syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0;
+    if (syn_shed == 0u)                      /* the two combs that rested */
+        for (i = 0; i < 2u; i++) {
+            memset(fx_comb[i][2], 0, sizeof fx_comb[i][2]);
+            memset(fx_comb[i][3], 0, sizeof fx_comb[i][3]);
+            fx_st.comb_lp[i][2] = fx_st.comb_lp[i][3] = 0;
+        }
+    if (syn_shed == 2u) {                    /* (from 3: the chorus and the delay come back) */
+        memset(fx_dly, 0, sizeof fx_dly);
+        memset(fx_cho, 0, sizeof fx_cho);
+    }
 }
 
 /* ---------------------------------------------------------- the render --- */
@@ -1188,6 +1252,21 @@ static uint32_t syn_mutate(uint8_t *v, uint32_t amt, uint32_t *r)
 }
 
 #include "synth_gen.c"                       /* the SEQ page's generators and phrase tools */
+
+/* ------------------------------------------------------------ MIDI learn --- */
+/* The rules of MIDI learn (app.c / synth_learn.c keep the bindings): which CCs may be learned (Mutable Dreams'
+ * midi_learn.inc learn_safe, Kid Bunka, MIT OR GPL-3.0-only: 1..119 without data entry 6, the LSBs 32..63, the pedal 64
+ * and the (N)RPN / increment numbers 96..101), and the pick-up (soft takeover): a controller changes a value only once
+ * it has come near it (within tol) or crossed it since its last message, so a knob at another position never makes the
+ * sound jump. */
+#define ML_NONE (-32768)
+static int syn_ml_safe(uint32_t cc) { return cc >= 1u && cc < 120u && cc != 6u && cc != 64u && !(cc >= 32u && cc <= 63u) && !(cc >= 96u && cc <= 101u); }
+static int syn_ml_pickup(int32_t v, int32_t cur, int32_t last, int32_t tol)
+{
+    if ((v > cur ? v - cur : cur - v) <= tol)
+        return 1;
+    return last != ML_NONE && ((last <= cur && v >= cur) || (last >= cur && v <= cur));
+}
 
 static void syn_init(void)
 {

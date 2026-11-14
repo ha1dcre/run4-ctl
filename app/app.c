@@ -21,8 +21,19 @@ enum { MODE_RUN4 = 0, MODE_SYNTH = 1 };      /* SEL + HOME switches (docs/PROTOC
 /* the SETUP page's settings (docs/PROTOCOL.md "Firmware-local"): kept in the store, so they survive a power cycle */
 enum { VEL_SOFT, VEL_NORMAL, VEL_HARD, VEL_FIXED, VEL_N };
 enum { AT_OFF, AT_POLY, AT_CHANNEL, AT_N };
-typedef struct { uint8_t ver, vel, at, led, chan, mode; } setup_t;   /* mode: the mode the FM-1 boots into */       /* chan 0..15 = MIDI channel 1..16; led 0 off, 1 low, 2 high */
-#define SETUP_VER 1
+#define ML_N 16                          /* MIDI learn's bindings (src/synth_learn.c) */
+typedef struct { uint8_t cc, tgt, opch; } ml_bind_t;   /* cc 0 = free; tgt: page << 4 | sub-page << 2 | knob; opch: the
+                                                        * operator (EDIT / ENV) | the channel 1..16 << 3 */
+typedef struct {
+    uint8_t ver, vel, at, led, chan, mode;   /* mode: the mode the FM-1 boots into; chan 0..15 = MIDI channel 1..16; led 0
+                                              * off, 1 low, 2 high (layout 1 ends here: 6 bytes) */
+    uint8_t local;                           /* layout 2: LOCAL OUT, 0 ON, 1 USB ONLY (while a computer is connected) */
+    uint8_t ml_def;                          /* the default CC map on (1) */
+    ml_bind_t ml[ML_N];                      /* MIDI learn */
+} setup_t;
+#define SETUP_VER 2
+#define SETUP_V1_SIZE 6u
+_Static_assert(sizeof(setup_t) == 56u, "SETUP store layout");
 static const int8_t VEL_CURVE[VEL_N] = {-3, 0, 3, 0};              /* touch_curve(): needs tuning on the device */
 static setup_t setup;
 static uint8_t mode;                                              /* MODE_RUN4 / MODE_SYNTH */
@@ -58,9 +69,13 @@ static struct {
     uint8_t want_hvstate;                /* HV_STATE */
     uint8_t names_next;                  /* the next VOICE_NAMES frame's first voice; 255 = none owed */
     uint8_t vget1;                       /* VOICE_DATA for voice vget1 - 1 (127 + 1: the host voice's); 0 = none */
-    uint8_t setup_sub;                   /* the SETUP page's sub-page: 0 the settings, 1 VOICE BACKUP */
+    uint8_t setup_sub;                   /* the SETUP page's sub-page: 0 the settings, 1 VOICE BACKUP, 2 AUDIO, 3 MIDI LEARN */
+    uint8_t setup_owed;                  /* the SETUP object changed outside the page (a learn): saved when it may be */
     uint32_t rend_ticks, rend_frames;    /* the render's time (host simulator: expect render_permille) */
+    uint32_t overloads;                  /* app_overload calls (late renders) */
+    uint8_t shed_told, shed_shown;       /* the overload guard's toast said; the step the AUDIO page shows */
 } ctl;
+static uint8_t bk_hold;                  /* a USB backup streams: nothing is saved meanwhile (app_backup_hold) */
 
 /* protocol 1.3, the host voice: RUN4 plays this engine in RUN4 mode (docs/PROTOCOL.md "Host voice"). Its settings
  * live in `syn` while RUN4 mode is on, in syn_alt while Synth mode is (synth.c syn_swap); RAM only. */
@@ -97,19 +112,37 @@ static uint8_t key_velocity(uint32_t k)
 /* ------------------------------------------------------------------ SETUP --- */
 static void setup_defaults(void)
 {
-    setup = (setup_t){SETUP_VER, VEL_NORMAL, AT_OFF, 2, 0, MODE_RUN4};
+    memset(&setup, 0, sizeof setup);
+    setup.ver = SETUP_VER; setup.vel = VEL_NORMAL; setup.at = AT_OFF; setup.led = 2; setup.chan = 0; setup.mode = MODE_RUN4;
+    setup.local = 0;
+    setup.ml_def = 1;
 }
 static void setup_apply(void)
 {
     touch_curve(VEL_CURVE[setup.vel]);
 }
-static void setup_load(void)
+static void setup_load(void)                           /* layout 2, or layout 1 (6 bytes: the rest at its defaults) */
 {
     setup_t t;
+    int n;
+    uint32_t i;
     setup_defaults();
-    if (plat_store_load(OBJ_SETUP, &t, sizeof t) == (int)sizeof t && t.ver == SETUP_VER && t.vel < VEL_N && t.at < AT_N &&
-        t.led <= 2 && t.chan < 16 && t.mode <= MODE_SYNTH)
+    n = plat_store_load(OBJ_SETUP, &t, sizeof t);
+    if (n == (int)SETUP_V1_SIZE && t.ver == 1u) {
+        memcpy((uint8_t *)&t + SETUP_V1_SIZE, (const uint8_t *)&setup + SETUP_V1_SIZE, sizeof t - SETUP_V1_SIZE);
+        t.ver = SETUP_VER;
+        n = (int)sizeof t;
+    }
+    if (n == (int)sizeof t && t.ver == SETUP_VER && t.vel < VEL_N && t.at < AT_N && t.led <= 2 && t.chan < 16 &&
+        t.mode <= MODE_SYNTH) {
+        t.local = t.local > 1u ? 0u : t.local;
+        t.ml_def = t.ml_def > 1u ? 1u : t.ml_def;
+        for (i = 0; i < ML_N; i++)                      /* a binding out of its ranges is dropped */
+            if (t.ml[i].cc && (!syn_ml_safe(t.ml[i].cc) || (t.ml[i].tgt >> 4) >= SP_N || (t.ml[i].opch & 7u) > 5u ||
+                               (t.ml[i].opch >> 3) < 1u || (t.ml[i].opch >> 3) > 16u))
+                memset(&t.ml[i], 0, sizeof t.ml[i]);
         setup = t;
+    }
     setup_apply();
 }
 static uint32_t bk_user_count(void)
@@ -142,6 +175,23 @@ static void setup_fill_backup(r4p_page_t *p)         /* SETUP's second sub-page:
     u_int(n, u); strcpy(t, u); u_cat(t, "/32");
     strcpy(p->slot[2].text, t);
 }
+static uint32_t shed_level(void);
+static void setup_fill_audio(r4p_page_t *p)          /* SETUP's third sub-page: AUDIO */
+{
+    char t[16], u[12];
+    strcpy(p->title, "AUDIO");
+    strcpy(p->slot[0].name, "LOCAL OUT"); p->slot[0].kind = R4P_KIND_ENUM; p->slot[0].value = (uint16_t)(2 << 7 | setup.local);
+    strcpy(p->slot[0].text, setup.local ? "USB ONLY" : "ON");
+    strcpy(p->slot[1].name, "USB CHANNELS"); p->slot[1].kind = R4P_KIND_UNI;
+    p->slot[1].value = (uint16_t)(FM1B_UAC_CH * R4P_V14_MAX / 10u);
+    u_int(FM1B_UAC_CH, u); strcpy(t, u); u_cat(t, FM1B_UAC_CH > 2 ? " STEMS" : " STEREO");
+    strcpy(p->slot[1].text, t);
+    strcpy(p->slot[2].name, "LOAD SHED"); p->slot[2].kind = R4P_KIND_UNI;
+    p->slot[2].value = (uint16_t)(shed_level() * R4P_V14_MAX / 4u);
+    if (shed_level()) { strcpy(t, "STEP "); u_int(shed_level(), u); u_cat(t, u); } else strcpy(t, "NONE");
+    strcpy(p->slot[2].text, t);
+}
+static void setup_fill_learn(r4p_page_t *p);
 static void setup_fill(void)                          /* the SETUP page: four tiles, the same look as the host's pages */
 {
     static const char *const VN[VEL_N] = {"SOFT", "NORMAL", "HARD", "FIXED 100"};
@@ -154,10 +204,18 @@ static void setup_fill(void)                          /* the SETUP page: four ti
     strcpy(p->track, "LOCAL");
     p->r = 127; p->g = 70; p->b = 20;
     if (mode == MODE_SYNTH) { p->r = SY_AR; p->g = SY_AG; p->b = SY_AB; }
-    p->page_count = 2;
+    p->page_count = 4;
     p->page_idx = ctl.setup_sub;
-    if (ctl.setup_sub) {
+    if (ctl.setup_sub == 1) {
         setup_fill_backup(p);
+        return;
+    }
+    if (ctl.setup_sub == 2) {
+        setup_fill_audio(p);
+        return;
+    }
+    if (ctl.setup_sub == 3) {
+        setup_fill_learn(p);
         return;
     }
     strcpy(p->slot[0].name, "VELOCITY");   p->slot[0].kind = R4P_KIND_ENUM; p->slot[0].value = (uint16_t)(VEL_N << 7 | setup.vel);
@@ -171,6 +229,8 @@ static void setup_fill(void)                          /* the SETUP page: four ti
     strcpy(t, "CH "); u_int((unsigned)setup.chan + 1u, t + 3);
     strcpy(p->slot[3].text, t);
 }
+static void ml_clear_disarm(void);
+static void setup_owed_frame(void);
 static void setup_open(int on)
 {
     if (on == ui.setup)
@@ -178,14 +238,17 @@ static void setup_open(int on)
     ui.setup = (uint8_t)on;
     if (bk.st == BK_ARMED || bk.st == BK_CONFIRM)    /* an armed BACKUP or a restore not yet written is forgotten */
         bk.st = BK_IDLE;
+    ml_clear_disarm();
     if (on) {
         ctl.setup_sub = 0;
         setup_fill();
         ctl.setup_dirty = 0;
         memset(ctl.setup_acc, 0, sizeof ctl.setup_acc);
-    } else if (ctl.setup_dirty) {
+    } else if (ctl.setup_dirty && !bk_hold) {
         plat_store_save(OBJ_SETUP, &setup, sizeof setup);
-        ctl.setup_dirty = 0;
+        ctl.setup_dirty = ctl.setup_owed = 0;
+    } else if (ctl.setup_dirty) {
+        ctl.setup_owed = 1;                            /* (a backup streams: saved when it is over) */
     }
     ui.dirty = D_ALL;
 }
@@ -199,8 +262,26 @@ static void setup_refresh(void)                        /* the backup's state cha
 }
 static int bk_host(void);
 static void bk_restore_start(void);
+static void setup_learn_turn(int which, int d);
+static void local_out_apply(void);
 static void setup_turn(int which, int d)               /* K1..K4: one step per detent */
 {
+    if (ctl.setup_sub == 2) {                           /* AUDIO: K1 LOCAL OUT (the others say how things are) */
+        if (which == 0) {
+            setup.local = (uint8_t)(d > 0);
+            ctl.setup_dirty = 1;
+            local_out_apply();
+        }
+        setup_fill();
+        ui.dirty |= D_TILES;
+        return;
+    }
+    if (ctl.setup_sub == 3) {                           /* MIDI LEARN */
+        setup_learn_turn(which, d);
+        setup_fill();
+        ui.dirty |= D_TILES;
+        return;
+    }
     if (ctl.setup_sub) {                                /* VOICE BACKUP: K1 arms BACKUP (SAVE sends), K2 fetches */
         if (which == 0 && (bk.st == BK_IDLE || bk.st == BK_CONFIRM)) {
             if (bk_host()) {
@@ -654,9 +735,14 @@ static void jobs_send(uint32_t now)
         break;
     }
 }
+static void setup_learn_save(void);
 static void setup_save_press(void)                     /* SAVE on the SETUP page: VOICE BACKUP's armed action */
 {
-    if (!ctl.setup_sub)
+    if (ctl.setup_sub == 3) {                           /* MIDI LEARN: an armed CLEAR */
+        setup_learn_save();
+        return;
+    }
+    if (ctl.setup_sub != 1)
         return;
     if (bk.st == BK_ARMED) {
         if (!bk_host()) {
@@ -678,12 +764,67 @@ static void setup_enc(uint32_t k, int d)               /* the SETUP page's encod
         for (; d; d += d > 0 ? -1 : 1)
             setup_turn((int)k - 3, d > 0 ? 1 : -1);
     } else if ((k == 0 || k == 2) && d) {
-        ctl.setup_sub ^= 1u;
+        ctl.setup_sub = (uint8_t)((ctl.setup_sub + (d > 0 ? 1u : 3u)) % 4u);   /* four sub-pages, round */
         if (bk.st == BK_ARMED)
             bk.st = BK_IDLE;
         setup_fill();
         ui.dirty |= D_HEAD | D_TILES | D_FOOT;
     }
+}
+
+/* ------------------------------------------------------------ MIDI learn --- */
+#include "synth_learn.c"
+static void setup_fill_learn(r4p_page_t *p)          /* SETUP's fourth sub-page: MIDI LEARN (the bindings one by one) */
+{
+    const ml_bind_t *b = &setup.ml[ml.slot % ML_N];
+    char t[24], u[12];
+    strcpy(p->title, "MIDI LEARN");
+    strcpy(p->slot[0].name, "BINDING"); p->slot[0].kind = R4P_KIND_UNI;
+    p->slot[0].value = (uint16_t)(ml.slot * R4P_V14_MAX / (ML_N - 1u));
+    u_int(ml.slot + 1u, u); strcpy(t, u); u_cat(t, "/16");
+    strcpy(p->slot[0].text, t);
+    if (b->cc) {
+        strcpy(t, "CC "); u_int(b->cc, u); u_cat(t, u); u_cat(t, " CH "); u_int(b->opch >> 3, u); u_cat(t, u);
+        strcpy(p->slot[1].name, t);
+        ml_name(b->tgt, b->opch & 7u, p->slot[1].text);
+    } else {
+        strcpy(p->slot[1].name, "NO CC");
+        strcpy(p->slot[1].text, "--");
+    }
+    p->slot[1].kind = R4P_KIND_UNI;
+    p->slot[1].value = (uint16_t)(b->cc * R4P_V14_MAX / 127u);
+    strcpy(p->slot[2].name, "DEFAULT CCS"); p->slot[2].kind = R4P_KIND_TOGGLE; p->slot[2].value = setup.ml_def;
+    strcpy(p->slot[2].text, setup.ml_def ? "ON" : "OFF");
+    strcpy(p->slot[3].name, "CLEAR"); p->slot[3].kind = R4P_KIND_TOGGLE; p->slot[3].value = ml.clear_arm;
+    u_int(ml_count(), u); strcpy(t, ml.clear_arm ? "SURE?" : u); if (!ml.clear_arm) u_cat(t, " SET");
+    strcpy(p->slot[3].text, t);
+}
+static void setup_learn_turn(int which, int d)
+{
+    if (which == 0) {
+        int x = (int)ml.slot + d;
+        ml.slot = (uint8_t)(x < 0 ? 0 : x >= ML_N ? ML_N - 1 : x);
+        ml.clear_arm = 0;
+    } else if (which == 2) {
+        setup.ml_def = (uint8_t)(d > 0);
+        ctl.setup_dirty = 1;
+    } else if (which == 3) {
+        ml.clear_arm = (uint8_t)(d > 0 && setup.ml[ml.slot % ML_N].cc);
+        if (ml.clear_arm)
+            ui_toast("SAVE: CLEAR BINDING", 15);
+    }
+}
+static void ml_clear_disarm(void) { ml.clear_arm = 0; }
+static void setup_learn_save(void)
+{
+    if (!ml.clear_arm)
+        return;
+    memset(&setup.ml[ml.slot % ML_N], 0, sizeof setup.ml[0]);
+    ml.clear_arm = 0;
+    ctl.setup_dirty = 1;
+    ui_toast("BINDING CLEARED", 15);
+    setup_fill();
+    ui.dirty |= D_TILES;
 }
 
 static void octave_step(int d);
@@ -724,7 +865,7 @@ static void mode_switch(uint8_t to)
                                                     * host voice's; nothing of the one rings on in the other */
     mode = to;
     setup.mode = to;
-    plat_store_save(OBJ_SETUP, &setup, sizeof setup);
+    if (bk_hold) ctl.setup_owed = 1; else plat_store_save(OBJ_SETUP, &setup, sizeof setup);
     ui.setup = 0;
     ui.list_open = 0;
     ui_connect(0);                                 /* a new HELLO, with the new mode, until the host answers */
@@ -745,6 +886,14 @@ static int synth_step_rec(void)                /* step recording: the SEQ page, 
 static void synth_button(uint32_t k)
 {
     int shift = (int)((ctl.btn >> B_SEL) & 1u);
+    if (ml.arm && k != B_SEL) {                    /* learning: SAVE unlearns the tile, anything else leaves it */
+        if (k == B_SAVE) {
+            ml_unlearn_armed();
+            return;
+        }
+        ml.arm = 0;
+        sp_toast("LEARN OFF");
+    }
     if (sui.page == SP_SEQ && sq_ed.held >= 0 && k != B_SAVE && k != B_PLAY && k != B_REC && k != B_OCTDN && k != B_OCTUP) {
         /* a step held on the grid: a page button picks which of its parameters K1..K4 lock (SEQ: the step's own) */
         if (k == B_HOME) sq_ed.lview = 1;
@@ -945,7 +1094,9 @@ static void synth_frame(uint32_t keys, uint32_t now)
             setup_enc(k, d);
             continue;
         }
-        if (k >= 3) {
+        if (k >= 3 && (ctl.btn >> B_SEL & 1u) && sui.page != SP_SEQ) {
+            ml_arm_tile(k - 3u);                         /* SEL + K1..K4: MIDI learn for that tile */
+        } else if (k >= 3) {
             sp_turn(k - 3u, d);
         } else if (k == 0 && sui.page == SP_SEQ) {       /* SELECT on the SEQ page: the step page */
             int v = (int)sq_ed.view + (d > 0 ? 1 : -1);
@@ -1000,6 +1151,7 @@ static void synth_frame(uint32_t keys, uint32_t now)
     /* a few seconds after the last edit, and only while the sequencer is stopped: a flash write stops the sound */
     if ((sui.dirty_set || sq_dirty) && !sq.run && sq_ed.held < 0 && now - sui.edit_at > 4000u)
         syn_save_all();
+    ml_frame(now);
     sq_frame(now);
     sp_live(now);
 }
@@ -1155,6 +1307,7 @@ static void midi_pump(void)
         case 0xB0u:
             if (d1 == 64u) syn_apply_event(&(syn_ev_t){5, (uint8_t)d2, 0, 0});
             else if (d1 == 123u || d1 == 120u) syn_apply_event(&(syn_ev_t){3, 0, 0, 0});
+            else if (mode == MODE_SYNTH) ml_cc_in(ch, d1, d2);   /* MIDI learn and the default CCs (main loop) */
             break;
         case 0xE0u:
             syn_apply_event(&(syn_ev_t){4, (uint8_t)d1, (uint8_t)d2, 0});
@@ -1382,6 +1535,54 @@ static void input(void)
         send_pot();
 }
 
+/* ------------------------------------------------------- local out, load --- */
+/* LOCAL OUT: USB ONLY (SETUP > AUDIO), while a computer is connected over USB: the render goes to the USB audio input
+ * at full level (fm1-base's USB AUDIO full: plat_usb_audio_full) and the speaker and headphones get nothing
+ * (APP_GAIN 0 after the recording's tap), so RUN4 records the FM-1 without it being heard twice. fm1-base mixes the
+ * computer's own audio in before that gain, so it is muted on the FM-1 too: listen on the iPad. */
+static volatile uint8_t local_off;
+uint32_t app_gain(uint32_t m) { return local_off ? 0u : m * m >> 12; }
+static void local_out_apply(void)
+{
+    uint8_t off = (uint8_t)(setup.local && plat_usb_session() != 0);
+    if (off != local_off) {
+        local_off = off;
+        plat_usb_audio_full(off);
+    }
+}
+static uint32_t shed_level(void) { return syn_shed; }
+/* the overload guard (synth.c syn_shed_*): fm1-base calls this from the audio interrupt when a render took over 90 %
+ * of its time; the render sheds a step at its next block. Says so once (a toast) until it is all back */
+void app_overload(void)
+{
+    ctl.overloads++;
+    syn_shed_overload();
+}
+static void shed_frame(void)
+{
+    if (syn_shed && !ctl.shed_told) {
+        ctl.shed_told = 1;
+        ui_toast("CPU HIGH: SOUND LIGHTER", 20);
+    } else if (!syn_shed) {
+        ctl.shed_told = 0;
+    }
+    if (ui.setup && ctl.setup_sub == 2 && ctl.shed_shown != syn_shed) {   /* (the AUDIO page shows the step) */
+        ctl.shed_shown = syn_shed;
+        setup_fill();
+        ui.dirty |= D_TILES;
+    }
+}
+/* the SETUP object changed outside its page (a MIDI learn): saved when no sequence plays (a flash write stops the sound
+ * for a moment) and no backup holds the store */
+static void setup_owed_frame(void)
+{
+    if (ctl.setup_owed && !ui.setup && !sq.run && !bk_hold) {
+        ctl.setup_owed = 0;
+        ctl.setup_dirty = 0;
+        plat_store_save(OBJ_SETUP, &setup, sizeof setup);
+    }
+}
+
 /* the lights: what the host sent; blink at 2 Hz; without a host the held keys light themselves */
 static void lights(void)
 {
@@ -1513,6 +1714,9 @@ void app_init(void)
     memset(&bk, 0, sizeof bk);
     ctl.names_next = 255;
     syn_host_defaults(&syn_alt);                       /* 1.3: the host voice's settings, parked */
+    ml_init();
+    bk_hold = 0;
+    local_off = 0;
     if (mode == MODE_RUN4)
         syn_swap();                                    /* RUN4 mode: they are the ones that sound */
 }
@@ -1523,12 +1727,16 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
     /* Synth mode: the FM voices; RUN4 mode: the host voice while it is on (and until its last note has rung out).
      * MASTER is the volume either way, as for the computer's own audio (base/device/uac_mix.h) */
     if (mode == MODE_SYNTH || hv.on || syn_active_voices) {
-        uint32_t t0 = plat_ticks24();
+        uint32_t t0 = plat_ticks24(), dt;
         syn_render(lr, n, master_q12);
-        ctl.rend_ticks += plat_ticks24() - t0;
+        dt = plat_ticks24() - t0;
+        ctl.rend_ticks += dt;
         ctl.rend_frames += n;
+        /* the overload guard: this block's share of its time (n frames at 44.1 kHz), per mille */
+        syn_shed_calm(n, (uint32_t)((uint64_t)dt * 44100u / PLAT_TICKS_PER_US / 1000u / n));
         return;
     }
+    syn_shed_calm(n, 0);
     for (i = 0; i < 2u * n; i++)                       /* RUN4 mode without it: a controller makes no sound */
         lr[i] = 0;
 }
@@ -1553,6 +1761,9 @@ void app_ui_init(void)
 void app_frame(void)
 {
     input();
+    local_out_apply();
+    shed_frame();
+    setup_owed_frame();
     lights();
     ui_draw();
 }
@@ -1568,6 +1779,14 @@ int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, c
     static uint8_t by[8300];
     size_t n = 0, i;
     const char *p;
+    if (!strcmp(cmd, "overload")) {                    /* overload N: N late renders (app_overload, as the device's) */
+        int k, m = a ? atoi(a) : 1;
+        for (k = 0; k < m; k++) {
+            app_overload();
+            run_ms(6);
+        }
+        return 1;
+    }
     if (strcmp(cmd, "blesx"))
         return 0;
     p = strstr(plat_host_line, "blesx") + 5;
@@ -1649,6 +1868,18 @@ int app_expect(const char *what, int *got)
         *got = sq_lock_get(sq_sel_pat(), (uint32_t)(atoi(what + 4) - 1) & 63u, (uint32_t)atoi(strchr(what, '_') + 1));
     else if (!strcmp(what, "lview")) *got = sq_ed.lview;
     else if (!strcmp(what, "seq_fill")) *got = sq.fill;
+    else if (!strcmp(what, "ml_count")) *got = (int)ml_count();                /* MIDI learn */
+    else if (!strcmp(what, "ml_arm")) *got = ml.arm != 0;
+    else if (!strcmp(what, "ml_applied")) *got = (int)ml.applied;
+    else if (!strcmp(what, "ml_def")) *got = setup.ml_def;
+    else if (!strncmp(what, "ml_cc", 5) && what[5]) *got = setup.ml[(atoi(what + 5) - 1) & 15].cc;
+    else if (!strcmp(what, "set_local")) *got = setup.local;
+    else if (!strcmp(what, "local_off")) *got = local_off;
+    else if (!strcmp(what, "shed")) *got = syn_shed;
+    else if (!strcmp(what, "overloads")) *got = (int)ctl.overloads;
+    else if (!strcmp(what, "syn_bright")) *got = syn.bright;
+    else if (!strcmp(what, "syn_rev")) *got = syn.rev_mix;
+    else if (!strcmp(what, "syn_lfo_pmd")) *got = syn.cur[FP_LPMD];
     else if (!strcmp(what, "gen_type")) *got = sgg.gen;
     else if (!strcmp(what, "undo_valid")) *got = sgu.valid;
     else if (!strcmp(what, "clip_n")) *got = sgc.n;

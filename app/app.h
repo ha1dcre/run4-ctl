@@ -11,6 +11,8 @@
 #define APP_TOUCH                        /* key velocity and pressure (lib/touch.h); the SETUP page sets how they are used */
 #define APP_SYSEX_BYTE                   /* app_sysex_byte: Synth mode reads DX7 bank dumps that outgrow the SysEx buffer */
 #define APP_SYSEX                        /* the protocol rides on SysEx: app_sysex gets F0 7D 52 34 .. frames */
+#define APP_OVERLOAD                     /* app_overload: a render took over 90 % of its time (the overload guard) */
+#define APP_GAIN(m) app_gain(m)          /* MASTER's gain; 0 with LOCAL OUT: USB ONLY (the USB recording at full level) */
 
 /* the store: the platform's panel calibration, our SETUP page (setup_t, app.c), and Synth mode's settings and its two
  * banks of 16 user voices (src/synth.c) */
@@ -28,6 +30,8 @@ void app_input_only(void);
 void app_say(const char *a, const char *b);
 int app_sysex(const uint8_t *p, uint32_t n);
 void app_sysex_byte(uint8_t b);
+void app_overload(void);
+uint32_t app_gain(uint32_t m);
 
 #define APP_HOST_CMD                     /* the simulator's "blesx HEX": a SysEx frame in over Bluetooth, as USB-MIDI packets */
 int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, const char *d);

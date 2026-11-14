@@ -1165,7 +1165,8 @@ static void row_tile(int32_t x, const r4p_slot_t *s, int hot, int32_t base)
 {
     static const char *const SHORT[][2] = {{"AFTERTOUCH", "AFTERTCH"}, {"KEY CHANNEL", "KEY CH"}, {"BEND RANGE", "BEND"},
                                            {"REVERB TYPE", "REV TYPE"}, {"REVERB SIZE", "REV SIZE"}, {"DELAY FDBK", "DLY FDBK"},
-                                           {"DELAY TIME", "DLY TIME"}, {"USER VOICES", "VOICES"}};
+                                           {"DELAY TIME", "DLY TIME"}, {"USER VOICES", "VOICES"}, {"DEFAULT CCS", "DEF CCS"},
+                                           {"USB CHANNELS", "USB CH"}};
     int32_t w = 55, bw = 44, bx = x + 7, by = 66, fill, n, i;
     uint16_t ac = hot ? sy_accent(100) : SY_BAR;
     const felucca_font_t *f = pwidth(&FONT_M, s->text) <= w - 9 ? &FONT_M : pwidth(&FONT_B, s->text) <= w - 9 ? &FONT_B : &FONT_XS;

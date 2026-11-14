@@ -631,6 +631,54 @@ static void morph_tests(void)
     syn_dirty = 1;
     run_small(256);
 }
+/* MIDI learn's rules; the overload guard's steps */
+static void learn_shed_tests(void)
+{
+    uint32_t i, ok = 1;
+    int32_t v;
+    CHECK(syn_ml_safe(1) && syn_ml_safe(74) && syn_ml_safe(119) && syn_ml_safe(102));
+    CHECK(!syn_ml_safe(0) && !syn_ml_safe(6) && !syn_ml_safe(32) && !syn_ml_safe(63) && !syn_ml_safe(64) && !syn_ml_safe(96) &&
+          !syn_ml_safe(101) && !syn_ml_safe(120) && !syn_ml_safe(127));
+    CHECK(syn_ml_pickup(50, 52, ML_NONE, 2) && !syn_ml_pickup(40, 52, ML_NONE, 2));
+    CHECK(syn_ml_pickup(60, 52, 40, 2) && syn_ml_pickup(40, 52, 60, 2) && !syn_ml_pickup(45, 52, 40, 2));   /* crossed */
+    /* the guard: a late render, a step; at 4 the voices are 4 (the others stopped), effects 3 and up off */
+    syn_event(6, 0, 0, 0);
+    run_small(256);
+    CHECK(syn_shed == 0 && syn_vmax() == 8);
+    for (i = 0; i < 8; i++) syn_event(1, (uint8_t)(48 + i), 100, 0);
+    run_small(256);
+    CHECK(syn_active_voices == 8);
+    syn_shed_overload(); syn_shed_calm(256, 950);
+    CHECK(syn_shed == 1 && syn_vmax() == 8);
+    syn_shed_overload(); syn_shed_calm(256, 950);
+    CHECK(syn_shed == 2 && syn_vmax() == 6);
+    run_small(256);
+    CHECK(syn_active_voices <= 6);
+    syn.chorus = 50; syn.dly_mix = 50;
+    syn_shed_overload(); syn_shed_calm(256, 950);
+    syn_fxv();
+    CHECK(syn_shed == 3 && fxv.chorus == 0 && fxv.dly_mix == 0);
+    syn_shed_overload(); syn_shed_calm(256, 950);
+    syn_shed_overload(); syn_shed_calm(256, 950);
+    CHECK(syn_shed == 4 && syn_vmax() == 4);
+    for (i = 0; i < 8; i++) syn_event(1, (uint8_t)(60 + i), 100, 0);
+    run_small(256);
+    for (i = 4; i < SYN_VOICES; i++) ok &= !syn_v[i].n.live;
+    CHECK(ok && syn_active_voices <= 4);
+    /* calm: busy renders keep it; 3 s under half the time, a step back */
+    for (i = 0; i < 1000; i++) syn_shed_calm(256, 700);
+    CHECK(syn_shed == 4);
+    for (i = 0; i < (3000u * 441u / 10u) / 256u + 1u; i++) syn_shed_calm(256, 200);
+    CHECK(syn_shed == 3);
+    for (i = 0; i < 4u * ((3000u * 441u / 10u) / 256u + 1u); i++) syn_shed_calm(256, 200);
+    syn_fxv();
+    CHECK(syn_shed == 0 && fxv.chorus == 50 && syn_vmax() == 8);
+    syn.chorus = 20; syn.dly_mix = 0;
+    syn_event(6, 0, 0, 0);
+    run_small(256);
+    v = syn_shed_peak;
+    printf("  learn rules, overload guard: 4 steps and back (peak %d)\n", (int)v);
+}
 static void cond_gen_tests(void)
 {
     sq_pat_t *p = &sq_pat[2];
@@ -892,6 +940,7 @@ int main(int argc, char **argv)
     host_voice_tests();
     cond_gen_tests();
     morph_tests();
+    learn_shed_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);

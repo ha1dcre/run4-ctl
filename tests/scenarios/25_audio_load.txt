@@ -1,0 +1,85 @@
+# SETUP > AUDIO (third sub-page): LOCAL OUT ON / USB ONLY (with a computer on USB: the USB recording at full level, the
+# speaker and headphones silent), the USB channels of this build, the overload guard's step. The overload guard: each
+# late render (app_overload, as fm1-base calls it) sheds a step (reverb on two combs, 6 voices, no chorus / delay, 4
+# voices), a toast says so once; calm renders bring a step back every 3 s.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+key 12 down
+wait 100
+peakreset
+wait 200
+expect peak_db_min -40
+expect usb_audio_full 0
+# LOCAL OUT: USB ONLY
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 100
+turn SELECT 2
+wait 60
+expect setup_sub 2
+turn K1 1
+wait 60
+expect set_local 1
+expect local_off 1
+expect usb_audio_full 1
+shot audio_page.png
+peakreset
+wait 200
+expect peak_db_max -90
+# without a computer it plays as usual; back with it
+usb unplug
+wait 100
+expect local_off 0
+expect usb_audio_full 0
+peakreset
+wait 200
+expect peak_db_min -40
+usb plug
+wait 200
+expect local_off 1
+turn K1 -1
+wait 60
+expect local_off 0
+tap HOME
+wait 100
+key 12 up
+wait 100
+# the overload guard: one late render, a step and the toast; four, the last step
+expect shed 0
+overload 1
+wait 20
+expect shed 1
+expect overloads 1
+expect toast 1
+shot overload_toast.png
+overload 5
+wait 20
+expect shed 4
+# chords on 4 voices only
+key 0 down
+key 4 down
+key 7 down
+key 11 down
+key 14 down
+key 17 down
+wait 200
+expect syn_voices <5
+key 0 up
+key 4 up
+key 7 up
+key 11 up
+key 14 up
+key 17 up
+# calm: a step back every 3 s
+wait 3200
+expect shed 3
+wait 9500
+expect shed 0

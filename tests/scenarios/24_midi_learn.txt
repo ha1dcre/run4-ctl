@@ -1,0 +1,105 @@
+# MIDI learn (Synth mode): the default CC map (CC 74 BRIGHT, 71 FEEDBACK, 73 ENV SPEED, 7 LEVEL, 1 PITCH MOD, 76 LFO
+# SPEED, 78 LFO DELAY, 92 AMP MOD, 12 DRIVE, 93 CHORUS, 94 DELAY, 91 REVERB, 16 MORPH) picks up: a controller moves its
+# value only once it has reached it. SEL + a knob arms learning for that tile, the next learnable CC is bound (CC 64
+# and the other reserved ones are not); SAVE while armed unlearns. SETUP > MIDI LEARN lists the bindings, turns the
+# default map off and clears a binding. Kept over a power cycle.
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+expect ml_def 1
+expect syn_bright 0
+# CC 74 at 127: BRIGHT is at 0, far away: nothing; at 64 it is picked up, then it follows
+midi B0 4A 7F
+wait 50
+expect syn_bright 0
+expect ml_applied 0
+midi B0 4A 40
+wait 30
+midi B0 4A 60
+wait 50
+expect syn_bright 32
+expect ml_applied 1
+shot learn_default.png
+# CC 91 REVERB (20 %): 26 is near it (20.5 %): picked up at once, then 127 = 100 %
+midi B0 5B 1A
+wait 30
+midi B0 5B 7F
+wait 50
+expect syn_rev 100
+# learn: SEL + K4 (LEVEL), then CC 21
+press SEL
+wait 20
+turn K4 1
+wait 40
+release SEL
+expect ml_arm 1
+expect toast 1
+shot learn_armed.png
+midi B0 15 30
+wait 50
+expect ml_arm 0
+expect ml_count 1
+expect ml_cc1 21
+# a reserved CC is refused, learning stays armed; SAVE unlearns the tile (here: none bound to BRIGHT)
+press SEL
+wait 20
+turn K1 1
+wait 40
+release SEL
+midi B0 40 7F
+wait 50
+expect ml_arm 1
+expect ml_count 1
+tap SAVE
+wait 40
+expect ml_arm 0
+# a learned CC wins over the default map: CC 74 learned to LFO SPEED (the LFO page)
+tap LFO
+wait 40
+press SEL
+wait 20
+turn K1 1
+wait 40
+release SEL
+midi B0 4A 00
+wait 50
+expect ml_count 2
+expect syn_bright 32
+# SETUP > MIDI LEARN (SELECT three times): the bindings; DEFAULT CCS off; CLEAR binding 2
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 100
+turn SELECT 3
+wait 60
+expect setup_sub 3
+shot learn_setup.png
+turn K3 -1
+wait 40
+expect ml_def 0
+turn K1 1
+turn K4 1
+wait 40
+tap SAVE
+wait 60
+expect ml_count 1
+tap HOME
+wait 100
+expect setup 0
+# CC 91 does nothing now (the default map is off)
+midi B0 5B 00
+wait 50
+expect syn_rev 100
+# kept over a power cycle
+wait 4500
+reboot
+wait 300
+expect ml_count 1
+expect ml_cc1 21
+expect ml_def 0
