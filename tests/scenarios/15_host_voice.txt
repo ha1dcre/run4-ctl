@@ -1,0 +1,191 @@
+# Protocol 1.3, the host voice: RUN4 turns it on, its notes on channel 16 play the FM engine in RUN4 mode (no echo as
+# keys, the keys still go to the host), a voice is loaded (stored, VCED, packed), live parameters, the voice list and a
+# voice's data back; Synth mode suspends it and keeps its own sound, the way back resumes it; a new link turns it off.
+@ACK13@
+wait 100
+expect host_minor 3
+expect_sysex @SYNC@
+sysex_out
+@TAPE@
+@STATUS@
+wait 50
+expect hv_on 0
+# RUN4 mode is silent until the host voice is on
+midi USB 9F 3C 64
+wait 200
+expect syn_voices 0
+midi USB 8F 3C 00
+@HV_ON16@
+wait 100
+expect hv_on 1
+expect hv_chan 16
+expect_sysex @HVS_ON0@
+sysex_out
+# the host's tempo (STATUS 120.3) is the host voice's (its delay follows it)
+expect hv_bpm10 1203
+# a note on channel 16 plays; nothing of it goes back out (no echo as a key, no frame)
+out
+peakreset
+midi USB 9F 3C 64
+wait 300
+expect syn_voices 1
+expect peak_db_min -30
+expect notes_on 0
+expect_no_out USB 9F 3C 64
+expect_no_out USB 90 3C 64
+midi USB 8F 3C 00
+wait 800
+# another channel does not play it; nor does the jack
+midi USB 90 40 64
+midi TRS 9F 40 64
+wait 100
+expect syn_voices 0
+midi USB 80 40 00
+midi TRS 8F 40 00
+# a key still goes to the host on the key channel, and does not sound here
+key 7 down 100 0
+wait 50
+expect_out USB 90 3C 64
+expect syn_voices 0
+key 7 up
+wait 50
+# Bluetooth's host link plays it too
+midi BLE 9F 43 50
+wait 100
+expect syn_voices 1
+midi BLE 8F 43 00
+wait 800
+# live parameters (ALGORITHM 6, VOLUME 50, BRIGHT +6) and a bad one (dropped whole)
+@HV_PARAMS@
+wait 30
+expect hv_alg 6
+expect hv_level 50
+expect hv_bright 6
+@HV_BAD_PARAM@
+wait 30
+expect frames_bad 1
+expect hv_alg 6
+# pitch bend, pressure, sustain: no stuck notes
+@HV_TEMPO_FX@
+midi USB 9F 3C 64
+midi USB EF 00 60
+midi USB DF 70
+midi USB AF 3C 50
+midi USB BF 40 7F
+midi USB 8F 3C 00
+wait 300
+expect syn_voices 1
+midi USB BF 40 00
+wait 1500
+expect syn_voices 0
+midi USB EF 00 40
+# a stored voice: F4 (its name back in HV_STATE); an empty user slot changes nothing
+@HV_V3@
+wait 100
+expect hv_voice 3
+expect_sysex @HVS_ON3@
+@HV_V20@
+wait 100
+expect hv_voice 3
+expect_sysex @HVS_ON3@
+sysex_out
+# a DX7 single voice (VCED, 155 bytes), and the host voice's data back (packed, the name in it)
+@HV_VCED@
+wait 100
+expect hv_voice 127
+expect_sysex @HVS_VCED@
+@VGET_HV@
+wait 100
+expect_sysex @VD_HV@
+@VGET0@
+wait 50
+expect_sysex @VD0@
+@VGET20@
+wait 50
+expect_sysex @VD20@
+sysex_out
+# the voice list: five frames of eight (a fresh FM-1: the factory voices, the user slots empty)
+@NAMES_REQ@
+wait 200
+expect_sysex @NAMES0@
+expect_sysex @NAMES8@
+expect_sysex @NAMES16@
+expect_sysex @NAMES24@
+expect_sysex @NAMES32@
+sysex_out
+# the CPU of the host voice in RUN4 mode: eight notes held, all effects on (the host's draw time is not in it)
+expect render_reset 0
+midi USB 9F 30 64
+midi USB 9F 34 64
+midi USB 9F 37 64
+midi USB 9F 3C 64
+midi USB 9F 40 64
+midi USB 9F 43 64
+midi USB 9F 48 64
+midi USB 9F 4C 64
+wait 2000
+expect syn_voices 8
+expect render_permille <300
+expect render_permille >0
+shot hv_page.png
+# Synth mode takes over: HV_STATE says suspended, its notes are cut; Synth mode's own sound and level are its own
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+expect_sysex @HVS_SUSP@
+expect syn_level 80
+expect hv_level 50
+expect hv_voice 127
+# what the host changes meanwhile waits for the return (parameters of the parked host voice)
+@ACK13@
+wait 100
+@HV_PARAMS@
+wait 30
+expect syn_level 80
+sysex_out
+# back: the HELLO, the ack, and the host voice sounds again, unchanged
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 0
+@ACK13@
+wait 200
+expect_sysex @HVS_BACK@
+expect hv_on 1
+expect hv_level 50
+midi USB 9F 3C 64
+wait 200
+expect syn_voices 1
+midi USB 8F 3C 00
+wait 800
+sysex_out
+# HV_ON 0: off, its notes released, silent again
+@HV_OFF@
+wait 100
+expect hv_on 0
+expect_sysex @HVS_OFF@
+wait 12000
+expect syn_voices 0
+midi USB 9F 3C 64
+wait 200
+expect syn_voices 0
+midi USB 8F 3C 00
+# a new USB session: the host voice is off until the host turns it on again
+@HV_ON16@
+wait 100
+expect hv_on 1
+usb unplug
+wait 100
+usb plug
+wait 1200
+expect hv_on 0
+expect connected 0

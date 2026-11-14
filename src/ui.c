@@ -15,6 +15,7 @@
 enum { D_HEAD = 1, D_TILE0 = 2, D_TILES = 2 | 4 | 8 | 16, D_FOOT = 32, D_TOAST = 64, D_CLEAR = 128, D_DOTS = 256,
        D_BIG = 512, D_GAP = 1024,             /* protocol 1.2: the big value view; the strip between the tile rows */
        D_LIVE = 2048,                         /* Synth mode: a live frame of the band (synth_ui.c) */
+       D_TBAND = 4096,                        /* protocol 1.3, the tape layout: the band whole (a toast went) */
        D_TOAST_UNDER = 2 | 4,                 /* the two tiles of the top row: the toast sits in y 84..113 */
        D_ALL = D_HEAD | D_TILES | D_FOOT | D_CLEAR | D_DOTS };
 
@@ -41,6 +42,10 @@ typedef struct {
 } ui_t;
 static ui_t ui;
 #define PG (ui.setup ? &ui.setup_page : &ui.page)   /* the page being drawn */
+static void tv_reset(void);                 /* tape_ui.c: the tape view (protocol 1.3) */
+static int tv_layout(void);
+static void tv_draw(uint32_t now);
+static void tv_apply(const r4p_msg_t *m);
 
 static void ui_reset_page(void)
 {
@@ -64,6 +69,7 @@ static void ui_connect(int on)
     ui.list_open = 0;
     ui.big1 = ui.touch1 = 0;
     memset(&ui.st, 0, sizeof ui.st);
+    tv_reset();                                     /* (1.3: the host sends the tape view again after its SYNC_REQ) */
     ui.dirty = D_ALL;
 }
 
@@ -440,7 +446,7 @@ static void ui_draw(void)
     int i;
     if (ui.toast_until && (int32_t)(now - ui.toast_until) >= 0) {
         ui.toast_until = 0;
-        ui.dirty |= D_TOAST_UNDER;                             /* the band under the toast */
+        ui.dirty |= D_TOAST_UNDER | D_TBAND;                   /* the band under the toast */
     }
     if (ui.big1 && (int32_t)(now - ui.big_until) >= 0) {       /* 1.2: the big value's time is up: the tiles again */
         big_end();
@@ -487,8 +493,15 @@ static void ui_draw(void)
         if (ui.dirty & (D_TILE0 << 2 | D_TILE0 << 3))
             sp_draw_tiles();
     } else if (ui.big1 && host_page() && ui.connected) {      /* 1.2: the big value over the tiles */
-        if (ui.dirty & (D_BIG | D_TOAST_UNDER | D_CLEAR))
+        if (ui.dirty & (D_BIG | D_TOAST_UNDER | D_CLEAR)) {
             draw_big();
+            if (tv_layout()) {                                 /* (1.3: the band's top and the tile row's foot around it) */
+                lcd_fill(0, 34, 240, 4, R4_BG);
+                lcd_fill(0, 194, 240, 6, R4_BG);
+            }
+        }
+    } else if (tv_layout()) {                                  /* 1.3: the tape view (tape_ui.c) */
+        tv_draw(now);
     } else {
         if (ui.dirty & D_GAP)
             lcd_fill(4, 114, 232, 4, R4_BG);
@@ -500,14 +513,14 @@ static void ui_draw(void)
         draw_foot();
     if ((ui.dirty & (D_TOAST | D_TOAST_UNDER)) && ui.toast_until)
         draw_toast();
-    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP | D_LIVE);
+    ui.dirty &= (uint16_t)~(D_HEAD | D_TILES | D_FOOT | D_TOAST | D_CLEAR | D_DOTS | D_BIG | D_GAP | D_LIVE | D_TBAND);
 }
 
 /* --------------------------------------------- host frames into state --- */
 static void ui_toast(const char *text, unsigned dur100ms)
 {
     if (ui.toast_until)
-        ui.dirty |= D_TOAST_UNDER;                             /* an older toast may be wider: repaint under it */
+        ui.dirty |= D_TOAST_UNDER | D_TBAND;                   /* an older toast may be wider: repaint under it */
     strcpy(ui.toast, text);
     ui.toast_until = plat_ms() + 100u * (dur100ms ? dur100ms : 15u);
     ui.dirty |= D_TOAST;
@@ -566,6 +579,9 @@ static void ui_apply(const r4p_msg_t *m)
         break;
     case R4P_TOAST:
         ui_toast(m->u.toast.text, m->u.toast.dur100ms);
+        break;
+    case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS:   /* 1.3 */
+        tv_apply(m);
         break;
     default:
         break;

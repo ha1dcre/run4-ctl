@@ -378,7 +378,155 @@ static void t_v12(void)
     buf[n - 2] = 2; CHECK(r4p_parse(buf, n, &b) == -1);
     /* HELLO says minor 2 */
     n = r4p_hello(buf, sizeof buf, 0, 4, R4P_MODE_RUN4);
-    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == 2);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor >= 2);
+}
+
+/* protocol 1.3: the host voice, the voice list, the tape view, the backup */
+#define DEV_MAX 192            /* a device->host frame must fit the Bluetooth queue whole: 64 packets of 3 bytes */
+static void t_v13(void)
+{
+    r4p_msg_t m, b;
+    size_t n;
+    int i;
+    /* HELLO says minor 3 */
+    n = r4p_hello(buf, sizeof buf, 0, 5, R4P_MODE_RUN4);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == 3 && b.u.hello.fw_minor == 5);
+    /* CRC-32: the IEEE check value, chained as zlib does */
+    CHECK(r4p_crc32(0, (const uint8_t *)"123456789", 9) == 0xCBF43926u);
+    CHECK(r4p_crc32(r4p_crc32(0, (const uint8_t *)"1234", 4), (const uint8_t *)"56789", 5) == 0xCBF43926u);
+    /* HV_ON */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_HV_ON; m.u.hvon.on = 1; m.u.hvon.chan = 15;
+    n = enc(&m);
+    CHECK(n == 8 && buf[4] == 0x49 && buf[5] == 1 && buf[6] == 15);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.hvon.on == 1 && b.u.hvon.chan == 15);
+    m.u.hvon.chan = 16; CHECK(enc(&m) == 0);
+    m.u.hvon.chan = 0; m.u.hvon.on = 2; CHECK(enc(&m) == 0);
+    /* HV_STATE */
+    m.cmd = R4P_HV_STATE; m.u.hvstate.state = R4P_HV_SOUNDING; m.u.hvstate.chan = 15; m.u.hvstate.voice = 3;
+    strcpy(m.u.hvstate.name, "E.PIANO 1");
+    n = enc(&m);
+    CHECK(n == 19 && r4p_parse(buf, n, &b) == 1 && b.u.hvstate.state == 1 && b.u.hvstate.voice == 3 && !strcmp(b.u.hvstate.name, "E.PIANO 1"));
+    m.u.hvstate.voice = R4P_VOICE_HV; CHECK(round_trip(&m, &b) == 1 && b.u.hvstate.voice == 127);
+    m.u.hvstate.voice = 40; CHECK(enc(&m) == 0);
+    m.u.hvstate.voice = 0; m.u.hvstate.state = 3; CHECK(enc(&m) == 0);
+    /* HV_VOICE: a stored one, 128 packed bytes, 155 VCED bytes */
+    m.cmd = R4P_HV_VOICE; m.u.hvvoice.kind = R4P_HVV_STORED; m.u.hvvoice.idx = 39;
+    n = enc(&m);
+    CHECK(n == 8 && buf[5] == 0 && buf[6] == 39 && r4p_parse(buf, n, &b) == 1 && b.u.hvvoice.idx == 39);
+    m.u.hvvoice.idx = 40; CHECK(enc(&m) == 0);
+    m.u.hvvoice.kind = R4P_HVV_PACKED;
+    for (i = 0; i < R4P_VCED; i++) m.u.hvvoice.data[i] = (uint8_t)(i & 0x7F);
+    n = enc(&m);
+    CHECK(n == 6 + 1 + 128 && r4p_parse(buf, n, &b) == 1 && !memcmp(b.u.hvvoice.data, m.u.hvvoice.data, 128));
+    CHECK(r4p_parse_body(buf + 1, n - 3, &b) == -1);                 /* one byte short */
+    m.u.hvvoice.kind = R4P_HVV_VCED;
+    n = enc(&m);
+    CHECK(n == 6 + 1 + 155 && r4p_parse(buf, n, &b) == 1 && b.u.hvvoice.kind == 2 && !memcmp(b.u.hvvoice.data, m.u.hvvoice.data, 155));
+    m.u.hvvoice.data[7] = 0x80; CHECK(enc(&m) == 0);                 /* 7-bit only */
+    m.u.hvvoice.kind = 3; CHECK(enc(&m) == 0);
+    /* HV_PARAM: pairs, each in its range */
+    m.cmd = R4P_HV_PARAM; m.u.hvparam.n = 3;
+    m.u.hvparam.id[0] = R4P_HVP_ALG; m.u.hvparam.val[0] = 31;
+    m.u.hvparam.id[1] = R4P_HVP_BRIGHT; m.u.hvparam.val[1] = 127;
+    m.u.hvparam.id[2] = R4P_HVP_DLYTIME; m.u.hvparam.val[2] = 5;
+    n = enc(&m);
+    CHECK(n == 12 && r4p_parse(buf, n, &b) == 1 && b.u.hvparam.n == 3 && b.u.hvparam.id[2] == R4P_HVP_DLYTIME && b.u.hvparam.val[1] == 127);
+    m.u.hvparam.val[0] = 32; CHECK(enc(&m) == 0);                     /* ALGORITHM 0..31 */
+    m.u.hvparam.val[0] = 0; m.u.hvparam.id[0] = R4P_HVP_COUNT; CHECK(enc(&m) == 0);
+    m.u.hvparam.id[0] = 0; m.u.hvparam.n = 0; CHECK(enc(&m) == 0);
+    m.u.hvparam.n = R4P_HVP_COUNT;
+    for (i = 0; i < R4P_HVP_COUNT; i++) { m.u.hvparam.id[i] = (uint8_t)i; m.u.hvparam.val[i] = R4P_HVP_MAX[i]; }
+    n = enc(&m);
+    CHECK(n == 6 + 2 * R4P_HVP_COUNT && r4p_parse(buf, n, &b) == 1 && b.u.hvparam.n == R4P_HVP_COUNT);
+    {
+        uint8_t odd[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 0, 3, 1, 0xF7}, none[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 0xF7};
+        uint8_t over[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HV_PARAM, 1, 8, 0xF7};
+        CHECK(r4p_parse(odd, sizeof odd, &b) == -1 && r4p_parse(none, sizeof none, &b) == -1 && r4p_parse(over, sizeof over, &b) == -1);
+    }
+    /* NAMES_REQ, VOICE_GET */
+    m.cmd = R4P_NAMES_REQ; n = enc(&m);
+    CHECK(n == 6 && buf[4] == 0x4C && r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_NAMES_REQ);
+    m.cmd = R4P_VOICE_GET; m.u.b1.v = R4P_VOICE_HV; CHECK(round_trip(&m, &b) == 1 && b.u.b1.v == 127);
+    m.u.b1.v = 41; CHECK(enc(&m) == 0);
+    /* VOICE_NAMES: 8 at most, inside the total; names 10 characters */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_VOICE_NAMES; m.u.names.first = 32; m.u.names.total = 40; m.u.names.n = 8;
+    for (i = 0; i < 8; i++) { m.u.names.used[i] = (uint8_t)(i & 1); strcpy(m.u.names.name[i], i & 1 ? "BRASS 1234" : ""); }
+    n = enc(&m);
+    printf("  VOICE_NAMES 8: %zu bytes\n", n);
+    CHECK(n <= DEV_MAX && r4p_parse(buf, n, &b) == 1 && b.u.names.first == 32 && b.u.names.n == 8 && b.u.names.used[7] == 1 &&
+          !strcmp(b.u.names.name[7], "BRASS 1234") && b.u.names.name[6][0] == 0);
+    m.u.names.first = 33; CHECK(enc(&m) == 0);                        /* past the total */
+    m.u.names.first = 0; m.u.names.n = 9; CHECK(enc(&m) == 0);
+    m.u.names.n = 0; CHECK(enc(&m) == 0);
+    m.u.names.n = 1; memcpy(m.u.names.name[0], "ELEVEN CHAR", 11); CHECK(enc(&m) == 0);
+    /* VOICE_DATA: the data only when used */
+    m.cmd = R4P_VOICE_DATA; m.u.voice.idx = 9; m.u.voice.used = 1;
+    for (i = 0; i < 128; i++) m.u.voice.data[i] = (uint8_t)(127 - i);
+    n = enc(&m);
+    CHECK(n == 8 + 128 && n <= DEV_MAX && r4p_parse(buf, n, &b) == 1 && b.u.voice.idx == 9 && !memcmp(b.u.voice.data, m.u.voice.data, 128));
+    m.u.voice.used = 0; n = enc(&m);
+    CHECK(n == 8 && r4p_parse(buf, n, &b) == 1 && b.u.voice.used == 0 && b.u.voice.data[0] == 0);
+    m.u.voice.idx = 40; CHECK(enc(&m) == 0);
+    /* BK_PART / BK_DATA: always 128 bytes; parts 0..31 */
+    m.cmd = R4P_BK_PART; m.u.voice.idx = 31; m.u.voice.used = 0;
+    n = enc(&m);
+    CHECK(n == 8 + 128 && n <= DEV_MAX && buf[4] == 0x0A && r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_BK_PART && b.u.voice.idx == 31);
+    m.cmd = R4P_BK_DATA; n = enc(&m);
+    CHECK(n == 8 + 128 && buf[4] == 0x53 && r4p_parse(buf, n, &b) == 1 && b.cmd == R4P_BK_DATA);
+    m.u.voice.idx = 32; CHECK(enc(&m) == 0);
+    /* BK_END / BK_INFO: the CRC as five 7-bit groups, the lowest first */
+    m.cmd = R4P_BK_END; m.u.bksum.count = 32; m.u.bksum.crc = 0xCBF43926u;
+    n = enc(&m);
+    CHECK(n == 12 && buf[5] == 32 && buf[6] == (0xCBF43926u & 0x7F) && buf[10] == (0xCBF43926u >> 28));
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.bksum.crc == 0xCBF43926u && b.u.bksum.count == 32);
+    buf[10] = 0x10; CHECK(r4p_parse(buf, n, &b) == -1);              /* bit 32 */
+    m.cmd = R4P_BK_INFO; m.u.bksum.count = 0; m.u.bksum.crc = 0; CHECK(round_trip(&m, &b) == 1 && b.cmd == R4P_BK_INFO && !b.u.bksum.count);
+    m.u.bksum.count = 33; CHECK(enc(&m) == 0);
+    m.cmd = R4P_BK_GET; m.u.b1.v = R4P_BK_SUMMARY; CHECK(round_trip(&m, &b) == 1 && b.u.b1.v == 127);
+    m.u.b1.v = 31; CHECK(round_trip(&m, &b) == 1);
+    m.u.b1.v = 32; CHECK(enc(&m) == 0);
+    m.cmd = R4P_BK_ACK; m.u.b1.v = R4P_BK_BAD; CHECK(round_trip(&m, &b) == 1 && b.u.b1.v == 1);
+    m.u.b1.v = 3; CHECK(enc(&m) == 0);
+    /* the CRC of a backup part covers k, used and the data */
+    {
+        r4p_voice_t p;
+        uint8_t raw[130];
+        memset(&p, 0, sizeof p);
+        p.idx = 5; p.used = 1;
+        for (i = 0; i < 128; i++) p.data[i] = (uint8_t)(i * 3 & 0x7F);
+        raw[0] = 5; raw[1] = 1; memcpy(raw + 2, p.data, 128);
+        CHECK(r4p_crc32_part(0x1234u, &p) == r4p_crc32(0x1234u, raw, 130));
+    }
+    /* TAPE_WAVE: 0..120 columns, track 0..3 */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_TAPE_WAVE; m.u.wave.track = 0; strcpy(m.u.wave.label, "T1  LOOP 2  4 BARS"); m.u.wave.n = 120;
+    for (i = 0; i < 120; i++) m.u.wave.peak[i] = (uint8_t)(i & 0x7F);
+    n = enc(&m);
+    printf("  TAPE_WAVE 120: %zu bytes\n", n);
+    CHECK(n == 6 + 1 + 19 + 1 + 120 && r4p_parse(buf, n, &b) == 1 && b.u.wave.n == 120 && b.u.wave.peak[119] == 119 &&
+          !strcmp(b.u.wave.label, "T1  LOOP 2  4 BARS"));
+    m.u.wave.n = 121; CHECK(enc(&m) == 0);
+    m.u.wave.n = 0; CHECK(round_trip(&m, &b) == 1 && b.u.wave.n == 0);
+    m.u.wave.track = 4; CHECK(enc(&m) == 0);
+    /* TAPE_POS: in <= out unless NOLOOP */
+    m.cmd = R4P_TAPE_POS; m.u.tpos.play = 9000; m.u.tpos.in = 4096; m.u.tpos.out = 12288; m.u.tpos.flags = R4P_TP_PLAY;
+    n = enc(&m);
+    CHECK(n == 13 && r4p_parse(buf, n, &b) == 1 && b.u.tpos.play == 9000 && b.u.tpos.out == 12288 && b.u.tpos.flags == 1);
+    m.u.tpos.in = 13000; CHECK(enc(&m) == 0);
+    m.u.tpos.flags = R4P_TP_NOLOOP; CHECK(round_trip(&m, &b) == 1);
+    m.u.tpos.flags = 8; CHECK(enc(&m) == 0);
+    /* METERS */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_METERS; m.u.meters.level[0] = 127; m.u.meters.level[4] = 64; m.u.meters.clip = 0x11;
+    n = enc(&m);
+    CHECK(n == 12 && r4p_parse(buf, n, &b) == 1 && b.u.meters.level[0] == 127 && b.u.meters.level[4] == 64 && b.u.meters.clip == 0x11);
+    m.u.meters.clip = 32; CHECK(enc(&m) == 0);
+    {
+        uint8_t shortm[] = {0xF0, 0x7D, 0x52, 0x34, R4P_METERS, 1, 2, 3, 4, 5, 0xF7};
+        CHECK(r4p_parse(shortm, sizeof shortm, &b) == -1);
+    }
 }
 
 int main(void)
@@ -392,6 +540,7 @@ int main(void)
     t_leds();
     t_v11();
     t_v12();
+    t_v13();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

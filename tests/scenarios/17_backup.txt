@@ -1,0 +1,423 @@
+# Protocol 1.3, the patch backup: SETUP > VOICE BACKUP (SELECT turns to it). K1 arms BACKUP and SAVE sends the 32
+# user voices in parts with a CRC-32; the host acks. K2 fetches the host's last backup part by part, checks the
+# CRC and SAVE writes it. The toasts: NO HOST, NO BACKUP, BAD CHECKSUM, BACKUP SENT. (Generated: the part lines.)
+@ACK13@
+wait 100
+expect_sysex @SYNC@
+sysex_out
+@TAPE@
+wait 50
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 100
+expect setup 1
+turn SELECT 1
+wait 50
+expect setup_sub 1
+expect user_voices 0
+shot backup_page.png
+# BACKUP of a fresh FM-1: nothing stored, 32 empty parts
+turn K1 1
+wait 50
+expect bk_state 1
+shot backup_armed.png
+tap SAVE
+wait 1500
+expect_sysex @BK_PART_EMPTY_0@
+expect_sysex @BK_PART_EMPTY_1@
+expect_sysex @BK_PART_EMPTY_2@
+expect_sysex @BK_PART_EMPTY_3@
+expect_sysex @BK_PART_EMPTY_4@
+expect_sysex @BK_PART_EMPTY_5@
+expect_sysex @BK_PART_EMPTY_6@
+expect_sysex @BK_PART_EMPTY_7@
+expect_sysex @BK_PART_EMPTY_8@
+expect_sysex @BK_PART_EMPTY_9@
+expect_sysex @BK_PART_EMPTY_10@
+expect_sysex @BK_PART_EMPTY_11@
+expect_sysex @BK_PART_EMPTY_12@
+expect_sysex @BK_PART_EMPTY_13@
+expect_sysex @BK_PART_EMPTY_14@
+expect_sysex @BK_PART_EMPTY_15@
+expect_sysex @BK_PART_EMPTY_16@
+expect_sysex @BK_PART_EMPTY_17@
+expect_sysex @BK_PART_EMPTY_18@
+expect_sysex @BK_PART_EMPTY_19@
+expect_sysex @BK_PART_EMPTY_20@
+expect_sysex @BK_PART_EMPTY_21@
+expect_sysex @BK_PART_EMPTY_22@
+expect_sysex @BK_PART_EMPTY_23@
+expect_sysex @BK_PART_EMPTY_24@
+expect_sysex @BK_PART_EMPTY_25@
+expect_sysex @BK_PART_EMPTY_26@
+expect_sysex @BK_PART_EMPTY_27@
+expect_sysex @BK_PART_EMPTY_28@
+expect_sysex @BK_PART_EMPTY_29@
+expect_sysex @BK_PART_EMPTY_30@
+expect_sysex @BK_PART_EMPTY_31@
+expect_sysex @BK_END_EMPTY@
+expect bk_state 4
+sysex_out
+@BK_ACK_OK@
+wait 50
+expect bk_state 0
+expect toast 1
+shot backup_sent.png
+# RESTORE when the host has none
+wait 2000
+turn K2 1
+wait 100
+expect_sysex @BK_GET_SUM@
+sysex_out
+@BK_INFO_NONE@
+wait 50
+expect bk_state 0
+shot restore_none.png
+# RESTORE with a host that never answers: asked three times, then NO HOST
+wait 2000
+turn K2 1
+wait 5900
+expect bk_state 6
+wait 300
+expect bk_state 0
+expect toast 1
+shot restore_nohost.png
+sysex_out
+# RESTORE of the host's backup (the imported bank): asked part by part, checked, SAVE writes it
+wait 2000
+turn K2 1
+wait 100
+expect_sysex @BK_GET_SUM@
+sysex_out
+@BK_INFO_IMPORT@
+wait 30
+shot restore_loading.png
+wait 40
+expect_sysex @BK_GET0@
+@BK_DATA_IMPORT_0@
+wait 40
+expect_sysex @BK_GET1@
+@BK_DATA_IMPORT_1@
+wait 40
+expect_sysex @BK_GET2@
+@BK_DATA_IMPORT_2@
+wait 40
+expect_sysex @BK_GET3@
+@BK_DATA_IMPORT_3@
+wait 40
+expect_sysex @BK_GET4@
+@BK_DATA_IMPORT_4@
+wait 40
+expect_sysex @BK_GET5@
+@BK_DATA_IMPORT_5@
+wait 40
+expect_sysex @BK_GET6@
+@BK_DATA_IMPORT_6@
+wait 40
+expect_sysex @BK_GET7@
+@BK_DATA_IMPORT_7@
+wait 40
+expect_sysex @BK_GET8@
+@BK_DATA_IMPORT_8@
+wait 40
+expect_sysex @BK_GET9@
+@BK_DATA_IMPORT_9@
+wait 40
+expect_sysex @BK_GET10@
+@BK_DATA_IMPORT_10@
+wait 40
+expect_sysex @BK_GET11@
+@BK_DATA_IMPORT_11@
+wait 40
+expect_sysex @BK_GET12@
+@BK_DATA_IMPORT_12@
+wait 40
+expect_sysex @BK_GET13@
+@BK_DATA_IMPORT_13@
+wait 40
+expect_sysex @BK_GET14@
+@BK_DATA_IMPORT_14@
+wait 40
+expect_sysex @BK_GET15@
+@BK_DATA_IMPORT_15@
+wait 40
+expect_sysex @BK_GET16@
+@BK_DATA_IMPORT_16@
+wait 40
+expect_sysex @BK_GET17@
+@BK_DATA_IMPORT_17@
+wait 40
+expect_sysex @BK_GET18@
+@BK_DATA_IMPORT_18@
+wait 40
+expect_sysex @BK_GET19@
+@BK_DATA_IMPORT_19@
+wait 40
+expect_sysex @BK_GET20@
+@BK_DATA_IMPORT_20@
+wait 40
+expect_sysex @BK_GET21@
+@BK_DATA_IMPORT_21@
+wait 40
+expect_sysex @BK_GET22@
+@BK_DATA_IMPORT_22@
+wait 40
+expect_sysex @BK_GET23@
+@BK_DATA_IMPORT_23@
+wait 40
+expect_sysex @BK_GET24@
+@BK_DATA_IMPORT_24@
+wait 40
+expect_sysex @BK_GET25@
+@BK_DATA_IMPORT_25@
+wait 40
+expect_sysex @BK_GET26@
+@BK_DATA_IMPORT_26@
+wait 40
+expect_sysex @BK_GET27@
+@BK_DATA_IMPORT_27@
+wait 40
+expect_sysex @BK_GET28@
+@BK_DATA_IMPORT_28@
+wait 40
+expect_sysex @BK_GET29@
+@BK_DATA_IMPORT_29@
+wait 40
+expect_sysex @BK_GET30@
+@BK_DATA_IMPORT_30@
+wait 40
+expect_sysex @BK_GET31@
+@BK_DATA_IMPORT_31@
+wait 60
+expect bk_state 9
+expect user_voices 0
+shot restore_confirm.png
+tap SAVE
+wait 100
+expect bk_state 0
+expect user_voices 32
+shot restored.png
+sysex_out
+# a damaged backup (its CRC does not match): nothing is written
+wait 2000
+turn K2 1
+wait 100
+sysex_out
+@BK_INFO_BADCRC@
+wait 40
+expect_sysex @BK_GET0@
+@BK_DATA_EMPTY_0@
+wait 40
+expect_sysex @BK_GET1@
+@BK_DATA_EMPTY_1@
+wait 40
+expect_sysex @BK_GET2@
+@BK_DATA_EMPTY_2@
+wait 40
+expect_sysex @BK_GET3@
+@BK_DATA_EMPTY_3@
+wait 40
+expect_sysex @BK_GET4@
+@BK_DATA_EMPTY_4@
+wait 40
+expect_sysex @BK_GET5@
+@BK_DATA_EMPTY_5@
+wait 40
+expect_sysex @BK_GET6@
+@BK_DATA_EMPTY_6@
+wait 40
+expect_sysex @BK_GET7@
+@BK_DATA_EMPTY_7@
+wait 40
+expect_sysex @BK_GET8@
+@BK_DATA_EMPTY_8@
+wait 40
+expect_sysex @BK_GET9@
+@BK_DATA_EMPTY_9@
+wait 40
+expect_sysex @BK_GET10@
+@BK_DATA_EMPTY_10@
+wait 40
+expect_sysex @BK_GET11@
+@BK_DATA_EMPTY_11@
+wait 40
+expect_sysex @BK_GET12@
+@BK_DATA_EMPTY_12@
+wait 40
+expect_sysex @BK_GET13@
+@BK_DATA_EMPTY_13@
+wait 40
+expect_sysex @BK_GET14@
+@BK_DATA_EMPTY_14@
+wait 40
+expect_sysex @BK_GET15@
+@BK_DATA_EMPTY_15@
+wait 40
+expect_sysex @BK_GET16@
+@BK_DATA_EMPTY_16@
+wait 40
+expect_sysex @BK_GET17@
+@BK_DATA_EMPTY_17@
+wait 40
+expect_sysex @BK_GET18@
+@BK_DATA_EMPTY_18@
+wait 40
+expect_sysex @BK_GET19@
+@BK_DATA_EMPTY_19@
+wait 40
+expect_sysex @BK_GET20@
+@BK_DATA_EMPTY_20@
+wait 40
+expect_sysex @BK_GET21@
+@BK_DATA_EMPTY_21@
+wait 40
+expect_sysex @BK_GET22@
+@BK_DATA_EMPTY_22@
+wait 40
+expect_sysex @BK_GET23@
+@BK_DATA_EMPTY_23@
+wait 40
+expect_sysex @BK_GET24@
+@BK_DATA_EMPTY_24@
+wait 40
+expect_sysex @BK_GET25@
+@BK_DATA_EMPTY_25@
+wait 40
+expect_sysex @BK_GET26@
+@BK_DATA_EMPTY_26@
+wait 40
+expect_sysex @BK_GET27@
+@BK_DATA_EMPTY_27@
+wait 40
+expect_sysex @BK_GET28@
+@BK_DATA_EMPTY_28@
+wait 40
+expect_sysex @BK_GET29@
+@BK_DATA_EMPTY_29@
+wait 40
+expect_sysex @BK_GET30@
+@BK_DATA_EMPTY_30@
+wait 40
+expect_sysex @BK_GET31@
+@BK_DATA_EMPTY_31@
+wait 60
+expect bk_state 0
+expect user_voices 32
+shot restore_bad.png
+# a backup of another size: refused
+turn K2 1
+wait 100
+@BK_INFO_ODD@
+wait 50
+expect bk_state 0
+sysex_out
+# BACKUP of the restored voices: the same CRC as the host's copy; the host reports a bad checksum
+wait 2000
+turn K1 1
+tap SAVE
+wait 1500
+expect_sysex @BK_PART_IMPORT_0@
+expect_sysex @BK_PART_IMPORT_31@
+expect_sysex @BK_END_IMPORT@
+@BK_ACK_BAD@
+wait 50
+expect bk_state 0
+shot backup_bad.png
+# no ack at all: NO HOST after 2 s
+wait 2000
+turn K1 1
+tap SAVE
+wait 1000
+expect bk_state 4
+wait 1200
+expect bk_state 0
+sysex_out
+# an armed BACKUP is forgotten when SETUP closes
+turn K1 1
+expect bk_state 1
+tap HOME
+wait 50
+expect setup 0
+expect bk_state 0
+# the restored voices are in the voice list and play as the host voice
+@NAMES_REQ@
+wait 200
+expect_sysex @NAMES8_IMPORT@
+expect_sysex @NAMES32_IMPORT@
+@VGET8@
+wait 50
+expect_sysex @VD8_IMPORT@
+@HV_ON16@
+@HV_V9@
+wait 100
+expect_sysex @HVS_ON9@
+@HV_PACKED@
+wait 100
+expect_sysex @HVS_PACKED@
+sysex_out
+# Synth mode: the same page, the same frames
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 1
+@ACK13@
+wait 100
+sysex_out
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 100
+expect setup 1
+turn SELECT 1
+wait 50
+expect setup_sub 1
+shot backup_synth.png
+turn K1 1
+tap SAVE
+wait 1500
+expect_sysex @BK_END_IMPORT@
+@BK_ACK_OK@
+wait 50
+expect bk_state 0
+tap HOME
+wait 50
+# kept over a power cycle
+reboot
+wait 300
+expect user_voices 32
+# a 1.2 host: NO HOST at once, nothing sent
+press SEL
+wait 40
+press HOME
+wait 40
+release HOME
+release SEL
+wait 300
+expect mode 0
+@ACK12@
+wait 100
+sysex_out
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 100
+expect setup 1
+turn SELECT 1
+wait 50
+expect setup_sub 1
+turn K1 1
+wait 50
+expect bk_state 0
+expect toast 1
+turn K2 1
+wait 50
+expect bk_state 0
+shot backup_nohost12.png

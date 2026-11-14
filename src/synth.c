@@ -39,7 +39,8 @@ typedef struct {
     uint8_t arp_on, arp_mode, arp_rate, arp_oct, arp_gate;     /* rate 0..2 (1/8, 1/16, 1/16T), oct 1..3, gate 10..100 */
     uint8_t seq_pat, seq_clock;              /* the selected pattern 0..15; the clock (SQC_AUTO, SQC_OUT, SQC_INT) */
     int8_t seq_trn;                          /* the sequencer's transpose, -24..24 (SEL + a key) */
-    uint8_t rsv;
+    uint8_t at_depth;                        /* key pressure into BRIGHT, 0..63 at full pressure (was a spare byte: 0
+                                              * in stores written before; Synth mode leaves it 0, the host voice sets it) */
     uint16_t bpm10;                          /* 400..2400 */
 } syn_set_t;
 #define SYN_SET_VER 2                        /* 2: the patterns moved to their own objects (synth_seq.c) */
@@ -269,6 +270,7 @@ typedef struct {
     fm6_note_t n;
     uint8_t note, key;                       /* the MIDI note it was started on; key: the key is still down */
     uint8_t held;                            /* kept sounding by the sustain pedal after its key came up */
+    uint8_t at;                              /* its key's pressure (poly aftertouch), 0..127 */
     uint32_t age;
 } syn_voice_t;
 static syn_voice_t syn_v[SYN_VOICES] PLAT_POOL;
@@ -279,6 +281,7 @@ static int32_t syn_dt[6];
 static fm6_lfo_t syn_lfo;
 static int32_t syn_bend;                     /* pitch bend, 1/16 semitones */
 static uint8_t syn_sustain;
+static uint8_t syn_chan_at;                  /* channel pressure, 0..127 (with each voice's own: the larger counts) */
 static uint32_t syn_voices_peak;
 
 static int32_t syn_clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -350,6 +353,7 @@ static void syn_note_on_now(uint8_t note, uint8_t vel)
     v->note = note;
     v->key = 1;
     v->held = 0;
+    v->at = 0;
     v->age = ++syn_age;
     fm6_lfo_key(&syn_lfo);
 }
@@ -387,7 +391,8 @@ static void syn_sustain_now(uint8_t on)
 
 /* ---------------------------------------------------------- event ring --- */
 /* the main loop and the MIDI input hand notes to the audio context here; kinds: 1 on, 2 off, 3 all off, 4 bend,
- * 5 sustain, 6 panic (voices cut), 7 patch / settings changed */
+ * 5 sustain, 6 panic (voices cut), 7 patch / settings changed, 9 poly pressure (a note, b pressure), 10 channel
+ * pressure (a) */
 typedef struct { uint8_t kind, a, b, src; } syn_ev_t;       /* src 0 = played (arp aware), 1 = the sequencer / arp */
 #define SYN_EVQ 64
 static volatile uint8_t syn_evh, syn_evt;
@@ -641,6 +646,17 @@ static void syn_apply_event(const syn_ev_t *e)
     case 3:
         syn_arp_clear();
         syn_all_off_now();
+        syn_chan_at = 0;
+        break;
+    case 9: {
+        uint32_t i;
+        for (i = 0; i < SYN_VOICES; i++)
+            if (syn_v[i].n.live && syn_v[i].key && syn_v[i].note == note)
+                syn_v[i].at = e->b;
+        break;
+    }
+    case 10:
+        syn_chan_at = note;
         break;
     case 4:
         syn_bend = ((int32_t)((e->b << 7) | e->a) - 8192) * syn.bend * 16 / 8192;
@@ -659,6 +675,7 @@ static void syn_apply_event(const syn_ev_t *e)
         syn_sq.arp_note_on = 255;
         sq.n_notes = 0;
         sq.hold = 0;
+        syn_chan_at = 0;
         break;
     }
     default:
@@ -672,9 +689,14 @@ static int16_t syn_scope[SYN_SCOPE_N];
 static volatile uint32_t syn_scope_w;
 /* n frames (a multiple of 32) of the synth into lr[2 * n] (24-bit range, master 0..4096 = 0..1) */
 static uint32_t syn_active_voices;
+static volatile uint8_t syn_hold;            /* the main loop swaps the settings (syn_swap): the render stays silent */
 static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t b, i, k;
+    if (syn_hold) {
+        memset(lr, 0, 2u * n * sizeof lr[0]);
+        return;
+    }
     while (syn_evt != syn_evh) {
         syn_apply_event(&syn_ev[syn_evt]);
         syn_evt = (uint8_t)((syn_evt + 1u) % SYN_EVQ);
@@ -694,6 +716,8 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             int32_t lf, lvl = syn_clamp(syn.bright, -64, 63) * 24;
             if (!v->n.live)
                 continue;
+            if (syn.at_depth)                /* pressure opens the modulators: up to at_depth BRIGHT steps */
+                lvl += (int32_t)(v->at > syn_chan_at ? v->at : syn_chan_at) * syn_clamp(syn.at_depth, 0, 63) * 24 / 127;
             lf = fm6_note_logfreq(((int32_t)v->note + syn.transpose + syn_eff[FP_TRNSP] - 24) * 16 + syn_bend, lf_fine);
             if (!fm6_note_compute(&v->n, syn_eff, bus, lfo_v, lfo_d, lf, syn_eff_alg, fb, syn_dt, lvl << 16)) {
                 if (fm6_note_done(&v->n, syn_eff, syn_eff_alg) || !v->key)
@@ -742,6 +766,52 @@ static void syn_defaults(void)
     syn.seq_pat = 0; syn.seq_clock = SQC_AUTO; syn.seq_trn = 0;
     syn.bpm10 = 1200;
     syn_load_patch(0);
+    syn_dirty = 1;
+}
+/* RUN4 mode's host voice (protocol 1.3) plays the same engine with its own settings: `syn` is always what sounds, and
+ * syn_alt holds the other set (Synth mode's while the host voice is in `syn`, and the other way round). syn_swap trades
+ * them between two blocks: the render is held silent meanwhile, the voices, the effects' lines and the event ring
+ * start empty (nothing of the one sound rings on in the other). Main loop only. */
+static syn_set_t syn_alt;
+static void syn_reset_sound(void)
+{
+    uint32_t i;
+    for (i = 0; i < SYN_VOICES; i++)
+        syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0;
+    memset(fx_dly, 0, sizeof fx_dly);
+    memset(fx_cho, 0, sizeof fx_cho);
+    memset(fx_comb, 0, sizeof fx_comb);
+    memset(fx_ap, 0, sizeof fx_ap);
+    memset(&fx_st, 0, sizeof fx_st);
+    syn_evh = syn_evt = 0;
+    syn_sq.n_held = 0;
+    syn_sq.arp_note_on = 255;
+    syn_sq.arp_step_open = 0;
+    syn_sustain = 0;
+    syn_bend = 0;
+    syn_chan_at = 0;
+    syn_active_voices = 0;
+}
+static void syn_swap(void)
+{
+    syn_set_t t;
+    syn_hold = 1;
+    t = syn;
+    syn = syn_alt;
+    syn_alt = t;
+    syn_reset_sound();
+    syn_dirty = 1;
+    syn_hold = 0;
+}
+/* the host voice's settings at the start: the factory voice 1, Synth mode's default effects, no arpeggiator, pressure
+ * into BRIGHT at half depth */
+static void syn_host_defaults(syn_set_t *out)
+{
+    syn_set_t keep = syn;
+    syn_defaults();
+    syn.at_depth = 32;
+    *out = syn;
+    syn = keep;
     syn_dirty = 1;
 }
 static void syn_init(void)

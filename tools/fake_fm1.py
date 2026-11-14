@@ -16,6 +16,8 @@ builders are shared with tools/fake_run4.py. Keys on the terminal (TAB switches 
   encoders  , . SELECT   ; ' ALGORITHM   - = PRESETS   1 2 K1   3 4 K2   5 6 K3   7 8 K4   (first key: -1, second: +1;
             the shifted digits ! @ # $ % ^ & * turn five detents)
   MASTER    9 down, 0 up (512 of 16383 each)
+  1.3       B send a backup of the fake's user voices, R restore the host's last one (both answer like the firmware;
+            the fake also answers NAMES_REQ, VOICE_GET and the host voice's frames with HV_STATE)
   piano     (after TAB) z s x d c v g b h n j m , l . ; /  = C4 up;  q 2 w 3 e r 5 t 6 y 7 u = C5 up;  - + octave; TAB back
   other     ? help   p show the page again   Q quit
 """
@@ -121,7 +123,80 @@ def decode(frame):
         return dict(cmd="STATUS", bpm=r.v14() / 10.0, bar=r.v14(), beat=r.u8(), flags=r.u8())
     if cmd == 0x46:
         return dict(cmd="TOAST", text=r.string(), seconds=(r.u8() or 15) / 10.0)
+    d = decode13(cmd, r)
+    if d is not None:
+        if r.i != len(r.b):
+            raise Bad("trailing bytes")
+        return d
     return dict(cmd="0x%02X" % cmd)
+
+
+def decode13(cmd, r):
+    """protocol 1.3 host -> device frames (docs/PROTOCOL.md); None for another command"""
+    if cmd == 0x49:
+        d = dict(cmd="HV_ON", on=r.u8(), chan=r.u8())
+        if d["on"] > 1 or d["chan"] > 15:
+            raise Bad("bad HV_ON")
+        return d
+    if cmd == 0x4A:
+        kind = r.u8()
+        if kind == 0:
+            d = dict(cmd="HV_VOICE", kind="stored", idx=r.u8())
+            if d["idx"] >= 40:
+                raise Bad("bad voice index")
+            return d
+        if kind in (1, 2):
+            return dict(cmd="HV_VOICE", kind=("packed", "vced")[kind - 1], data=[r.u8() for _ in range((128, 155)[kind - 1])])
+        raise Bad("bad HV_VOICE kind")
+    if cmd == 0x4B:
+        pairs = []
+        while r.i < len(r.b):
+            i, v = r.u8(), r.u8()
+            if i >= len(f4.HVP) or v > f4.HVP_MAX[i]:
+                raise Bad("bad HV_PARAM pair")
+            pairs.append((f4.HVP[i], v))
+        if not pairs or len(pairs) > len(f4.HVP):
+            raise Bad("HV_PARAM needs 1..18 pairs")
+        return dict(cmd="HV_PARAM", pairs=pairs)
+    if cmd == 0x4C:
+        return dict(cmd="NAMES_REQ")
+    if cmd == 0x4D:
+        d = dict(cmd="VOICE_GET", idx=r.u8())
+        if d["idx"] >= 40 and d["idx"] != f4.VOICE_HV:
+            raise Bad("bad voice index")
+        return d
+    if cmd == 0x4E:
+        d = dict(cmd="TAPE_WAVE", track=r.u8(), label=r.string(), n=r.u8())
+        if d["track"] > 3 or d["n"] > 120:
+            raise Bad("bad TAPE_WAVE")
+        d["peaks"] = [r.u8() for _ in range(d["n"])]
+        return d
+    if cmd == 0x4F:
+        d = dict(cmd="TAPE_POS", play=r.v14(), lin=r.v14(), lout=r.v14(), flags=r.u8())
+        if d["flags"] > 7 or (not d["flags"] & 4 and d["lin"] > d["lout"]):
+            raise Bad("bad TAPE_POS")
+        return d
+    if cmd == 0x50:
+        d = dict(cmd="METERS", levels=[r.u8() for _ in range(5)], clip=r.u8())
+        if d["clip"] > 31:
+            raise Bad("bad METERS")
+        return d
+    if cmd == 0x51:
+        d = dict(cmd="BK_ACK", status=r.u8())
+        if d["status"] > 2:
+            raise Bad("bad BK_ACK")
+        return d
+    if cmd == 0x52:
+        d = dict(cmd="BK_INFO", count=r.u8(), crc=sum(r.u8() << (7 * i) for i in range(5)))
+        if d["count"] > 32 or d["crc"] >> 32:
+            raise Bad("bad BK_INFO")
+        return d
+    if cmd == 0x53:
+        d = dict(cmd="BK_DATA", k=r.u8(), used=r.u8(), data=[r.u8() for _ in range(128)])
+        if d["k"] > 31 or d["used"] > 1:
+            raise Bad("bad BK_DATA")
+        return d
+    return None
 
 
 def show(d):
@@ -152,6 +227,27 @@ def show(d):
         return "TOAST \"%s\" %.1f s" % (d["text"], d["seconds"])
     if c == "HELLO_ACK":
         return "HELLO_ACK proto %d.%d" % (d["proto"], d["minor"])
+    if c == "HV_ON":
+        return "HV_ON %s channel %d" % ("on" if d["on"] else "off", d["chan"] + 1)
+    if c == "HV_VOICE":
+        return "HV_VOICE %s" % (d["idx"] if d["kind"] == "stored" else "%s %r" % (d["kind"], voice_name(d)))
+    if c == "HV_PARAM":
+        return "HV_PARAM " + " ".join("%s=%d" % p for p in d["pairs"])
+    if c == "TAPE_WAVE":
+        return "TAPE_WAVE T%d %r %d columns" % (d["track"] + 1, d["label"], d["n"]) if d["n"] else "TAPE_WAVE off"
+    if c == "TAPE_POS":
+        return "TAPE_POS play %d  loop %s  %s" % (d["play"], "-" if d["flags"] & 4 else "%d..%d" % (d["lin"], d["lout"]),
+                                                 "rec" if d["flags"] & 2 else "play" if d["flags"] & 1 else "stop")
+    if c == "METERS":
+        return "METERS %s clip %s" % (d["levels"], bin(d["clip"]))
+    if c == "BK_ACK":
+        return "BK_ACK %s" % ("stored", "bad checksum", "not stored")[d["status"]]
+    if c == "BK_INFO":
+        return "BK_INFO %d voices crc %08X" % (d["count"], d["crc"])
+    if c == "BK_DATA":
+        return "BK_DATA %d%s" % (d["k"], "" if d["used"] else " (empty)")
+    if c in ("NAMES_REQ", "VOICE_GET"):
+        return c + (" %d" % d["idx"] if "idx" in d else "")
     if c == "LIST":
         if not d["total"]:
             return "LIST closed"
@@ -161,11 +257,18 @@ def show(d):
 
 
 # ------------------------------------------------------------------ the device ---
-MODE_RUN4, FW = 0, (0, 4)
+MODE_RUN4, FW = 0, (0, 5)
 
 
 def hello():
-    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4, 2])      # protocol 1.2
+    return f4.frame("HELLO", [1, FW[0], FW[1], MODE_RUN4, 3])      # protocol 1.3
+
+
+def voice_name(d):
+    """the name in a 128-byte packed voice (bytes 118..127) or a 155-byte VCED one (145..154)"""
+    data = d["data"]
+    return "".join(chr(c) for c in data[118:128] if 32 <= c < 127).rstrip() if len(data) == 128 else \
+        "".join(chr(c) for c in data[145:155] if 32 <= c < 127).rstrip()
 
 
 def btn(i, down):
@@ -200,6 +303,27 @@ class Device:
         self.page = None
         self.list, self.sel = None, 0
         self.lock = threading.Lock()
+        # protocol 1.3: the voices (8 factory, 32 user slots), the host voice, the backup and restore under way
+        self.voices = [list(v) for v in f4.dx7_voices()] + [None] * 32
+        self.hv = dict(on=0, chan=15, voice=0, data=list(self.voices[0]))
+        self.restore = None                             # dict(k, used, data, info) while restoring
+
+    def hv_state(self):
+        name = "".join(chr(c) for c in self.hv["data"][118:128]).rstrip()
+        return f4.hv_state(1 if self.hv["on"] else 0, self.hv["chan"], self.hv["voice"], name)
+
+    def backup(self):
+        """B: the 32 user voices to the host as BK_PART x 32 + BK_END (the firmware's SETUP > VOICE BACKUP)"""
+        parts, crc = f4.backup_parts(self.voices[8:])
+        for k, used, data in parts:
+            self.send(f4.bk_part(k, used, data))
+        self.send(f4.bk_sum(32, crc))
+        self.out("-> backup: 32 parts, crc %08X" % crc)
+
+    def restore_start(self):
+        self.restore = dict(k=0, used=[], data=[], info=None)
+        self.send(f4.frame("BK_GET", [127]))
+        self.out("-> BK_GET summary")
 
     def tick(self, now):
         if not self.acked and now - self.hello_at >= 1.0:
@@ -226,6 +350,54 @@ class Device:
         elif d["cmd"] == "LIST":
             self.list = d if d["total"] else None
             self.sel = d["sel"]
+        else:
+            self.on_frame13(d)
+
+    def on_frame13(self, d):
+        c = d["cmd"]
+        if c == "HV_ON":
+            self.hv.update(on=d["on"], chan=d["chan"])
+            self.send(self.hv_state())
+        elif c == "HV_VOICE":
+            if d["kind"] == "stored":
+                if self.voices[d["idx"]] is not None:
+                    self.hv.update(voice=d["idx"], data=list(self.voices[d["idx"]]))
+            elif d["kind"] == "packed":
+                self.hv.update(voice=f4.VOICE_HV, data=list(d["data"]))
+            else:                                       # (the fake keeps only the name of a VCED voice)
+                self.hv.update(voice=f4.VOICE_HV, data=self.hv["data"][:118] + d["data"][145:155])
+            self.send(self.hv_state())
+        elif c == "NAMES_REQ":
+            for first in range(0, 40, 8):
+                self.send(f4.voice_names(first, [(0, "") if v is None else (1, "".join(chr(x) for x in v[118:128]).rstrip())
+                                                 for v in self.voices[first:first + 8]]))
+        elif c == "VOICE_GET":
+            v = self.hv["data"] if d["idx"] == f4.VOICE_HV else self.voices[d["idx"]]
+            self.send(f4.voice_data(d["idx"], v))
+        elif c == "BK_ACK":
+            self.out("(backup: %s)" % ("BACKUP SENT", "BAD CHECKSUM", "BACKUP NOT STORED")[d["status"]])
+        elif c == "BK_INFO" and self.restore is not None:
+            if d["count"] != 32:
+                self.out("(restore: %s)" % ("NO BACKUP" if not d["count"] else "BAD BACKUP"))
+                self.restore = None
+                return
+            self.restore["info"] = d
+            self.send(f4.frame("BK_GET", [0]))
+        elif c == "BK_DATA" and self.restore is not None and d["k"] == self.restore["k"]:
+            rs = self.restore
+            rs["used"].append(d["used"])
+            rs["data"].append(d["data"])
+            rs["k"] += 1
+            if rs["k"] < 32:
+                self.send(f4.frame("BK_GET", [rs["k"]]))
+                return
+            _, crc = f4.backup_parts([data if used else None for used, data in zip(rs["used"], rs["data"])])
+            if crc != rs["info"]["crc"]:
+                self.out("(restore: BAD CHECKSUM)")
+            else:
+                self.voices[8:] = [list(data) if used else None for used, data in zip(rs["used"], rs["data"])]
+                self.out("(restore: %d voices written)" % sum(rs["used"]))
+            self.restore = None
 
     def key(self, ch):
         if ch == "\t":
@@ -274,6 +446,10 @@ class Device:
             return self.out("-> POT %d" % self.master)
         if ch == "p" and self.page:
             return self.out(show(self.page))
+        if ch == "B" and not self.piano:
+            return self.backup()
+        if ch == "R" and not self.piano:
+            return self.restore_start()
         if ch == "?":
             return self.out(__doc__)
 
@@ -353,6 +529,15 @@ def run_loopback():
     print("loopback ok")
 
 
+def decode_dev(fr):
+    """a device -> host BK_PART / BK_END (the selftest's host)"""
+    if fr[4] == 0x0A:
+        return ("BK_PART", fr[5], fr[6], list(fr[7:-1]))
+    if fr[4] == 0x0B:
+        return ("BK_END", fr[5], sum(fr[6 + i] << (7 * i) for i in range(5)))
+    return None
+
+
 def selftest():
     n = [0]
 
@@ -364,7 +549,7 @@ def selftest():
 
     h = lambda s: [int(x, 16) for x in s.split()]  # noqa: E731
     # device -> host: the bytes the C codec produces (tests/r4p_test.c, tests/scenarios)
-    eq(hello(), h("F0 7D 52 34 01 01 00 04 00 02 F7"), "HELLO")
+    eq(hello(), h("F0 7D 52 34 01 01 00 05 00 03 F7"), "HELLO")
     eq(btn(0, True), h("F0 7D 52 34 02 00 01 F7"), "BTN down")
     eq(btn(13, False), h("F0 7D 52 34 02 0D 00 F7"), "BTN up")
     eq(enc(3, 1), h("F0 7D 52 34 03 03 41 F7"), "ENC +1")
@@ -425,6 +610,52 @@ def selftest():
     eq(sent[4:], [btn(0, True), btn(0, False)], "FX key")
     dev.key("4")
     eq(sent[6], enc(4, 1), "K2 +")
+    # protocol 1.3: decoding the host's frames, the answers, the backup both ways
+    eq(decode(f4.hv_on(1, 15)), dict(cmd="HV_ON", on=1, chan=15), "HV_ON")
+    eq(decode(f4.hv_param(ALG=4, BRIGHT=70))["pairs"], [("ALG", 4), ("BRIGHT", 70)], "HV_PARAM")
+    eq(decode(f4.tape_pos(100, 0, 0, 5))["flags"], 5, "TAPE_POS")
+    eq(decode(f4.meters([1, 2, 3, 4, 5], 3))["levels"], [1, 2, 3, 4, 5], "METERS")
+    eq(decode(f4.tape_wave(1, "T2", [3] * 120))["n"], 120, "TAPE_WAVE")
+    eq(decode(f4.bk_sum(32, 0xCBF43926, True))["crc"], 0xCBF43926, "BK_INFO crc")
+    eq(f4.bk_sum(32, 0xCBF43926), h("F0 7D 52 34 0B 20 26 72 50 5F 0C F7"), "BK_END bytes (as tests/r4p_test.c)")
+    for bad in (f4.frame("HV_PARAM", [0, 32]), f4.frame("HV_ON", [1, 16]), f4.frame("TAPE_POS", f4.v14(1) + f4.v14(9) + f4.v14(8) + [0]),
+                f4.frame("BK_INFO", [32, 0, 0, 0, 0, 0x10]), f4.frame("HV_VOICE", [3])):
+        try:
+            decode(bad)
+            eq("accepted", "Bad", "bad 1.3 frame")
+        except Bad:
+            n[0] += 1
+    del sent[:]
+    dev.on_frame(f4.hv_on(1, 15))
+    eq(sent, [f4.hv_state(1, 15, 0, f4.factory_name(0))], "HV_ON -> HV_STATE")
+    del sent[:]
+    dev.on_frame(f4.frame("NAMES_REQ"))
+    eq(len(sent), 5, "NAMES_REQ -> 5 VOICE_NAMES")
+    eq(sent[0], f4.voice_names(0, [(1, f4.factory_name(k)) for k in range(8)]), "VOICE_NAMES 0")
+    del sent[:]
+    dev.on_frame(f4.frame("VOICE_GET", [20]))
+    eq(sent, [f4.voice_data(20, None)], "VOICE_GET of an empty slot")
+    # backup: the fake's user voices out; restore them into a second fake through a host that keeps the backup
+    dev.voices[8:] = f4.import_bank_records()
+    del sent[:]
+    dev.backup()
+    eq(len(sent), 33, "backup: 32 parts and the end")
+    store = dict(parts=[decode_dev(x) for x in sent[:32]], end=decode_dev(sent[32]))
+    _, crc = f4.backup_parts(f4.import_bank_records())
+    eq(store["end"], ("BK_END", 32, crc), "backup's CRC")
+    out2 = []
+    dev2 = Device(out2.append, lambda m: None, out=lambda s: None)
+    dev2.restore_start()
+    for _ in range(40):                                 # the host answers each BK_GET from its store
+        if not out2:
+            break
+        q = out2.pop(0)
+        k = q[5]
+        if k == 127:
+            dev2.on_frame(f4.bk_sum(32, store["end"][2], True))
+        else:
+            dev2.on_frame(f4.bk_part(*store["parts"][k][1:], host=True))
+    eq(dev2.voices[8:], f4.import_bank_records(), "restore round trip")
     print("fake_fm1 selftest: %d checks ok" % n[0])
 
 

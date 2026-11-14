@@ -7,9 +7,10 @@
 #include "ui.c"
 #include "synth.c"
 #include "synth_ui.c"
+#include "tape_ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 4
+#define FW_MINOR 5
 enum { MODE_RUN4 = 0, MODE_SYNTH = 1 };      /* SEL + HOME switches (docs/PROTOCOL.md); HELLO reports it */
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
 #define HELLO_MS 1000u
@@ -51,7 +52,36 @@ static struct {
     uint32_t blink_at;
     uint32_t tx_deferred;                /* frames that found no room and waited (host-simulator check) */
     uint32_t notes_on, notes_off, frames_sent, frames_in, frames_bad;   /* host-simulator checks */
+    /* protocol 1.3: answers owed to the host (sent behind the buttons, as there is room) */
+    uint8_t want_hvstate;                /* HV_STATE */
+    uint8_t names_next;                  /* the next VOICE_NAMES frame's first voice; 255 = none owed */
+    uint8_t vget1;                       /* VOICE_DATA for voice vget1 - 1 (127 + 1: the host voice's); 0 = none */
+    uint8_t setup_sub;                   /* the SETUP page's sub-page: 0 the settings, 1 VOICE BACKUP */
+    uint32_t rend_ticks, rend_frames;    /* the render's time (host simulator: expect render_permille) */
 } ctl;
+
+/* protocol 1.3, the host voice: RUN4 plays this engine in RUN4 mode (docs/PROTOCOL.md "Host voice"). Its settings
+ * live in `syn` while RUN4 mode is on, in syn_alt while Synth mode is (synth.c syn_swap); RAM only. */
+static struct {
+    uint8_t on;                          /* the host turned it on (it sounds in RUN4 mode; suspended in Synth mode) */
+    uint8_t chan;                        /* its MIDI channel, 0..15 */
+    uint8_t voice;                       /* where its voice came from: 0..39 a stored one, R4P_VOICE_HV the host's */
+} hv;
+static syn_set_t *hv_set(void) { return mode == MODE_RUN4 ? &syn : &syn_alt; }
+
+/* protocol 1.3, the patch backup (SETUP > VOICE BACKUP): the 32 user voices to the host and back */
+enum { BK_IDLE, BK_ARMED, BK_SEND, BK_SEND_END, BK_WAIT_ACK, BK_WANT_INFO, BK_WAIT_INFO, BK_WANT_PART, BK_WAIT_PART,
+       BK_CONFIRM };
+#define BK_WAIT_MS 2000u                 /* an answer's patience */
+#define BK_TRIES 3                       /* a request asked this often before NO HOST */
+static struct {
+    uint8_t st, k, tries;
+    uint32_t crc, at, used;              /* the running CRC; when the last request went; the restore's used voices */
+    r4p_bksum_t info;                    /* the host's BK_INFO */
+} bk;
+/* the restore's 32 voices wait in the DX7 import's buffer (4096 bytes; only Synth mode's MIDI in feeds that one, and a
+ * dump arriving meanwhile shows as a bad checksum) */
+#define BK_STAGE syn_imp.buf
 
 static uint8_t key_velocity(uint32_t k)
 {
@@ -80,6 +110,36 @@ static void setup_load(void)
         setup = t;
     setup_apply();
 }
+static uint32_t bk_user_count(void)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < 2u * SYN_BANK_N; i++)
+        n += (uint32_t)syn_patch_used(SYN_NFACTORY + i);
+    return n;
+}
+static void setup_fill_backup(r4p_page_t *p)         /* SETUP's second sub-page: VOICE BACKUP */
+{
+    char t[24], u[12];
+    uint32_t n = bk_user_count();
+    strcpy(p->title, "VOICE BACKUP");
+    strcpy(p->slot[0].name, "BACKUP"); p->slot[0].kind = R4P_KIND_TOGGLE;
+    p->slot[0].value = bk.st == BK_ARMED || (bk.st >= BK_SEND && bk.st <= BK_WAIT_ACK);
+    strcpy(p->slot[0].text, bk.st == BK_ARMED ? "SAVE: SEND" : bk.st >= BK_SEND && bk.st <= BK_WAIT_ACK ? "SENDING" : "SEND");
+    strcpy(p->slot[1].name, "RESTORE"); p->slot[1].kind = R4P_KIND_TOGGLE;
+    p->slot[1].value = bk.st >= BK_WANT_INFO;
+    if (bk.st == BK_CONFIRM) {
+        strcpy(p->slot[1].text, "SAVE: WRITE");
+    } else if (bk.st >= BK_WANT_INFO) {
+        u_int(bk.k, u); strcpy(t, u); u_cat(t, "/32");
+        strcpy(p->slot[1].text, t);
+    } else {
+        strcpy(p->slot[1].text, "LOAD");
+    }
+    strcpy(p->slot[2].name, "USER VOICES"); p->slot[2].kind = R4P_KIND_UNI;
+    p->slot[2].value = (uint16_t)(n * R4P_V14_MAX / 32u);
+    u_int(n, u); strcpy(t, u); u_cat(t, "/32");
+    strcpy(p->slot[2].text, t);
+}
 static void setup_fill(void)                          /* the SETUP page: four tiles, the same look as the host's pages */
 {
     static const char *const VN[VEL_N] = {"SOFT", "NORMAL", "HARD", "FIXED 100"};
@@ -92,6 +152,12 @@ static void setup_fill(void)                          /* the SETUP page: four ti
     strcpy(p->track, "LOCAL");
     p->r = 127; p->g = 70; p->b = 20;
     if (mode == MODE_SYNTH) { p->r = SY_AR; p->g = SY_AG; p->b = SY_AB; }
+    p->page_count = 2;
+    p->page_idx = ctl.setup_sub;
+    if (ctl.setup_sub) {
+        setup_fill_backup(p);
+        return;
+    }
     strcpy(p->slot[0].name, "VELOCITY");   p->slot[0].kind = R4P_KIND_ENUM; p->slot[0].value = (uint16_t)(VEL_N << 7 | setup.vel);
     strcpy(p->slot[0].text, VN[setup.vel]);
     strcpy(p->slot[1].name, "AFTERTOUCH"); p->slot[1].kind = R4P_KIND_ENUM; p->slot[1].value = (uint16_t)(AT_N << 7 | setup.at);
@@ -108,7 +174,10 @@ static void setup_open(int on)
     if (on == ui.setup)
         return;
     ui.setup = (uint8_t)on;
+    if (bk.st == BK_ARMED || bk.st == BK_CONFIRM)    /* an armed BACKUP or a restore not yet written is forgotten */
+        bk.st = BK_IDLE;
     if (on) {
+        ctl.setup_sub = 0;
         setup_fill();
         ctl.setup_dirty = 0;
         memset(ctl.setup_acc, 0, sizeof ctl.setup_acc);
@@ -119,8 +188,29 @@ static void setup_open(int on)
     ui.dirty = D_ALL;
 }
 static int wrap(int v, int d, int n) { return ((v + d) % n + n) % n; }
+static void setup_refresh(void)                        /* the backup's state changed: its tiles */
+{
+    if (ui.setup && ctl.setup_sub) {
+        setup_fill();
+        ui.dirty |= D_TILES;
+    }
+}
+static int bk_host(void);
+static void bk_restore_start(void);
 static void setup_turn(int which, int d)               /* K1..K4: one step per detent */
 {
+    if (ctl.setup_sub) {                                /* VOICE BACKUP: K1 arms BACKUP (SAVE sends), K2 fetches */
+        if (which == 0 && (bk.st == BK_IDLE || bk.st == BK_CONFIRM)) {
+            if (bk_host()) {
+                bk.st = BK_ARMED;
+                ui_toast("SAVE: SEND BACKUP", 15);
+            }
+        } else if (which == 1 && (bk.st == BK_IDLE || bk.st == BK_ARMED)) {
+            bk_restore_start();
+        }
+        setup_refresh();
+        return;
+    }
     switch (which) {
     case 0: setup.vel = (uint8_t)wrap(setup.vel, d, VEL_N); setup_apply(); break;
     case 1: setup.at = (uint8_t)wrap(setup.at, d, AT_N); break;
@@ -271,6 +361,321 @@ static void list_move(int d)
         ctl_queue((uint16_t)(0x8000u | (unsigned)R4P_PICK_MOVE << 8 | (unsigned)s));
 }
 
+/* -------------------------------------------------------- protocol 1.3 --- */
+static int host13(void) { return ctl.session && ctl.host_minor >= 3; }   /* a host that takes the 1.3 frames */
+static void hv_name(char *t)                           /* the host voice's name, its spaces at the end cut */
+{
+    const uint8_t *nm = hv_set()->cur + FP_NAME;
+    int i;
+    for (i = 0; i < R4P_NAME_MAX; i++)
+        t[i] = nm[i] < 32u || nm[i] > 126u ? ' ' : (char)nm[i];
+    for (t[i] = 0; i > 0 && t[i - 1] == ' '; i--)
+        t[i - 1] = 0;
+}
+static void hv_off_notes(void)                         /* its notes released (RUN4 mode: it is the one sounding) */
+{
+    if (mode == MODE_RUN4)
+        syn_event(3, 0, 0, 0);
+}
+static void hv_voice(const r4p_hvvoice_t *v)           /* HV_VOICE: a stored voice, or the host's own */
+{
+    syn_set_t *s = hv_set();
+    if (v->kind == R4P_HVV_STORED) {
+        const uint8_t *p = syn_packed(v->idx);
+        if (!p)                                        /* an empty user slot: nothing changes (HV_STATE says so) */
+            return;
+        hv_off_notes();
+        fp_unpack(p, s->cur);
+        s->patch_idx = v->idx;
+        hv.voice = v->idx;
+    } else {
+        hv_off_notes();
+        if (v->kind == R4P_HVV_PACKED) {
+            fp_unpack(v->data, s->cur);                /* (masks and clamps every field) */
+        } else {
+            memcpy(s->cur, v->data, FP_SIZE);
+            fp_sanitize(s->cur);
+        }
+        hv.voice = R4P_VOICE_HV;
+    }
+    if (s == &syn)
+        syn_dirty = 1;
+}
+static void hv_param(uint8_t id, uint8_t v)            /* HV_PARAM: one parameter (the codec checked the range) */
+{
+    syn_set_t *s = hv_set();
+    switch (id) {
+    case R4P_HVP_ALG: s->cur[FP_ALG] = v; break;
+    case R4P_HVP_FB: s->cur[FP_FB] = v; break;
+    case R4P_HVP_BRIGHT: s->bright = (int8_t)(v - 64); break;
+    case R4P_HVP_ENVSPD: s->env_spd = (int8_t)(v - 64); break;
+    case R4P_HVP_VOLUME: s->level = v; break;
+    case R4P_HVP_VIBRATO: s->cur[FP_LPMD] = v; break;
+    case R4P_HVP_TREMOLO: s->cur[FP_LAMD] = v; break;
+    case R4P_HVP_LFOSPD: s->cur[FP_LFS] = v; break;
+    case R4P_HVP_ATDEPTH: s->at_depth = v; break;
+    case R4P_HVP_BEND: s->bend = v; break;
+    case R4P_HVP_VELSENS: s->vel_sens = v; break;
+    case R4P_HVP_TRANSPOSE: s->transpose = (int8_t)(v - 24); break;
+    case R4P_HVP_TUNE: s->tune = (int8_t)(v - 50); break;
+    case R4P_HVP_CHORUS: s->chorus = v; break;
+    case R4P_HVP_DELAY: s->dly_mix = v; break;
+    case R4P_HVP_REVERB: s->rev_mix = v; break;
+    case R4P_HVP_DRIVE: s->drive = v; break;
+    case R4P_HVP_DLYTIME: s->dly_div = v; break;
+    default: break;
+    }
+    if (s == &syn)
+        syn_dirty = 1;
+}
+static void hv_link_lost(void)                         /* a new computer (or none): the host voice is off */
+{
+    if (hv.on)
+        hv_off_notes();
+    hv.on = 0;
+    ctl.want_hvstate = 0;
+    ctl.names_next = 255;
+    ctl.vget1 = 0;
+    if (bk.st != BK_IDLE && bk.st != BK_CONFIRM)
+        bk.st = BK_IDLE;
+}
+
+static int bk_host(void)                               /* a 1.3 host to talk to, else the toast */
+{
+    if (ui.connected && host13())
+        return 1;
+    ui_toast("NO HOST", 15);
+    return 0;
+}
+static void bk_done(const char *toast)
+{
+    bk.st = BK_IDLE;
+    if (toast)
+        ui_toast(toast, 20);
+    setup_refresh();
+}
+static void bk_restore_start(void)
+{
+    if (!bk_host())
+        return;
+    bk.st = BK_WANT_INFO;
+    bk.k = 0;
+    bk.tries = 0;
+    ui_toast("LOADING BACKUP", 15);
+}
+static void bk_part(uint32_t k, r4p_voice_t *p)        /* user voice k (0..31) as a backup part */
+{
+    const syn_bank_t *b = &syn_bank[k / SYN_BANK_N];
+    p->idx = (uint8_t)k;
+    p->used = b->magic == SYN_BANK_MAGIC && ((b->used >> (k % SYN_BANK_N)) & 1u);
+    if (p->used)
+        memcpy(p->data, b->v[k % SYN_BANK_N], R4P_PACKED);
+    else
+        memset(p->data, 0, R4P_PACKED);
+}
+static void bk_write(void)                             /* the confirmed restore into both banks and the store */
+{
+    uint32_t b, i;
+    char t[24] = "RESTORED ", u[12];
+    for (b = 0; b < 2u; b++) {
+        syn_bank[b].magic = SYN_BANK_MAGIC;
+        syn_bank[b].used = (uint16_t)(bk.used >> (16u * b));
+        for (i = 0; i < SYN_BANK_N; i++)
+            memcpy(syn_bank[b].v[i], BK_STAGE + (b * SYN_BANK_N + i) * R4P_PACKED, R4P_PACKED);
+        plat_store_save(OBJ_BANK_A + b, &syn_bank[b], sizeof syn_bank[b]);
+    }
+    syn_bank_dirty = 0;
+    u_int(bk_user_count(), u); u_cat(t, u); u_cat(t, " VOICES");
+    bk_done(t);
+}
+/* the backup's host frames (app_sysex) */
+static void bk_frame(const r4p_msg_t *m)
+{
+    uint32_t i, n;
+    char t[24], u[12];
+    switch (m->cmd) {
+    case R4P_BK_ACK:
+        if (bk.st == BK_WAIT_ACK)
+            bk_done(m->u.b1.v == R4P_BK_STORED ? "BACKUP SENT" : m->u.b1.v == R4P_BK_BAD ? "BAD CHECKSUM" : "BACKUP NOT STORED");
+        break;
+    case R4P_BK_INFO:
+        if (bk.st != BK_WAIT_INFO)
+            break;
+        if (!m->u.bksum.count) {
+            bk_done("NO BACKUP");
+        } else if (m->u.bksum.count != R4P_BK_VOICES) {
+            bk_done("BAD BACKUP");
+        } else {
+            bk.info = m->u.bksum;
+            bk.k = 0;
+            bk.used = 0;
+            bk.crc = 0;
+            bk.tries = 0;
+            bk.st = BK_WANT_PART;
+            setup_refresh();
+        }
+        break;
+    case R4P_BK_DATA:
+        if (bk.st != BK_WAIT_PART || m->u.voice.idx != bk.k)
+            break;                                     /* (not the part asked for: a late answer) */
+        memcpy(BK_STAGE + bk.k * R4P_PACKED, m->u.voice.data, R4P_PACKED);
+        if (m->u.voice.used)
+            bk.used |= 1u << bk.k;
+        bk.k++;
+        bk.tries = 0;
+        if (bk.k < R4P_BK_VOICES) {
+            bk.st = BK_WANT_PART;
+            setup_refresh();
+            break;
+        }
+        for (i = 0, bk.crc = 0; i < R4P_BK_VOICES; i++) {      /* the CRC over what is staged, as the host made it */
+            r4p_voice_t p;
+            p.idx = (uint8_t)i;
+            p.used = (uint8_t)((bk.used >> i) & 1u);
+            memcpy(p.data, BK_STAGE + i * R4P_PACKED, R4P_PACKED);
+            bk.crc = r4p_crc32_part(bk.crc, &p);
+        }
+        if (bk.crc != bk.info.crc) {
+            bk_done("BAD CHECKSUM");
+            break;
+        }
+        for (i = 0, n = 0; i < R4P_BK_VOICES; i++)
+            n += (bk.used >> i) & 1u;
+        bk.st = BK_CONFIRM;
+        strcpy(t, "SAVE: WRITE "); u_int(n, u); u_cat(t, u);
+        ui_toast(t, 30);
+        setup_refresh();
+        break;
+    default:
+        break;
+    }
+}
+/* what the host is owed, behind the buttons, as there is room (one frame at most a call: the others' turn too) */
+static void jobs_send(uint32_t now)
+{
+    static uint8_t f[200];
+    r4p_msg_t m;
+    if (!ctl.session || ctl.txq_n)
+        return;
+    if ((bk.st == BK_WAIT_ACK || bk.st == BK_WAIT_INFO || bk.st == BK_WAIT_PART) && now - bk.at >= BK_WAIT_MS) {
+        if (bk.st == BK_WAIT_ACK || ++bk.tries >= BK_TRIES)
+            bk_done("NO HOST");
+        else
+            bk.st = bk.st == BK_WAIT_INFO ? BK_WANT_INFO : BK_WANT_PART;       /* asked again */
+    }
+    if (!host13())
+        return;
+    if (ctl.want_hvstate) {
+        m.cmd = R4P_HV_STATE;
+        m.u.hvstate.state = !hv.on ? R4P_HV_OFF : mode == MODE_RUN4 ? R4P_HV_SOUNDING : R4P_HV_SUSPENDED;
+        m.u.hvstate.chan = hv.chan;
+        m.u.hvstate.voice = hv.voice;
+        hv_name(m.u.hvstate.name);
+        if (send_frame(f, r4p_encode(f, sizeof f, &m)))
+            ctl.want_hvstate = 0;
+        return;
+    }
+    if (ctl.vget1) {
+        uint32_t idx = ctl.vget1 - 1u;
+        const uint8_t *p = idx == R4P_VOICE_HV ? 0 : syn_packed(idx);
+        m.cmd = R4P_VOICE_DATA;
+        m.u.voice.idx = (uint8_t)idx;
+        m.u.voice.used = idx == R4P_VOICE_HV || p != 0;
+        if (idx == R4P_VOICE_HV)
+            fp_pack(hv_set()->cur, m.u.voice.data);   /* the host voice as it sounds, its live edits in it */
+        else if (p)
+            memcpy(m.u.voice.data, p, R4P_PACKED);
+        if (send_frame(f, r4p_encode(f, sizeof f, &m)))
+            ctl.vget1 = 0;
+        return;
+    }
+    if (ctl.names_next < R4P_NVOICES) {
+        uint32_t i;
+        m.cmd = R4P_VOICE_NAMES;
+        m.u.names.first = ctl.names_next;
+        m.u.names.total = R4P_NVOICES;
+        m.u.names.n = R4P_NAMES_ROWS;
+        for (i = 0; i < R4P_NAMES_ROWS; i++) {
+            uint32_t idx = ctl.names_next + i, k;
+            m.u.names.used[i] = (uint8_t)syn_patch_used(idx);
+            if (m.u.names.used[i]) {
+                syn_patch_name(idx, m.u.names.name[i]);
+                for (k = R4P_NAME_MAX; k > 0 && m.u.names.name[i][k - 1] == ' '; k--)
+                    m.u.names.name[i][k - 1] = 0;
+            } else {
+                m.u.names.name[i][0] = 0;
+            }
+        }
+        if (send_frame(f, r4p_encode(f, sizeof f, &m)))
+            ctl.names_next = (uint8_t)(ctl.names_next + R4P_NAMES_ROWS);
+        return;
+    }
+    switch (bk.st) {
+    case BK_SEND: {
+        uint32_t c;
+        m.cmd = R4P_BK_PART;
+        bk_part(bk.k, &m.u.voice);
+        c = r4p_crc32_part(bk.crc, &m.u.voice);
+        if (send_frame(f, r4p_encode(f, sizeof f, &m))) {
+            bk.crc = c;
+            if (++bk.k >= R4P_BK_VOICES)
+                bk.st = BK_SEND_END;
+        }
+        break;
+    }
+    case BK_SEND_END:
+        m.cmd = R4P_BK_END;
+        m.u.bksum.count = R4P_BK_VOICES;
+        m.u.bksum.crc = bk.crc;
+        if (send_frame(f, r4p_encode(f, sizeof f, &m))) {
+            bk.st = BK_WAIT_ACK;
+            bk.at = now;
+        }
+        break;
+    case BK_WANT_INFO: case BK_WANT_PART:
+        m.cmd = R4P_BK_GET;
+        m.u.b1.v = bk.st == BK_WANT_INFO ? R4P_BK_SUMMARY : bk.k;
+        if (send_frame(f, r4p_encode(f, sizeof f, &m))) {
+            bk.st = bk.st == BK_WANT_INFO ? BK_WAIT_INFO : BK_WAIT_PART;
+            bk.at = now;
+        }
+        break;
+    default:
+        break;
+    }
+}
+static void setup_save_press(void)                     /* SAVE on the SETUP page: VOICE BACKUP's armed action */
+{
+    if (!ctl.setup_sub)
+        return;
+    if (bk.st == BK_ARMED) {
+        if (!bk_host()) {
+            bk.st = BK_IDLE;
+        } else {
+            bk.st = BK_SEND;
+            bk.k = 0;
+            bk.crc = 0;
+            ui_toast("SENDING BACKUP", 15);
+        }
+    } else if (bk.st == BK_CONFIRM) {
+        bk_write();
+    }
+    setup_refresh();
+}
+static void setup_enc(uint32_t k, int d)               /* the SETUP page's encoders: K1..K4 its tiles, SELECT / PRESETS its sub-page */
+{
+    if (k >= 3) {
+        for (; d; d += d > 0 ? -1 : 1)
+            setup_turn((int)k - 3, d > 0 ? 1 : -1);
+    } else if ((k == 0 || k == 2) && d) {
+        ctl.setup_sub ^= 1u;
+        if (bk.st == BK_ARMED)
+            bk.st = BK_IDLE;
+        setup_fill();
+        ui.dirty |= D_HEAD | D_TILES | D_FOOT;
+    }
+}
+
 static void octave_step(int d);
 /* ------------------------------------------------------------- Synth mode --- */
 static void synth_notes_off_keys(void)         /* held keys: the note-offs of the mode being left */
@@ -290,14 +695,18 @@ static void mode_switch(uint8_t to)
         return;
     synth_notes_off_keys();
     if (mode == MODE_SYNTH) {                      /* leaving: the sound stops, the settings are kept */
-        syn_event(6, 0, 0, 0);
-        syn_event(8, 0, 0, 0);
+        syn_hold = 1;                              /* (silent from here to the swap) */
+        sq_start(0);
         sq.rec = 0;
         sq_ed.held = -1;
         sq_ed.entry_open = 0;
         if (sui.dirty_set || syn_bank_dirty || sq_dirty)
             syn_save_all();
+    } else if (hv.on) {
+        ctl.want_hvstate = 1;                      /* 1.3: the host voice is suspended while Synth mode plays */
     }
+    syn_swap();                                    /* the other mode's settings sound (synth.c): Synth mode's, or the
+                                                    * host voice's; nothing of the one rings on in the other */
     mode = to;
     setup.mode = to;
     plat_store_save(OBJ_SETUP, &setup, sizeof setup);
@@ -455,9 +864,7 @@ static void synth_frame(uint32_t keys, uint32_t now)
         if (!d)
             continue;
         if (ui.setup) {
-            if (k >= 3)
-                for (; d; d += d > 0 ? -1 : 1)
-                    setup_turn((int)k - 3, d > 0 ? 1 : -1);
+            setup_enc(k, d);
             continue;
         }
         if (k >= 3) {
@@ -631,10 +1038,13 @@ static void midi_pump(void)
             sq_realtime((uint8_t)st);                  /* MIDI clock, start, stop: the sequencer and the arp follow */
             continue;
         }
-        if (mode != MODE_SYNTH || st >= 0xF0u)
-            continue;
-        if (syn.chan && ch != (uint32_t)syn.chan - 1u)
-            continue;
+        {   /* 1.3: in RUN4 mode the host voice plays its channel from the host's links (not the jack) */
+            int host_voice = mode == MODE_RUN4 && hv.on && (port == PORT_USB || port == PORT_BLE);
+            if ((mode != MODE_SYNTH && !host_voice) || st >= 0xF0u)
+                continue;
+            if (host_voice ? ch != hv.chan : (syn.chan && ch != (uint32_t)syn.chan - 1u))
+                continue;
+        }
         switch (st & 0xF0u) {
         case 0x90u:
             if (d2) { syn_apply_event(&(syn_ev_t){1, (uint8_t)d1, (uint8_t)d2, 0}); break; }
@@ -648,6 +1058,12 @@ static void midi_pump(void)
             break;
         case 0xE0u:
             syn_apply_event(&(syn_ev_t){4, (uint8_t)d1, (uint8_t)d2, 0});
+            break;
+        case 0xA0u:                                    /* pressure: into BRIGHT by at_depth (the host voice's; 0 in Synth mode) */
+            syn_apply_event(&(syn_ev_t){9, (uint8_t)d1, (uint8_t)d2, 0});
+            break;
+        case 0xD0u:
+            syn_apply_event(&(syn_ev_t){10, (uint8_t)d1, 0, 0});
             break;
         default:
             break;
@@ -744,6 +1160,8 @@ static void input(void)
         ctl.txq_n = 0;
         ctl.fwd = 0;
         ctl.want_sync = ctl.want_pot = 0;
+        ctl.host_minor = 0;
+        hv_link_lost();
     }
     if (!ctl.session)
         ctl.hello_at = now - HELLO_MS;                 /* (nothing to send to yet; try at the first chance) */
@@ -779,6 +1197,8 @@ static void input(void)
                 ctl.suppress |= bit;
                 if (k == B_FX || k == B_ENV || k == B_LFO || k == B_EDIT || k == B_GLO || k == B_HOME || k == B_ARP || k == B_SEQ)
                     setup_open(0);
+                else if (k == B_SAVE)
+                    setup_save_press();
                 continue;
             }
             if (shift && k == B_HOME) {                /* SEL + HOME: the other mode */
@@ -813,6 +1233,8 @@ static void input(void)
         ui.dirty |= D_FOOT;
     }
     txq_flush();
+    if (!ctl.want_sync)
+        jobs_send(now);                                /* 1.3: answers owed, the backup (both modes) */
 
     if (mode == MODE_SYNTH) {
         synth_frame(keys, now);
@@ -834,10 +1256,8 @@ static void input(void)
                 list_move(d);
             continue;
         }
-        if (ui.setup) {                                /* SETUP: K1..K4 edit, the rest does nothing; none of it goes out */
-            if (k >= 3 && d)
-                for (; d; d += d > 0 ? -1 : 1)
-                    setup_turn((int)k - 3, d > 0 ? 1 : -1);
+        if (ui.setup) {                                /* SETUP: K1..K4 edit, SELECT / PRESETS the sub-page; none of it goes out */
+            setup_enc(k, d);
             continue;
         }
         if (d)
@@ -896,6 +1316,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     ctl.frames_in++;
     switch (m.cmd) {
     case R4P_HELLO_ACK:
+        ctl.want_hvstate = hv.on;                      /* 1.3: where its voice stands (sent to a 1.3 host only) */
         if (mode == MODE_SYNTH) {                      /* the host knows we are a synth: nothing to draw or sync */
             ui.connected = 1;
             ctl.host_minor = m.u.ack.minor;
@@ -912,9 +1333,49 @@ int app_sysex(const uint8_t *p, uint32_t n)
     case R4P_LEDS:
         ctl.leds = m.u.leds;
         break;
-    case R4P_PAGE: case R4P_VALUE: case R4P_STATUS: case R4P_TOAST: case R4P_LIST: case R4P_FOCUS:
+    case R4P_STATUS:                               /* 1.3: the host's tempo is the host voice's (its delay) */
+        if (ui.connected && mode == MODE_RUN4 && m.u.status.bpm10 >= 400u && m.u.status.bpm10 <= 2400u)
+            syn.bpm10 = m.u.status.bpm10;
+        /* fallthrough */
+    case R4P_PAGE: case R4P_VALUE: case R4P_TOAST: case R4P_LIST: case R4P_FOCUS:
+    case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS:
         if (ui.connected && mode == MODE_RUN4)                              /* (frames before the ack are the previous session's) */
             ui_apply(&m);
+        break;
+    /* 1.3: the host voice, the voice list and the backup, in both modes (in Synth mode the host voice's settings wait) */
+    case R4P_HV_ON:
+        if (!ui.connected)
+            break;
+        if (hv.on && (!m.u.hvon.on || m.u.hvon.chan != hv.chan))
+            hv_off_notes();
+        hv.on = m.u.hvon.on;
+        hv.chan = m.u.hvon.chan;
+        ctl.want_hvstate = 1;
+        break;
+    case R4P_HV_VOICE:
+        if (ui.connected) {
+            hv_voice(&m.u.hvvoice);
+            ctl.want_hvstate = 1;
+        }
+        break;
+    case R4P_HV_PARAM:
+        if (ui.connected) {
+            uint32_t i;
+            for (i = 0; i < m.u.hvparam.n; i++)
+                hv_param(m.u.hvparam.id[i], m.u.hvparam.val[i]);
+        }
+        break;
+    case R4P_NAMES_REQ:
+        if (ui.connected)
+            ctl.names_next = 0;
+        break;
+    case R4P_VOICE_GET:
+        if (ui.connected)
+            ctl.vget1 = (uint8_t)(m.u.b1.v + 1u);
+        break;
+    case R4P_BK_ACK: case R4P_BK_INFO: case R4P_BK_DATA:
+        if (ui.connected)
+            bk_frame(&m);
         break;
     default:
         break;                                         /* device->host commands from the host: ignored */
@@ -941,16 +1402,28 @@ void app_init(void)
     sq_midi_out = sq_send_rt;
     memset(&sui, 0, sizeof sui);
     mode = setup.mode;
+    memset(&hv, 0, sizeof hv);
+    hv.chan = 15;                                      /* (HV_STATE's channel before any HV_ON) */
+    memset(&bk, 0, sizeof bk);
+    ctl.names_next = 255;
+    syn_host_defaults(&syn_alt);                       /* 1.3: the host voice's settings, parked */
+    if (mode == MODE_RUN4)
+        syn_swap();                                    /* RUN4 mode: they are the ones that sound */
 }
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t i;
     midi_pump();
-    if (mode == MODE_SYNTH) {                          /* Synth mode: the FM voices; MASTER is the volume */
+    /* Synth mode: the FM voices; RUN4 mode: the host voice while it is on (and until its last note has rung out).
+     * MASTER is the volume either way, as for the computer's own audio (base/device/uac_mix.h) */
+    if (mode == MODE_SYNTH || hv.on || syn_active_voices) {
+        uint32_t t0 = plat_ticks24();
         syn_render(lr, n, master_q12);
+        ctl.rend_ticks += plat_ticks24() - t0;
+        ctl.rend_frames += n;
         return;
     }
-    for (i = 0; i < 2u * n; i++)                       /* RUN4 mode: a controller makes no sound */
+    for (i = 0; i < 2u * n; i++)                       /* RUN4 mode without it: a controller makes no sound */
         lr[i] = 0;
 }
 void app_panic(void)
@@ -1059,6 +1532,27 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "scope_bpf")) *got = sy.frames ? (int)(sy.bytes / sy.frames) : 0;   /* bytes a frame */
     else if (!strcmp(what, "scope_us")) *got = sy.frames ? (int)(sy.ticks / PLAT_TICKS_PER_US / sy.frames) : 0;
     else if (!strcmp(what, "scope_reset")) { *got = 0; sy.frames = sy.bytes = sy.skipped = sy.ticks = 0; }
+    else if (!strcmp(what, "hv_on")) *got = hv.on;                          /* 1.3: the host voice */
+    else if (!strcmp(what, "hv_chan")) *got = hv.chan + 1;
+    else if (!strcmp(what, "hv_voice")) *got = hv.voice;
+    else if (!strcmp(what, "hv_alg")) *got = (hv_set()->cur[FP_ALG] & 31) + 1;
+    else if (!strcmp(what, "hv_level")) *got = hv_set()->level;
+    else if (!strcmp(what, "hv_bright")) *got = hv_set()->bright;
+    else if (!strcmp(what, "hv_bpm10")) *got = hv_set()->bpm10;
+    else if (!strcmp(what, "syn_level")) *got = (mode == MODE_SYNTH ? &syn : &syn_alt)->level;   /* Synth mode's own */
+    else if (!strcmp(what, "render_permille")) *got = ctl.rend_frames ? (int)((uint64_t)ctl.rend_ticks / PLAT_TICKS_PER_US * 44100u / 1000u / ctl.rend_frames) : 0;
+    else if (!strcmp(what, "render_reset")) { *got = 0; ctl.rend_ticks = ctl.rend_frames = 0; }
+    else if (!strcmp(what, "tape_on")) *got = tv.on;
+    else if (!strcmp(what, "tape_layout")) *got = tv_layout();
+    else if (!strcmp(what, "tape_frames")) *got = (int)tv.frames;
+    else if (!strcmp(what, "tape_bpf")) *got = tv.frames ? (int)(tv.bytes / tv.frames) : 0;
+    else if (!strcmp(what, "tape_us")) *got = tv.frames ? (int)(tv.ticks / PLAT_TICKS_PER_US / tv.frames) : 0;
+    else if (!strcmp(what, "tape_reset")) { *got = 0; tv.frames = tv.bytes = tv.ticks = 0; }
+    else if (!strcmp(what, "tape_x")) *got = tv.drawn_x;
+    else if (!strcmp(what, "bk_state")) *got = bk.st;
+    else if (!strcmp(what, "bk_part")) *got = bk.k;
+    else if (!strcmp(what, "setup_sub")) *got = ctl.setup_sub;
+    else if (!strcmp(what, "user_voices")) *got = (int)bk_user_count();
     else if (!strcmp(what, "big")) *got = ui.big1;                         /* 1.2: the slot shown big + 1, 0 = none */
     else if (!strcmp(what, "touch")) *got = ui.touch1;
     else if (!strcmp(what, "cursor")) *got = ui.page.cursor;

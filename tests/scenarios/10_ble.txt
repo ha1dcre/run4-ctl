@@ -5,7 +5,7 @@ wait 1500
 ble connect
 wait 1500
 expect link 2
-# HELLO goes out as packets (F0 7D 52 | 34 01 01 | 00 04 00 | 01 F7): the first two
+# HELLO goes out as packets (F0 7D 52 | 34 01 01 | 00 05 00 | 03 F7): the first two
 expect_out BLE F0 7D 52
 expect_out BLE 34 01 01
 out

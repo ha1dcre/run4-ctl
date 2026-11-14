@@ -7,8 +7,9 @@
 #include <stdint.h>
 
 #define R4P_VER 1
-#define R4P_MINOR 2               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
-                                   * trailer (cursor, position, path), FOCUS, VALUE flags */
+#define R4P_MINOR 3               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
+                                   * trailer (cursor, position, path), FOCUS, VALUE flags; 1.3: the host voice, the
+                                   * voice list, the tape view, the patch backup */
 #define R4P_CURSOR_NONE 127
 #define R4P_VF_BIG 1              /* VALUE flags bit 0: show the big value view */
 #define R4P_LIST_ROWS 7           /* items in one LIST frame (the window) */
@@ -22,10 +23,36 @@
 
 enum {                            /* device -> host */
     R4P_HELLO = 0x01, R4P_BTN = 0x02, R4P_ENC = 0x03, R4P_POT = 0x04, R4P_SYNC_REQ = 0x05, R4P_LIST_PICK = 0x06,
+    R4P_HV_STATE = 0x07, R4P_VOICE_NAMES = 0x08, R4P_VOICE_DATA = 0x09,                 /* 1.3 */
+    R4P_BK_PART = 0x0A, R4P_BK_END = 0x0B, R4P_BK_GET = 0x0C,                           /* 1.3 */
     /* host -> device */
     R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46, R4P_LIST = 0x47,
-    R4P_FOCUS = 0x48
+    R4P_FOCUS = 0x48,
+    R4P_HV_ON = 0x49, R4P_HV_VOICE = 0x4A, R4P_HV_PARAM = 0x4B, R4P_NAMES_REQ = 0x4C, R4P_VOICE_GET = 0x4D,   /* 1.3 */
+    R4P_TAPE_WAVE = 0x4E, R4P_TAPE_POS = 0x4F, R4P_METERS = 0x50,                                         /* 1.3 */
+    R4P_BK_ACK = 0x51, R4P_BK_INFO = 0x52, R4P_BK_DATA = 0x53                                             /* 1.3 */
 };
+/* protocol 1.3 */
+enum { R4P_HV_OFF, R4P_HV_SOUNDING, R4P_HV_SUSPENDED };            /* HV_STATE state */
+enum { R4P_HVV_STORED, R4P_HVV_PACKED, R4P_HVV_VCED };             /* HV_VOICE kind: a stored voice, 128 / 155 bytes */
+enum { R4P_HVP_ALG, R4P_HVP_FB, R4P_HVP_BRIGHT, R4P_HVP_ENVSPD, R4P_HVP_VOLUME, R4P_HVP_VIBRATO, R4P_HVP_TREMOLO,
+       R4P_HVP_LFOSPD, R4P_HVP_ATDEPTH, R4P_HVP_BEND, R4P_HVP_VELSENS, R4P_HVP_TRANSPOSE, R4P_HVP_TUNE, R4P_HVP_CHORUS,
+       R4P_HVP_DELAY, R4P_HVP_REVERB, R4P_HVP_DRIVE, R4P_HVP_DLYTIME, R4P_HVP_COUNT };   /* HV_PARAM ids */
+extern const uint8_t R4P_HVP_MAX[R4P_HVP_COUNT];                    /* the largest wire value of each */
+#define R4P_NVOICES 40            /* 8 factory + 32 user */
+#define R4P_VOICE_HV 127          /* VOICE_GET / VOICE_DATA / HV_STATE: the host voice's own (sent or edited) voice */
+#define R4P_NAMES_ROWS 8          /* names in one VOICE_NAMES frame */
+#define R4P_NAME_MAX 10           /* characters in a voice name */
+#define R4P_PACKED 128            /* a packed voice (the store's, a DX7 bank's record) */
+#define R4P_VCED 155              /* a DX7 single voice */
+#define R4P_WAVE_MAX 120          /* TAPE_WAVE columns */
+#define R4P_NMETERS 5             /* T1..T4, master */
+#define R4P_TP_PLAY 1             /* TAPE_POS flags */
+#define R4P_TP_REC 2
+#define R4P_TP_NOLOOP 4
+#define R4P_BK_VOICES 32          /* a backup: the 32 user voices */
+#define R4P_BK_SUMMARY 127        /* BK_GET: the summary (BK_INFO) */
+enum { R4P_BK_STORED, R4P_BK_BAD, R4P_BK_FAILED };                 /* BK_ACK status */
 enum { R4P_KIND_EMPTY, R4P_KIND_UNI, R4P_KIND_BI, R4P_KIND_ENUM, R4P_KIND_TOGGLE, R4P_KIND_COUNT };
 enum { R4P_LED_OFF, R4P_LED_DIM, R4P_LED_ON, R4P_LED_BLINK };
 enum { R4P_MODE_RUN4, R4P_MODE_SYNTH };
@@ -59,6 +86,21 @@ typedef struct {
     char item[R4P_LIST_ROWS][R4P_STR_MAX + 1];
 } r4p_list_t;
 typedef struct { uint8_t index, action; } r4p_pick_t;
+/* protocol 1.3 */
+typedef struct { uint8_t state, chan, voice; char name[R4P_STR_MAX + 1]; } r4p_hvstate_t;   /* HV_STATE */
+typedef struct { uint8_t on, chan; } r4p_hvon_t;                                           /* HV_ON (chan 0..15) */
+typedef struct { uint8_t kind, idx; uint8_t data[R4P_VCED]; } r4p_hvvoice_t;  /* HV_VOICE: idx (STORED) or data (128 / 155) */
+typedef struct { uint8_t n, id[R4P_HVP_COUNT], val[R4P_HVP_COUNT]; } r4p_hvparam_t;        /* HV_PARAM: 1..18 pairs */
+typedef struct {                                                                           /* VOICE_NAMES */
+    uint8_t first, total, n;
+    uint8_t used[R4P_NAMES_ROWS];
+    char name[R4P_NAMES_ROWS][R4P_NAME_MAX + 1];
+} r4p_names_t;
+typedef struct { uint8_t idx, used; uint8_t data[R4P_PACKED]; } r4p_voice_t;   /* VOICE_DATA (data only when used), BK_PART / BK_DATA (always) */
+typedef struct { uint8_t count; uint32_t crc; } r4p_bksum_t;                    /* BK_END, BK_INFO */
+typedef struct { uint8_t track; char label[R4P_STR_MAX + 1]; uint8_t n; uint8_t peak[R4P_WAVE_MAX]; } r4p_wave_t;   /* n 0 = off */
+typedef struct { uint16_t play, in, out; uint8_t flags; } r4p_tpos_t;           /* TAPE_POS, 0..16383 across the wave */
+typedef struct { uint8_t level[R4P_NMETERS], clip; } r4p_meters_t;              /* METERS: 0..127 (127 + 2 x dBFS), clip bits */
 
 typedef struct {
     uint8_t cmd;
@@ -76,6 +118,17 @@ typedef struct {
         r4p_list_t list;
         r4p_pick_t pick;
         r4p_focus_t focus;
+        r4p_hvstate_t hvstate;
+        r4p_hvon_t hvon;
+        r4p_hvvoice_t hvvoice;
+        r4p_hvparam_t hvparam;
+        r4p_names_t names;
+        r4p_voice_t voice;        /* VOICE_DATA, BK_PART, BK_DATA */
+        r4p_bksum_t bksum;        /* BK_END, BK_INFO */
+        r4p_wave_t wave;
+        r4p_tpos_t tpos;
+        r4p_meters_t meters;
+        struct { uint8_t v; } b1;  /* VOICE_GET idx, BK_GET part, BK_ACK status (NAMES_REQ: none) */
     } u;
 } r4p_msg_t;
 
@@ -93,6 +146,11 @@ size_t r4p_enc(uint8_t *buf, size_t cap, uint8_t id, int delta);          /* del
 size_t r4p_pot(uint8_t *buf, size_t cap, uint16_t v14);
 size_t r4p_sync_req(uint8_t *buf, size_t cap);
 size_t r4p_list_pick(uint8_t *buf, size_t cap, uint8_t index, uint8_t action);
+
+/* protocol 1.3: the backup's checksum, CRC-32 (IEEE 802.3, as zlib's crc32): start with crc = 0, feed bytes in order */
+uint32_t r4p_crc32(uint32_t crc, const uint8_t *p, size_t n);
+/* the bytes a backup part adds to it: k, used, then its 128 data bytes */
+uint32_t r4p_crc32_part(uint32_t crc, const r4p_voice_t *part);
 
 /* encoder detents coalesced per frame: add every detent seen, take once per frame; what clamping left over carries on */
 typedef struct { int16_t acc[R4P_NENC]; } r4p_enc_acc_t;

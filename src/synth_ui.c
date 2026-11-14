@@ -708,69 +708,71 @@ static void sp_draw_head(void)
     cv_blit(0, 0);
 }
 
+/* one knob's tile of the row (x .. x + 54, y 2..81 of a canvas 84 high): name, value, a thin bar; hot = in the accent */
+static void row_tile(int32_t x, const r4p_slot_t *s, int hot)
+{
+    static const char *const SHORT[][2] = {{"AFTERTOUCH", "AFTERTCH"}, {"KEY CHANNEL", "KEY CH"}, {"BEND RANGE", "BEND"},
+                                           {"REVERB TYPE", "REV TYPE"}, {"REVERB SIZE", "REV SIZE"}, {"DELAY FDBK", "DLY FDBK"},
+                                           {"DELAY TIME", "DLY TIME"}, {"USER VOICES", "VOICES"}};
+    int32_t w = 55, bw = 44, bx = x + 7, by = 66, fill, n, i;
+    uint16_t ac = hot ? sy_accent(100) : SY_BAR;
+    const felucca_font_t *f = pwidth(&FONT_M, s->text) <= w - 9 ? &FONT_M : pwidth(&FONT_B, s->text) <= w - 9 ? &FONT_B : &FONT_XS;
+    char nm[R4P_STR_MAX + 1];
+    const char *name = s->name;
+    if (s->kind == R4P_KIND_EMPTY) {
+        cv_rect(x, 2, w, 1, R4_TILE);
+        return;
+    }
+    cv_rect(x, 2, w, 80, R4_TILE);
+    cv_rect(x, 2, 2, 80, hot ? sy_accent(100) : R4_EDGE);
+    for (i = 0; i < (int32_t)(sizeof SHORT / sizeof SHORT[0]); i++)
+        if (!strcmp(name, SHORT[i][0]))
+            name = SHORT[i][1];
+    if (pwidth(&FONT_XS, name) <= w - 9) {
+        ptext(x + 7, 7, &FONT_XS, name, hot ? sy_accent(100) : R4_LABEL);
+    } else {                                   /* a long name: the small capitals */
+        fit(nm, name, &FONT_T, w - 8);
+        ptext(x + 6, 9, &FONT_T, nm, hot ? sy_accent(100) : R4_LABEL);
+    }
+    ptext(x + 7, f == &FONT_M ? 28 : 33, f, s->text, R4_TEXT);
+    switch (s->kind) {
+    case R4P_KIND_UNI:
+        cv_rect(bx, by + 2, bw, 2, R4_EDGE);
+        fill = s->value * bw / R4P_V14_MAX;
+        cv_rect(bx, by, fill, 6, ac);
+        break;
+    case R4P_KIND_BI:
+        cv_rect(bx, by + 2, bw, 2, R4_EDGE);
+        fill = ((int32_t)s->value - 8192) * (bw / 2) / 8191;
+        if (fill >= 0) cv_rect(bx + bw / 2, by, fill, 6, ac);
+        else cv_rect(bx + bw / 2 + fill, by, -fill, 6, ac);
+        cv_rect(bx + bw / 2, by - 2, 1, 10, R4_LABEL);
+        break;
+    case R4P_KIND_ENUM:
+        n = (s->value >> 7) & 0x7F;
+        n = n < 2 ? 2 : n;
+        for (i = 0; i < n && n <= 12; i++)
+            cv_rect(bx + i * bw / n, by + 2, bw / n - 1 > 1 ? bw / n - 1 : 1, 2, R4_EDGE);
+        if (n > 12)
+            cv_rect(bx, by + 2, bw, 2, R4_EDGE);
+        i = s->value & 0x7F;
+        cv_rect(bx + i * bw / n, by, bw / n - 1 > 2 ? bw / n - 1 : 2, 6, ac);
+        break;
+    case R4P_KIND_TOGGLE:
+        cv_rect(bx, by - 2, 24, 10, s->value ? ac : R4_EDGE);
+        cv_rect(s->value ? bx + 15 : bx + 2, by, 7, 6, s->value ? R4_BG : R4_DIM);
+        break;
+    default:
+        break;
+    }
+}
 /* the four tiles in a row (y 116..199): the knob turned last in the accent */
 static void sp_draw_tiles(void)
 {
     uint32_t k, now = plat_ms();
     cv_begin(240, 84, R4_BG);
-    for (k = 0; k < 4u; k++) {
-        const r4p_slot_t *s = &PG->slot[k];
-        int32_t x = 4 + (int32_t)k * 59, w = 55, bw = 44, bx = x + 7, by = 66, fill, n, i;
-        int hot = sy_touch_k == k + 1u && now - sy_touch_at < 2000u;
-        uint16_t ac = hot ? sy_accent(100) : SY_BAR;
-        const felucca_font_t *f = pwidth(&FONT_M, s->text) <= w - 9 ? &FONT_M : pwidth(&FONT_B, s->text) <= w - 9 ? &FONT_B : &FONT_XS;
-        char nm[R4P_STR_MAX + 1];
-        if (s->kind == R4P_KIND_EMPTY) {
-            cv_rect(x, 2, w, 1, R4_TILE);
-            continue;
-        }
-        cv_rect(x, 2, w, 80, R4_TILE);
-        cv_rect(x, 2, 2, 80, hot ? sy_accent(100) : R4_EDGE);
-        static const char *const SHORT[][2] = {{"AFTERTOUCH", "AFTERTCH"}, {"KEY CHANNEL", "KEY CH"}, {"BEND RANGE", "BEND"},
-                                               {"REVERB TYPE", "REV TYPE"}, {"REVERB SIZE", "REV SIZE"}, {"DELAY FDBK", "DLY FDBK"},
-                                               {"DELAY TIME", "DLY TIME"}};
-        const char *name = s->name;
-        for (i = 0; i < (int32_t)(sizeof SHORT / sizeof SHORT[0]); i++)
-            if (!strcmp(name, SHORT[i][0]))
-                name = SHORT[i][1];
-        if (pwidth(&FONT_XS, name) <= w - 9) {
-            ptext(x + 7, 7, &FONT_XS, name, hot ? sy_accent(100) : R4_LABEL);
-        } else {                                   /* a long name: the small capitals */
-            fit(nm, name, &FONT_T, w - 8);
-            ptext(x + 6, 9, &FONT_T, nm, hot ? sy_accent(100) : R4_LABEL);
-        }
-        ptext(x + 7, f == &FONT_M ? 28 : 33, f, s->text, R4_TEXT);
-        switch (s->kind) {
-        case R4P_KIND_UNI:
-            cv_rect(bx, by + 2, bw, 2, R4_EDGE);
-            fill = s->value * bw / R4P_V14_MAX;
-            cv_rect(bx, by, fill, 6, ac);
-            break;
-        case R4P_KIND_BI:
-            cv_rect(bx, by + 2, bw, 2, R4_EDGE);
-            fill = ((int32_t)s->value - 8192) * (bw / 2) / 8191;
-            if (fill >= 0) cv_rect(bx + bw / 2, by, fill, 6, ac);
-            else cv_rect(bx + bw / 2 + fill, by, -fill, 6, ac);
-            cv_rect(bx + bw / 2, by - 2, 1, 10, R4_LABEL);
-            break;
-        case R4P_KIND_ENUM:
-            n = (s->value >> 7) & 0x7F;
-            n = n < 2 ? 2 : n;
-            for (i = 0; i < n && n <= 12; i++)
-                cv_rect(bx + i * bw / n, by + 2, bw / n - 1 > 1 ? bw / n - 1 : 1, 2, R4_EDGE);
-            if (n > 12)
-                cv_rect(bx, by + 2, bw, 2, R4_EDGE);
-            i = s->value & 0x7F;
-            cv_rect(bx + i * bw / n, by, bw / n - 1 > 2 ? bw / n - 1 : 2, 6, ac);
-            break;
-        case R4P_KIND_TOGGLE:
-            cv_rect(bx, by - 2, 24, 10, s->value ? ac : R4_EDGE);
-            cv_rect(s->value ? bx + 15 : bx + 2, by, 7, 6, s->value ? R4_BG : R4_DIM);
-            break;
-        default:
-            break;
-        }
-    }
+    for (k = 0; k < 4u; k++)
+        row_tile(4 + (int32_t)k * 59, &PG->slot[k], sy_touch_k == k + 1u && now - sy_touch_at < 2000u);
     cv_blit(0, 116);
 }
 

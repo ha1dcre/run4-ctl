@@ -313,6 +313,70 @@ static void seq_tests(void)
     run_small(44100);
 }
 
+/* ---------------------------------------------------------------- the host voice (protocol 1.3) --- */
+static void host_voice_tests(void)
+{
+    static int32_t a[2 * 44100], b[2 * 44100];
+    syn_set_t hd, before = syn;
+    uint32_t i, diff = 0, live = 0;
+    int ok60 = 0, ok64 = 0;
+    /* the host voice's defaults leave the sounding settings alone */
+    syn_host_defaults(&hd);
+    CHECK(!memcmp(&before, &syn, sizeof syn) && hd.at_depth == 32 && !hd.arp_on && hd.patch_idx == 0 && hd.level == 80);
+    /* pressure: no effect at depth 0 (bit-exact), a different sound at depth 63 */
+    syn.arp_on = 0;
+    syn.at_depth = 0;
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_event(1, 60, 100, 0); syn_event(10, 127, 0, 0);
+    run(44100 / 2);
+    memcpy(a, pcm, sizeof a);
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_event(1, 60, 100, 0);
+    run(44100 / 2);
+    CHECK(!memcmp(a, pcm, 2u * (44100 / 2) * sizeof pcm[0]));
+    syn.at_depth = 63;
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_event(1, 60, 100, 0); syn_event(10, 127, 0, 0);
+    run(44100 / 2);
+    memcpy(b, pcm, sizeof b);
+    for (i = 0; i < 2u * (44100 / 2); i++)
+        diff += a[i] != b[i];
+    CHECK(diff > 1000u);
+    /* poly pressure reaches its own note's voice only */
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_event(1, 60, 100, 0); syn_event(1, 64, 100, 0); syn_event(9, 60, 100, 0);
+    run(BLK * 2);
+    for (i = 0; i < SYN_VOICES; i++) {
+        if (syn_v[i].n.live && syn_v[i].note == 60) ok60 = syn_v[i].at == 100;
+        if (syn_v[i].n.live && syn_v[i].note == 64) ok64 = syn_v[i].at == 0;
+    }
+    CHECK(ok60 && ok64);
+    /* held: silence, the events wait; let go: they play */
+    syn_reset_sound(); syn_dirty = 1; pn = 0;
+    syn_hold = 1;
+    syn_event(1, 67, 100, 0);
+    run(BLK * 4);
+    CHECK(peak_since(0, pn, 0) == 0.0 && syn_evh != syn_evt);
+    syn_hold = 0;
+    run(44100 / 4);
+    CHECK(peak_since(BLK * 4, pn, 0) > 0.01);
+    /* the swap: the two sets trade places, the sound starts from nothing */
+    syn.level = 55; syn_alt = syn; syn_alt.level = 77; syn_alt.at_depth = 9;
+    syn_swap();
+    for (i = 0; i < SYN_VOICES; i++)
+        live += syn_v[i].n.live;
+    CHECK(syn.level == 77 && syn.at_depth == 9 && syn_alt.level == 55 && !live && syn_evh == syn_evt && !syn_hold);
+    for (i = 0, diff = 0; i < DLY_N; i++)
+        diff += fx_dly[0][i] != 0;
+    CHECK(diff == 0);
+    syn_swap();
+    CHECK(syn.level == 55 && syn_alt.level == 77);
+    syn = before;
+    syn_dirty = 1;
+    syn_reset_sound();
+    printf("  host voice: pressure, poly pressure, hold, swap ok\n");
+}
+
 int main(int argc, char **argv)
 {
     double rms, pk, rms2;
@@ -442,6 +506,8 @@ int main(int argc, char **argv)
     syn_seq_start(0);
     run(44100 * 2);
     seq_tests();
+
+    host_voice_tests();
 
     /* CPU: 8 voices held on patch 0 (the factory patch with the most operators sounding), all fx on */
     syn_load_patch(0);
