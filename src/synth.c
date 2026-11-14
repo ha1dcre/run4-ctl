@@ -10,7 +10,7 @@
  * small ring) and edits the settings, which the render reads at its block starts. */
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
+#include "r4_libc.h"                     /* the C library: the system's on the host, its own on the device */
 #include "synth/fm6_tables.h"
 #include "synth/fm6_core.c"
 #include "synth/fm6_factory.h"

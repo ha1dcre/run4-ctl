@@ -2,7 +2,7 @@
  * RUN4 CTL: a thin terminal for the RUN4 iOS app. The only logic here is the firmware-local rules (SEL = SHIFT,
  * OCT-/OCT+ shift the keyboard) and the protocol (docs/PROTOCOL.md); everything else is forwarded as BTN / ENC / POT
  * and drawn from what the host sends. Part of the unity build (host/plat_host.c, device/unity.c), after the platform. */
-#include <string.h>
+#include "r4_libc.h"                     /* the C library: the system's on the host, its own on the device */
 #include "r4p.c"
 #include "ui.c"
 #include "synth.c"
