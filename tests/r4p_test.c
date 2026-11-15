@@ -552,7 +552,7 @@ static void t_v14(void)
     size_t n;
     int i;
     uint32_t h1, h2;
-    CHECK(R4P_MINOR == 4);
+    CHECK(R4P_MINOR >= 4);
     /* MODES: three, AMB absent in a build without it */
     memset(&m, 0, sizeof m);
     m.cmd = R4P_MODES; m.u.modes.cur = R4P_MID_AMB; m.u.modes.n = 3;
@@ -707,6 +707,93 @@ static void t_v14(void)
     m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 4; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 4);
 }
 
+/* protocol 1.5: the local mode's page */
+static void t_v15(void)
+{
+    r4p_msg_t m, b;
+    size_t n;
+    int i;
+    static const uint8_t AMB_GARDEN[] = {0xF0, 0x7D, 0x52, 0x34, 0x17, 0x02, 0x01, 0x04, 0x00, 0x12, 0x00, 0x05, 0x00, 0x0F,
+                                         0x00, 0x06, 0xF7};      /* AMB page 1 GARDEN: TEMPO 18, EVOLVE 5, MOTION 15, DRIFT 6 */
+    static const uint8_t SY_OP3[] = {0xF0, 0x7D, 0x52, 0x34, 0x17, 0x01, 0x05, 0x04, 0x00, 0x30, 0x00, 0x31, 0x00, 0x32,
+                                     0x00, 0x33, 0xF7};          /* Synth page 5 OP3, OPERATOR 1: ids 48..51 */
+    static const uint8_t SY_GLO2[] = {0xF0, 0x7D, 0x52, 0x34, 0x17, 0x01, 0x0B, 0x02, 0x01, 0x04, 0x01, 0x05, 0xF7};
+    static const uint8_t SY_SEQ[] = {0xF0, 0x7D, 0x52, 0x34, 0x17, 0x01, 0x0D, 0x00, 0xF7};
+    static const uint8_t SET_BELLS[] = {0xF0, 0x7D, 0x52, 0x34, 0x59, 0x02, 0x03, 0xF7};
+    CHECK(R4P_MINOR == 5);
+    n = r4p_hello(buf, sizeof buf, 0, 8, R4P_MODE_SYNTH);
+    CHECK(n == 11 && buf[9] == 5 && r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == 5);
+    /* LVIEW: the exact bytes */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_LVIEW; m.u.lview.mode = R4P_MID_AMB; m.u.lview.page = 1; m.u.lview.n = 4;
+    m.u.lview.id[0] = 18; m.u.lview.id[1] = 5; m.u.lview.id[2] = 15; m.u.lview.id[3] = 6;
+    n = enc(&m);
+    CHECK(n == sizeof AMB_GARDEN && !memcmp(buf, AMB_GARDEN, n));
+    CHECK(r4p_parse(AMB_GARDEN, sizeof AMB_GARDEN, &b) == 1 && b.cmd == R4P_LVIEW && b.u.lview.mode == 2 &&
+          b.u.lview.page == 1 && b.u.lview.n == 4 && b.u.lview.id[0] == 18 && b.u.lview.id[3] == 6);
+    m.u.lview.mode = R4P_MID_SYNTH; m.u.lview.page = 5;
+    for (i = 0; i < 4; i++) m.u.lview.id[i] = (uint16_t)(48 + i);
+    n = enc(&m);
+    CHECK(n == sizeof SY_OP3 && !memcmp(buf, SY_OP3, n));
+    m.u.lview.page = 11; m.u.lview.n = 2; m.u.lview.id[0] = 132; m.u.lview.id[1] = 133;
+    n = enc(&m);
+    CHECK(n == sizeof SY_GLO2 && !memcmp(buf, SY_GLO2, n));
+    CHECK(r4p_parse(SY_GLO2, sizeof SY_GLO2, &b) == 1 && b.u.lview.n == 2 && b.u.lview.id[1] == 133 && b.u.lview.page == 11);
+    m.u.lview.page = 13; m.u.lview.n = 0;
+    n = enc(&m);
+    CHECK(n == sizeof SY_SEQ && !memcmp(buf, SY_SEQ, n));
+    CHECK(r4p_parse(SY_SEQ, sizeof SY_SEQ, &b) == 1 && b.u.lview.n == 0 && b.u.lview.page == 13);
+    /* a knob without a parameter in the middle: 16383 (NONE) */
+    m.u.lview.page = 11; m.u.lview.n = 3; m.u.lview.id[0] = 128; m.u.lview.id[1] = R4P_LVIEW_NONE; m.u.lview.id[2] = 130;
+    n = enc(&m);
+    CHECK(n == 6 + 3 + 6 && buf[10] == 0x7F && buf[11] == 0x7F);
+    CHECK(round_trip(&m, &b) == 1 && b.u.lview.n == 3 && b.u.lview.id[1] == R4P_LVIEW_NONE && b.u.lview.id[2] == 130);
+    /* the encoder's checks */
+    m.u.lview.n = 5; CHECK(enc(&m) == 0);
+    m.u.lview.n = 1; m.u.lview.page = 32; CHECK(enc(&m) == 0);
+    m.u.lview.page = 31; CHECK(enc(&m) > 0);
+    m.u.lview.mode = 127; CHECK(enc(&m) == 0);
+    m.u.lview.mode = 1; m.u.lview.id[0] = 16384; CHECK(enc(&m) == 0);
+    {   /* the reader's: a bad count, a length that does not match it, a page past 31 */
+        uint8_t f[sizeof AMB_GARDEN + 2];
+        memcpy(f, AMB_GARDEN, sizeof AMB_GARDEN);
+        f[7] = 5; CHECK(r4p_parse(f, sizeof AMB_GARDEN, &b) == -1);                   /* n 5 */
+        f[7] = 3; CHECK(r4p_parse(f, sizeof AMB_GARDEN, &b) == -1);                   /* n 3, four ids: trailing */
+        f[7] = 4; f[6] = 32; CHECK(r4p_parse(f, sizeof AMB_GARDEN, &b) == -1);       /* page 32 */
+        f[6] = 1; f[sizeof AMB_GARDEN - 2] = 0xF7;
+        CHECK(r4p_parse(f, sizeof AMB_GARDEN - 1, &b) == -1);                         /* half an id */
+        memcpy(f, AMB_GARDEN, sizeof AMB_GARDEN);
+        f[sizeof AMB_GARDEN - 1] = 0x00; f[sizeof AMB_GARDEN] = 0x01; f[sizeof AMB_GARDEN + 1] = 0xF7;
+        CHECK(r4p_parse(f, sizeof f, &b) == -1);                                      /* an id too many */
+        memcpy(f, AMB_GARDEN, 8); f[8] = 0xF7;
+        CHECK(r4p_parse(f, 9, &b) == -1);                                             /* n 4, no ids */
+        f[5] = 0x7F; f[7] = 0; CHECK(r4p_parse(f, 9, &b) == -1);                      /* mode 127 */
+    }
+    /* LVIEW_SET */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_LVIEW_SET; m.u.lview.mode = R4P_MID_AMB; m.u.lview.page = 3;
+    n = enc(&m);
+    CHECK(n == sizeof SET_BELLS && !memcmp(buf, SET_BELLS, n));
+    CHECK(r4p_parse(SET_BELLS, sizeof SET_BELLS, &b) == 1 && b.cmd == R4P_LVIEW_SET && b.u.lview.mode == 2 && b.u.lview.page == 3);
+    m.u.lview.page = 127; CHECK(round_trip(&m, &b) == 1 && b.u.lview.page == 127);   /* (past npages: the device's RANGE) */
+    m.u.lview.mode = 127; CHECK(enc(&m) == 0);
+    {
+        uint8_t shortf[] = {0xF0, 0x7D, 0x52, 0x34, 0x59, 0x02, 0xF7}, longf[] = {0xF0, 0x7D, 0x52, 0x34, 0x59, 0x02, 0x03, 0x00, 0xF7};
+        uint8_t badmode[] = {0xF0, 0x7D, 0x52, 0x34, 0x59, 0x7F, 0x03, 0xF7};
+        CHECK(r4p_parse(shortf, sizeof shortf, &b) == -1);
+        CHECK(r4p_parse(longf, sizeof longf, &b) == -1);
+        CHECK(r4p_parse(badmode, sizeof badmode, &b) == -1);
+    }
+    /* 16383 is never a described parameter's id (it is LVIEW's NONE) */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_DESC_PARAM; fill_dparam(&m.u.dparam);
+    m.u.dparam.id = 16382; CHECK(enc(&m) > 0);
+    m.u.dparam.id = R4P_LVIEW_NONE; CHECK(enc(&m) == 0);
+    m.u.dparam.id = 16382; n = enc(&m); buf[5] = 0x7F; buf[6] = 0x7F; CHECK(r4p_parse(buf, n, &b) == -1);
+    /* a 1.5 host's HELLO_ACK */
+    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 5; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 5);
+}
+
 int main(void)
 {
     t_simple();
@@ -720,6 +807,7 @@ int main(void)
     t_v12();
     t_v13();
     t_v14();
+    t_v15();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

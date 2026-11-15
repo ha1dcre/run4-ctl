@@ -19,14 +19,15 @@ scale and chord keys, mutate, an A / B morph, MIDI learn, pages) are implemented
 simulator and in native tests (`make test`); so are the USB backup, the screen mirror, sample-accurate MIDI in, the
 overload guard, LOCAL OUT and the USB stems package; firmware 0.7 adds AMB mode, the Dattorro plate as Synth mode's
 reverb and the help cards; firmware 0.8 protocol 1.4: RUN4 lists and switches the modes and remote-controls the local
-modes from their self-description (AMB and Synth mode described), the protocol and codec under MIT. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
+modes from their self-description (AMB and Synth mode described), the protocol and codec under MIT; protocol 1.5: the
+FM-1 tells RUN4 the page it shows and RUN4 picks one (LVIEW, LVIEW_SET), values every 40 ms. Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
 the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `docs/PROTOCOL.md` | the wire protocol v1 (minor 4), MIT |
+| `docs/PROTOCOL.md` | the wire protocol v1 (minor 5), MIT |
 | `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats), MIT; `tests/r4p_fuzz.c` its fuzz test |
 | `src/lm.c`, `src/synth_lm.c`, `src/amb_lm.c` | protocol 1.4: the local modes for the host (list, switch, description, values, status line), table-driven; Synth mode's and AMB mode's descriptions |
 | `src/ui.c` | the display: state from host frames, redraw by region |
@@ -125,7 +126,7 @@ CPU (this Mac, -O2): AMB mode 0.43 % of real time at its busiest piece (VOICES, 
 mode's whole engine with 8 voices and every effect 0.58 % (0.6: 0.63 %, the difference is noise). On the device not
 measured; AMB-1 runs the same engine (with float lines) on the same hardware.
 
-Protocol 1.4 (firmware 0.8, `src/lm.c`): RAM 916 B of .bss (the shadow of the values last sent, 160 x 2 B, the frame
+Protocol 1.4 and 1.5 (firmware 0.8, `src/lm.c`): RAM 944 B of .bss (the shadow of the values last sent, 160 x 2 B, the frame
 being built, the state; measured natively, `expect lm_ram` in `31_modes`), no pool; the descriptions are tables in
 flash. Code: the codec grew 5,170 -> 7,798 B (arm-none-eabi-gcc -Os Thumb-2, as a stand-in for the JieLi toolchain);
 the whole of 1.4 adds 28 KB to the host simulator's x86-64 -O2 text (about a third of that expected on the device: not

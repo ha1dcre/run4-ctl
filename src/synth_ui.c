@@ -316,19 +316,21 @@ static void sp_turn(uint32_t k, int d)
 }
 static void sq_disarm(void);
 static void sq_phrase_reset(void);
-static void sp_page_press(uint32_t page)
+static void sp_page_show(uint32_t page, uint32_t sub)   /* a page and its sub-page, as its button gets there */
 {
     sq_disarm();
     sq_phrase_reset();
     sy_touch_k = 0;
-    if (page == sui.page)
-        sui.sub = (uint8_t)((sui.sub + 1u) % SP[page].nsub);
-    else {
+    if (page != sui.page) {
         sui.page = (uint8_t)page;
-        sui.sub = 0;
         sq_ed.lview = 0;                      /* (a held step's lock page: the step's own again) */
     }
+    sui.sub = (uint8_t)(sub % SP[page].nsub);
     sp_build();
+}
+static void sp_page_press(uint32_t page)      /* a page button: that page, again: its next sub-page */
+{
+    sp_page_show(page, page == sui.page ? sui.sub + 1u : 0u);
 }
 static void sp_select_op(uint32_t op)
 {

@@ -8,7 +8,8 @@ It does NOT share code with src/r4p.c, so the host simulator tests also cross-ch
   fake_run4.py expect KIND ...   print the hex of one device->host frame: btn ID 0|1, enc ID DELTA, pot V, hello, sync
   fake_run4.py desc LOG [amb|synth]  protocol 1.4: read a device's raw SysEx (a simulator "sysex_log"), check every
                                  description in it (frames, labels, counts, the hash) and print it; amb / synth: also
-                                 check it against the parameters docs/PROTOCOL.md lists for that mode
+                                 check it against the parameters docs/PROTOCOL.md lists for that mode; 1.5: every
+                                 LVIEW in it names a page of the description and only parameters on that page
 """
 import sys
 
@@ -20,7 +21,8 @@ CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05, LIST_PICK=0x
            TAPE_WAVE=0x4E, TAPE_POS=0x4F, METERS=0x50, BK_ACK=0x51, BK_INFO=0x52, BK_DATA=0x53,
            MODES=0x0D, MODE=0x0E, DESC_HEAD=0x0F, DESC_PAGE=0x10, DESC_PARAM=0x11, DESC_LABELS=0x12,      # 1.4
            DESC_END=0x13, PVAL=0x14, LSTATE=0x15, LM_ERR=0x16,
-           MODES_REQ=0x54, MODE_SET=0x55, DESC_REQ=0x56, VALS_REQ=0x57, PSET=0x58)
+           MODES_REQ=0x54, MODE_SET=0x55, DESC_REQ=0x56, VALS_REQ=0x57, PSET=0x58,
+           LVIEW=0x17, LVIEW_SET=0x59)                                                                    # 1.5
 NONE = 127                             # protocol 1.2: no cursor
 KIND = dict(empty=0, uni=1, bi=2, enum=3, toggle=4)
 LED = dict(off=0, dim=1, on=2, blink=3)
@@ -452,7 +454,7 @@ class R:
 
 def decode14(f):
     """a device -> host 1.4 frame (F0 .. F7) as a dict, or None for another command; raises ValueError"""
-    if len(f) < 6 or f[:4] != HDR or f[-1] != 0xF7 or not 0x0D <= f[4] <= 0x16:
+    if len(f) < 6 or f[:4] != HDR or f[-1] != 0xF7 or not 0x0D <= f[4] <= 0x17:
         return None
     c, r = f[4], R(f[5:-1])
     if c == 0x0D:
@@ -484,6 +486,12 @@ def decode14(f):
     elif c == 0x15:
         d = dict(cmd="LSTATE", mode=r.u8(), flags=r.u8())
         d["texts"] = [r.string(16) for _ in range(r.u8())]
+    elif c == 0x17:
+        d = dict(cmd="LVIEW", mode=r.u8(), page=r.u8())
+        n = r.u8()
+        if n > 4 or d["page"] >= 32:
+            raise ValueError("LVIEW: %d ids, page %d" % (n, d["page"]))
+        d["ids"] = [r.v14() for _ in range(n)]
     else:
         d = dict(cmd="LM_ERR", mode=r.u8(), code=r.u8(), id=r.v14())
     r.done()
@@ -573,7 +581,7 @@ SYNTH_PAGES = ["VOICE", "SYNTH", "MORPH", "OP1", "OP2", "OP3", "OP4", "OP5", "OP
 
 def desc_check(path, which=None):
     raw = open(path, "rb").read()
-    descs, modes, n14 = [], [], 0
+    descs, modes, n14, views = [], [], 0, []
     cur = Desc()
     for f in split_frames(raw):
         d = decode14(f)
@@ -582,6 +590,10 @@ def desc_check(path, which=None):
         n14 += 1
         if d["cmd"] == "MODE":
             modes.append(d)
+        if d["cmd"] == "LVIEW":                 # 1.5: checked against the last description of its mode before it
+            last = [x for x in descs if x.head["mode"] == d["mode"]]
+            assert last, "an LVIEW before its mode's description"
+            views.append((d, last[-1]))
         cur.feed(f, d)
         if cur.done:
             descs.append(cur)
@@ -610,8 +622,74 @@ def desc_check(path, which=None):
         assert len(ds.params) == 143 and ds.params[0]["name"] == "VOICE"
         ids = [p["id"] for p in ds.params]
         assert ids[:3] == [150, 151, 152] and ids[3:11] == list(range(8)) and ids[11:107] == list(range(16, 112))
-    print("desc %s: %d 1.4 frames, %d description(s) checked" % (path, n14, len(descs)))
+    for d, ds in views:
+        assert d["page"] < ds.head["npages"], "LVIEW page %d of %d" % (d["page"], ds.head["npages"])
+        assert not d["ids"] or d["ids"][-1] != LVIEW_NONE, "LVIEW: an empty knob at the end"
+        on = dict((p["id"], p["page"]) for p in ds.params)
+        for i in d["ids"]:
+            assert i == LVIEW_NONE or on.get(i) == d["page"], "LVIEW page %d: id %d is not a parameter of that page" % (
+                d["page"], i)
+        print("  LVIEW mode %d page %d %s: %s" % (d["mode"], d["page"], ds.pages[d["page"]],
+                                                " ".join(("-" if i == LVIEW_NONE else "%d %s" % (i, next(
+                                                    p["name"] for p in ds.params if p["id"] == i))) for i in d["ids"])))
+    print("desc %s: %d 1.4 frames, %d description(s), %d LVIEW checked" % (path, n14, len(descs), len(views)))
     return 0
+
+
+# ------------------------------------------------------------------ protocol 1.5 ---
+LVIEW_NONE = 16383                     # a knob without a described parameter
+
+
+def lview(mode, page, ids):
+    """device -> host LVIEW: the page shown, the ids of K1..Kn (NONE for an empty knob; none at the end)"""
+    assert 0 <= page < 32 and len(ids) <= 4 and (not ids or ids[-1] != LVIEW_NONE)
+    p = [mode, page, len(ids)]
+    for i in ids:
+        p += v14(i)
+    return frame("LVIEW", p)
+
+
+def lview_set(mode, page):
+    """host -> device LVIEW_SET: show that description page"""
+    return frame("LVIEW_SET", [mode, page])
+
+
+def synth_view(sp, sub=0, op=0):
+    """Synth mode's LVIEW by docs/PROTOCOL.md ("Protocol 1.5"): a device page (HOME EDIT ENV LFO FX GLO ARP SEQ), its
+    sub-page and the operator"""
+    if sp == "HOME":
+        return lview(1, 1 + sub, [4 * sub + k for k in range(4)])
+    if sp in ("EDIT", "ENV"):
+        return lview(1, 3 + op, [16 + 16 * op + (8 if sp == "ENV" else 0) + 4 * sub + k for k in range(4)])
+    if sp == "GLO":
+        return lview(1, 11, [[128, 129, 130, 131], [132, 133], [136, 137, 138, 139]][sub])
+    if sp == "SEQ":
+        return lview(1, 13, [])
+    base, page = dict(LFO=(112, 9), FX=(120, 10), ARP=(140, 12))[sp]
+    return lview(1, page, [base + 4 * sub + k for k in range(4)])
+
+
+def v15_table():
+    """the 1.5 frames the scenarios use"""
+    t = {"ACK15": frame("HELLO_ACK", [1, 5])}
+    for pg in range(1, 8):                  # AMB's device pages: the ids its description puts on them, in knob order
+        t["LVIEW_AMB_%d" % pg] = lview(2, pg, [i for i, p, _, _ in AMB_PARAMS if p == pg])
+    for pg in range(0, 16):
+        t["LVIEW_SET_AMB_%d" % pg] = lview_set(2, pg)
+        t["LVIEW_SET_SYNTH_%d" % pg] = lview_set(1, pg)
+        t["LVIEW_SET_RUN4_%d" % pg] = lview_set(0, pg)
+    for sp, nsub in (("HOME", 2), ("LFO", 2), ("FX", 2), ("GLO", 3), ("ARP", 2), ("SEQ", 1)):
+        for sub in range(nsub):
+            t["LVIEW_SY_%s_%d" % (sp, sub)] = synth_view(sp, sub)
+    for sp in ("EDIT", "ENV"):
+        for op in range(6):
+            for sub in range(2):
+                t["LVIEW_SY_%s_OP%d_%d" % (sp, op + 1, sub)] = synth_view(sp, sub, op)
+    for v in range(0, 101):                 # AMB's PAD LEVEL (id 0) as a knob turns
+        t["PVAL_PAD_%d" % v] = pval(2, [(0, v, "%d" % v)])
+    t.update({"ERR_RANGE_SYNTH_0": lm_err(1, "RANGE", 0), "ERR_WRONG_SYNTH": lm_err(1, "WRONGMODE"),
+              "ERR_NODESC_RUN4": lm_err(0, "NODESC"), "ERR_WRONG_RUN4": lm_err(0, "WRONGMODE")})
+    return t
 
 
 def v14_table():
@@ -667,8 +745,8 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 8, 0, 4]), "SYNC": frame("SYNC_REQ"),
-        "HELLO_LOCAL": frame("HELLO", [1, 0, 8, 1, 4]),
+        "HELLO": frame("HELLO", [1, 0, 8, 0, 5]), "SYNC": frame("SYNC_REQ"),
+        "HELLO_LOCAL": frame("HELLO", [1, 0, 8, 1, 5]),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -678,6 +756,7 @@ def expand(name):
     }
     table.update(v13_table())
     table.update(v14_table())
+    table.update(v15_table())
     for i in range(14):
         table["BTN%d_1" % i] = frame("BTN", [i, 1])
         table["BTN%d_0" % i] = frame("BTN", [i, 0])
@@ -717,7 +796,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 8, 0, 4]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 8, 0, 5]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

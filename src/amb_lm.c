@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * RUN4 CTL, protocol 1.4: AMB mode described to the host (src/lm.c, docs/PROTOCOL.md "AMB's description"). Page 0
  * PLAY: the piece, the notes of the scale, the transport and the actions; pages 1..7 the device's pages, their four
- * knobs each, ids = the engine's parameter numbers (amb.h P_*). Part of the unity build (app.c), after amb_ui.c. */
+ * knobs each, ids = the engine's parameter numbers (amb.h P_*); 1.5: the page shown, and the host's pick of one. Part
+ * of the unity build (app.c), after amb_ui.c. */
 
 enum { AL_PIECE = 32, AL_NOTES, AL_GROW, AL_FREEZE, AL_NEXT, AL_SAVE, AL_RESET };
 #define AL_NPLAY 7                                  /* page 0's parameters, then 7 pages x 4 knobs */
@@ -205,5 +206,28 @@ static void al_state(r4p_lstate_t *s)
     strcpy(s->text[3], amr.grow_at && !en_playing ? "WAKING" : en_frozen ? "FROZEN" : en_ext && en_playing ? "EXT CLOCK"
                        : en_playing ? "GROWING" : "RESTING");
 }
+/* 1.5: the device's page v is description page v + 1, its knobs the parameters the description puts there (PLAY, page
+ * 0, is never the device's) */
+static void al_view(uint8_t *page, uint16_t ids[R4P_LVIEW_MAX], uint8_t *n)
+{
+    uint32_t v = amr.view % AV_N, k;
+    lm_param_t p;
+    *page = (uint8_t)(1u + v);
+    for (k = 0; k < 4u; k++) {
+        al_param(AL_NPLAY + v * 4u + k, &p);
+        ids[k] = p.id;
+    }
+    *n = 4;
+}
+static int al_show(uint32_t page)                    /* LVIEW_SET: as the page's button (PLAY: nothing to show) */
+{
+    if (page < 1u || page > AV_N || page - 1u == amr.view)
+        return 1;
+    if (ui.setup)
+        return 0;                                    /* (the SETUP page is the player's: it stays open) */
+    ctl_card_off();
+    am_view((int)page - 1);
+    return 1;
+}
 static const lm_desc_t AL_DESC = {MODE_AMB, "AMB", 1 + AV_N, AL_PAGES, AL_N, 4, AL_STATE,
-                                  al_param, al_label, al_get, al_text, al_set, al_state};
+                                  al_param, al_label, al_get, al_text, al_set, al_state, al_view, al_show};

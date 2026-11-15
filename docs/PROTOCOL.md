@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!-- Copyright (c) 2026 Eugen Schott -->
 
-# RUN4 CTL protocol v1 (minor 4)
+# RUN4 CTL protocol v1 (minor 5)
 
 This document and the reference codec (`src/r4p.h`, `src/r4p.c`) are under the MIT licence (`LICENSE-MIT`), so any
 firmware or device can implement RUN4 CTL; the rest of RUN4 CTL stays GPL-3.0. See "Implementing RUN4 CTL in your own
@@ -27,7 +27,7 @@ cross-check it.
   and F7 (513 between them); with the protocol 1.2 trailer (a 24-character escaped path) **569 bytes** (567 between
   them), below the 640 bytes fm1-base's USB-MIDI SysEx buffer takes (`HOST_SX_MAX`, the same as
   the device's). The codec test asserts it (`tests/r4p_test.c`, "max PAGE frame"). Frames **from the device** are at most
-  136 bytes (protocol 1.3: VOICE_DATA, BK_PART; 1.4: every frame, the encoder refuses a longer one), so one always fits
+  136 bytes (protocol 1.3: VOICE_DATA, BK_PART; 1.4 and 1.5: every frame, the encoder refuses a longer one), so one always fits
   whole in the Bluetooth MIDI out queue (64 packets of 3 bytes = 192) and in the USB SysEx ring (128 packets = 384); the
   device sends a frame only when it fits whole.
 * Coexistence: fm1-base reserves SysEx under `7D 4C ..` (sub-IDs `43` remote control, `47` crash log, `48` crash history,
@@ -62,6 +62,7 @@ cross-check it.
 | 0x14 | PVAL | `mode, n, n x (id14, value s14, text(str))` - 1.4 |
 | 0x15 | LSTATE | `mode, flags, n, n x text(str)` - 1.4 |
 | 0x16 | LM_ERR | `mode, code, id14` - 1.4 |
+| 0x17 | LVIEW | `mode, page, n, n x id14` (n 0..4) - 1.5, "The local mode's page" |
 
 Button ids follow fm1-base `plat.h`: 0 FX, 1 SEL, 2 ENV, 3 LFO, 4 EDIT, 5 GLO, 6 HOME, 7 SAVE, 8 ARP, 9 SEQ, 10 PLAY,
 11 REC, 12 OCT-, 13 OCT+. Encoder ids: 0 SELECT, 1 ALGO, 2 PRESETS, 3..6 K1..K4.
@@ -112,6 +113,7 @@ while a key is held leaves no stuck note.
 | 0x56 | DESC_REQ | `mode` - 1.4 |
 | 0x57 | VALS_REQ | `mode` - 1.4 |
 | 0x58 | PSET | `mode, n x (id14, value s14)`, n 1..16 - 1.4 |
+| 0x59 | LVIEW_SET | `mode, page` - 1.5 |
 
 Protocol 1.2 adds optional trailers (see "Protocol 1.2: where you are"): PAGE may end with
 `cursor item_idx14 item_count14 path(str)`, VALUE with `flags`.
@@ -192,7 +194,7 @@ view switches to it. Everything is redrawn by region (no full-screen clear).
 Version 1.3 adds four things: the **host voice** (the FM-1's own FM engine as an instrument of a RUN4 track, also in
 RUN4 mode), the **voice list** (the FM-1's 40 voice names and their data), the **tape view** (a waveform, playhead and
 meters drawn on the FM-1) and the **patch backup** (the 32 user voices kept by the host). It is backwards compatible:
-`proto_ver` stays 1, the firmware's HELLO says minor 3 (4 since 1.4), and a host that speaks 1.3 answers **HELLO_ACK `01 03`**.
+`proto_ver` stays 1, the firmware's HELLO says minor 3 (4 since 1.4, 5 since 1.5), and a host that speaks 1.3 answers **HELLO_ACK `01 03`**.
 
 * The device **sends** 1.3 frames (HV_STATE, VOICE_NAMES, VOICE_DATA, BK_PART, BK_END, BK_GET) only to a host whose
   last HELLO_ACK said minor 3 or more. A 1.0 / 1.1 / 1.2 host sees no change at all (its layout is never the tape
@@ -444,8 +446,8 @@ without knowing them in advance: the device lists its modes, switches on request
 a short status line. A host built on this document needs no update for a new mode or a new parameter; it caches a
 description by its hash. First use: RUN4 picks AMB, and records it into a Tape over the USB audio input.
 
-It is backwards compatible: `proto_ver` stays 1, the firmware's HELLO says minor 4, and a host that speaks 1.4 answers
-**HELLO_ACK `01 04`**. The device sends the 1.4 frames (MODES, MODE, DESC_*, PVAL, LSTATE, LM_ERR) only to a host whose
+It is backwards compatible: `proto_ver` stays 1, the firmware's HELLO says minor 4 (5 since 1.5), and a host that
+speaks 1.4 answers **HELLO_ACK `01 04`**. The device sends the 1.4 frames (MODES, MODE, DESC_*, PVAL, LSTATE, LM_ERR) only to a host whose
 last HELLO_ACK said minor 4 or more; a 1.0 .. 1.3 host sees exactly what it saw before. The device takes the 1.4 host
 frames from any host after its HELLO_ACK (a MODE_SET from a 1.3 host switches the mode, and the HELLO handshake follows
 as for SEL + HOME); before the HELLO_ACK they are ignored.
@@ -454,7 +456,7 @@ as for SEL + HOME); before the HELLO_ACK they are ignored.
 
 * **s14**: a signed value, `v + 8192` as a 14-bit value (two 7-bit bytes, MSB first): -8192 .. 8191. `00 00` is -8192,
   `40 00` is 0, `7F 7F` is 8191.
-* **id14**: a parameter's id, 0..16383, plain 14-bit.
+* **id14**: a parameter's id, plain 14-bit: 0..16382 (16383 is never a parameter's id: protocol 1.5's NONE).
 * **hash (5)**: 32 bits as five 7-bit groups, lowest first (as BK_END's CRC; the fifth group 0..15).
 * Strings as everywhere (length byte, Latin-1 escape), with these maxima: mode names 12 characters, parameter names,
   page titles, labels, value texts, the description's title and the state texts 16, units 8. The reader refuses a
@@ -521,7 +523,7 @@ value s14, text(str)`.
 
 | field | meaning |
 | --- | --- |
-| `id` | stable for the mode: the host may keep it (a host's mapping, a stored setting); never reused for another meaning |
+| `id` | 0..16382, stable for the mode: the host may keep it (a host's mapping, a stored setting); never reused for another meaning. 16383 is refused (malformed): LVIEW's NONE |
 | `page` | the page it sits on, 0..npages-1 |
 | `kind` | 0 NUMBER, 1 ENUM, 2 TOGGLE, 3 ACTION, 4 MASK (below) |
 | `flags` | bit 0 READONLY (shown, not set), bit 1 AUTO (it changes by itself: a clock, a drift, the generative engine), bit 2 BIPOLAR (draw it from the middle, 0 at the centre) |
@@ -560,13 +562,15 @@ device sends what changes. A host that never asks gets no PVAL or LSTATE.
 
 **PVAL (0x14)** `mode, n, n x (id14, value s14, text(str))` - device to host, n 1..6: values that changed, whatever
 changed them (the host's PSET, the device's knobs and keys, a piece change, the clock, a drift). The device looks for
-changes at most every **67 ms (15 a second)** and sends only the parameters whose value differs from the one it last
-sent (or never sent), so each parameter is told at most 15 times a second and a host's own PSET comes back once (its
-**echo**, with the device's text). A value the host sets to what it already was is not echoed. ACTIONs are never in a
+changes at most every **40 ms (25 a second)**, also while a knob turns (the values in between go out as it turns, not
+only the last), and sends only the parameters whose value differs from the one it last sent (or never sent), so each
+parameter is told at most 25 times a second, the last value always, and a host's own PSET comes back once (its
+**echo**, with the device's text). (Firmware with protocol 1.4 only: every 67 ms, 15 a second; the pace is the same
+for every host.) A value the host sets to what it already was is not echoed. ACTIONs are never in a
 PVAL. A pass that finds more than fits goes on in the next frames at once.
 
 **LSTATE (0x15)** `mode, flags, n, n x text(str)` - device to host, n 0..4: the status line, its texts labelled by
-DESC_HEAD's state labels. Sent after DESC_END and VALS_REQ, then when anything in it changes, at most every 67 ms.
+DESC_HEAD's state labels. Sent after DESC_END and VALS_REQ, then when anything in it changes, at most every 40 ms.
 `flags`: bit 0 PLAYING (growing / the sequencer runs), bit 1 FROZEN, bit 2 EXT CLOCK (a MIDI clock comes in and leads),
 bit 3 WAKING (it will grow in a moment: AMB just came in), bit 4 RECORDING (Synth mode's sequencer records). Other bits 0.
 
@@ -596,7 +600,7 @@ not in bursts (one frame at a time, see "Bluetooth MIDI").
 
 ### Sequences
 
-* **Connect (1.4 host).** Device HELLO (minor 4) -> host HELLO_ACK `01 04` -> device (RUN4 mode: SYNC_REQ, POT, then)
+* **Connect (1.4 host).** Device HELLO (minor 4; 5 since 1.5) -> host HELLO_ACK `01 04` -> device (RUN4 mode: SYNC_REQ, POT, then)
   MODE. In a local mode the host then sends DESC_REQ (or VALS_REQ if it has MODE's hash cached) -> description ->
   LSTATE -> PVAL / LSTATE as things change.
 * **The host picks AMB.** MODES_REQ -> MODES; MODE_SET 2 -> MODE `02 03 hash`; DESC_REQ 2 (or VALS_REQ 2) -> ... AMB
@@ -611,7 +615,7 @@ not in bursts (one frame at a time, see "Bluetooth MIDI").
 Sizes: AMB's description is 57 frames, 1,707 bytes (the longest frame 78 bytes); Synth mode's 187 frames, 5,751 bytes
 (measured in the simulator, `tests/scenarios/31_modes.txt`). The device sends up to four 1.4 frames per pass of its
 main loop as the link has room, behind the button events and the 1.3 answers (HV_STATE, then MODE / MODES / LM_ERR,
-then VOICE_DATA, VOICE_NAMES, the backup, then the description, PVAL, LSTATE). Over USB a description takes a few
+then VOICE_DATA, VOICE_NAMES, the backup, then the description, PVAL, LSTATE, and to a 1.5 host LVIEW). Over USB a description takes a few
 frames of the main loop; over Bluetooth it is paced by the 64-packet queue (not measured on a device).
 
 ### AMB's description (mode 2)
@@ -705,6 +709,96 @@ OFF while RUN4 sends a clock (MIDI OUT CLOCK sends AMB's own clock only while no
 on channels 1, 2, 3 and 10 to RUN4, which a host may route or ignore). SETUP > AUDIO > LOCAL OUT USB ONLY keeps the
 FM-1's speaker silent while RUN4 records it.
 
+## Protocol 1.5: the local mode's page
+
+Version 1.5 tells the host which of the playing local mode's description pages the FM-1 shows and which parameters
+its knobs K1..K4 hold there, and lets the host pick the page, so a host that shows the description's pages (as tabs,
+say) and the FM-1 always show the same one. It is backwards compatible: `proto_ver` stays 1, the firmware's HELLO says
+minor 5, and a host that speaks 1.5 answers **HELLO_ACK `01 05`**. Everything of 1.4 stays as it is. The device sends
+LVIEW only to a host whose last HELLO_ACK said minor 5 or more; a 1.4 host sees exactly what it saw before (but for
+1.4's faster pace, "Values and the status line": 40 ms, for every host). The device takes LVIEW_SET from any host
+after its HELLO_ACK, as the 1.4 host frames; its LM_ERR and MODE answers go to a 1.4 host only, as 1.4's.
+
+**LVIEW (0x17)** `mode, page, n, n x id14` - device to host: `mode` = the mode playing, `page` = the description page
+(0 .. npages-1, DESC_PAGE's numbers) the device's screen shows now, then the description ids of the parameters on
+K1..Kn, in knob order (K1 first), n 0..4. A knob in the middle without a described parameter is **16383 (NONE)**;
+empty knobs at the end are left out (n smaller); a page whose knobs edit something not described has n = 0. 16383 is
+never a parameter's id (DESC_PARAM refuses it). Every other id is a parameter of the description on that `page`. The
+reader refuses (malformed) n above 4, a page above 31, an id past 14 bits, a length that does not match n.
+
+Sent to a subscribed 1.5 host (DESC_REQ / VALS_REQ, "Values and the status line"):
+
+* once after the description (after DESC_END and its LSTATE) and once after a VALS_REQ's answer (after its PVALs and
+  its LSTATE);
+* then whenever the page or its ids change, whatever changed them: the player's SELECT or page buttons, an operator
+  change (Synth), the host's own LVIEW_SET. The device looks at the value pass's pace, at most every **40 ms**, never
+  more than one LVIEW a look; the last page is always told. A change back and forth within 40 ms may not be told.
+* again after an LVIEW_SET the device does not carry out now (below), so the host's tab goes back to the page shown.
+
+Nothing while not subscribed; a mode change, a HELLO_ACK and a new link end it as the rest of 1.4's subscription (the
+next DESC_REQ / VALS_REQ starts it again). An LVIEW goes out in 1.4's order behind LM_ERR, MODE and MODES and after
+the description stream, PVAL and LSTATE ("Sizes" above).
+
+**LVIEW_SET (0x59)** `mode, page` - host to device: show that description page, page 0..127. Checked as PSET: `mode`
+not the one playing: `LM_ERR WRONGMODE` (id 0) and a MODE; a mode without a description (RUN4): NODESC; `page` >=
+npages: `LM_ERR RANGE` (id 0). Otherwise the device shows the page at the next pass of its main loop, as its own page
+buttons get there (the screen redrawn, a help card closed, MIDI learn left with LEARN OFF), and sends the LVIEW. A
+page the device shows already, or a page that is none of the device's pages (AMB's PLAY, Synth mode's VOICE: page 0),
+changes nothing and is not an error: no answer. While the player has the device's SETUP page open, or (Synth mode) holds
+a sequencer step, the page does not change: the device sends the LVIEW of the page it shows. A MODE_SET carried out
+in the same pass wins (an LVIEW_SET for the mode left is forgotten).
+
+| code | when (LVIEW_SET) |
+| --- | --- |
+| 2 WRONGMODE | `mode` is not the mode playing (a MODE follows) |
+| 3 NODESC | the mode playing has no description (RUN4) |
+| 5 RANGE | `page` >= the description's npages |
+
+**AMB's pages** (mode 2): the device's page v (GARDEN .. KEY, its page buttons HOME ENV ARP LFO SEQ FX GLO, SELECT
+steps through them) is description page v + 1, its four knobs the four parameters the description puts on it, KEY's
+SCALE as id 20 (P_MODE). Page 0 PLAY is never the device's page. LVIEW_SET p (1..7) shows page p - 1 as its button.
+
+| page | K1..K4 ids |
+| --- | --- |
+| 1 GARDEN | 18 5 15 6 |
+| 2 PAD | 0 13 12 22 |
+| 3 BELLS | 1 4 14 21 |
+| 4 BASS | 2 23 24 25 |
+| 5 PULSE | 3 7 26 27 |
+| 6 SPACE | 8 9 10 11 |
+| 7 KEY | 19 16 17 20 |
+
+**Synth mode's pages** (mode 1), from the same table as its description (`src/synth_lm.c` sl_ref). Page 0 VOICE is
+never the device's page.
+
+| the device shows | page | K1..K4 ids |
+| --- | --- | --- |
+| HOME, sub-page 1 (SYNTH) | 1 SYNTH | 0 1 2 3 |
+| HOME, sub-page 2 (MORPH) | 2 MORPH | 4 5 6 7 |
+| EDIT (OPERATOR) op o, sub-page s | 3 + o (OP1..OP6) | 16 + 16o + 4s + k |
+| ENV (ENVELOPE) op o, sub-page s | 3 + o | 16 + 16o + 8 + 4s + k |
+| LFO, sub-page s | 9 LFO | 112 + 4s + k |
+| FX (EFFECTS), sub-page s | 10 EFFECTS | 120 + 4s + k |
+| GLO (GLOBAL), sub-page 1, 2, 3 | 11 GLOBAL | 128 129 130 131; 132 133 (n = 2: K3, K4 empty); 136 137 138 139 |
+| ARP, sub-page s | 12 ARP | 140 + 4s + k |
+| SEQ (any of its sub-pages) | 13 SEQ | none (n = 0: its knobs edit steps, not described) |
+
+(k = 0..3 the knob, s = 0, 1 the sub-page, o = 0..5 the operator, the one SELECT picks.) LVIEW_SET: 1 HOME's first
+sub-page, 2 HOME's second; 3..8 operator p - 3 on EDIT's first sub-page, or, when the device shows EDIT or ENV already,
+on that page and sub-page (only the operator changes); 9 LFO, 10 EFFECTS, 11 GLOBAL, 12 ARP, 13 SEQ, each on its first
+sub-page, or on the sub-page it shows when the device is on that page already.
+
+### Sequences (1.5)
+
+* **Connect (1.5 host).** Device HELLO (minor 5) -> host HELLO_ACK `01 05` -> MODE; DESC_REQ (or VALS_REQ) ->
+  description -> LSTATE -> LVIEW; then PVAL / LSTATE / LVIEW as things change.
+* **The player turns SELECT in AMB** (GARDEN -> PAD): LVIEW `02 02 04 00 00 00 0D 00 0C 00 16`.
+* **The host's tab BELLS**: LVIEW_SET `02 03` -> the device shows BELLS -> LVIEW `02 03 04 00 01 00 04 00 0E 00 15`.
+  LVIEW_SET `02 03` again: nothing. LVIEW_SET `02 00`: nothing. LVIEW_SET `02 08`: LM_ERR `02 05 00 00`.
+* **Synth mode, OP3 picked on the EDIT page**: LVIEW `01 05 04 00 30 00 31 00 32 00 33`.
+
+Sizes: LVIEW is 9 to 17 bytes (F0 and F7 included), LVIEW_SET 8.
+
 ## Connection
 
 1. On boot, and every second until HELLO_ACK: the device sends HELLO and shows "NOT CONNECTED". The keys send notes
@@ -761,7 +855,7 @@ stack (`ble_stack = "own"`, `docs/bt/BLE-STACK.md` in fm1-base), whose BLE-MIDI 
 over packets"), which JieLi's library stack is not documented to do. On the link a SysEx frame is a run of USB-MIDI
 SysEx packets (cable 0, CIN 4 = three bytes and more to come, 5 / 6 / 7 = the last 1 / 2 / 3 bytes): a BTN frame is
 `04 F0 7D 52`, `04 34 02 00`, `06 01 F7`. A host that speaks BLE-MIDI through an OS driver (CoreMIDI, Android MIDI) never
-sees this level. Frames from the device are at most 136 bytes (protocol 1.3 and 1.4; up to 1.2 they were 11): the firmware sends
+sees this level. Frames from the device are at most 136 bytes (protocol 1.3 to 1.5; up to 1.2 they were 11): the firmware sends
 one only when the 64-slot queue has room for it whole; frames from the host are reassembled in the firmware up to 640
 bytes between F0 and F7, as on USB, **one at a time** (a frame that arrives while the last one waits is dropped): a host
 must not send bursts over Bluetooth. The 1.3 exchanges that move data (backup, restore) are paced by the device's
@@ -775,7 +869,8 @@ the USB-only package. **Not verified on a device**: the simulator models the lin
 `proto_ver` is 1. A host should reject a HELLO with a `proto_ver` it does not know; unknown commands are ignored by
 the device. Minors so far: 1.0 (no minor byte), 1.1 (LIST, LIST_PICK), 1.2 (PAGE trailer, FOCUS, VALUE flags, the big
 value view), 1.3 (host voice, voice list, tape view, patch backup), 1.4 (local modes: list, switch, self-description,
-values, status line); the firmware's HELLO says 4 (RUN4 CTL firmware 0.8). Both sides speak the lower of the two minors.
+values, status line), 1.5 (the local mode's page: LVIEW, LVIEW_SET; the value pace 40 ms); the firmware's HELLO says
+5 (RUN4 CTL firmware 0.8). Both sides speak the lower of the two minors.
 
 ## Implementing RUN4 CTL in your own firmware or device
 
@@ -787,10 +882,12 @@ or write your own from this document; `tests/r4p_test.c` has the known bytes, `t
 **The minimum a device implements:**
 
 1. **HELLO** every second until a HELLO_ACK, with `proto_ver` 1, your own `fw_major.fw_minor`, `mode` (0 if the host
-   is to draw your screen, 1 if you play on your own) and `proto_minor` 4; take **HELLO_ACK** (`proto_ver`, minor) and
+   is to draw your screen, 1 if you play on your own) and `proto_minor` 5 (4 without LVIEW); take **HELLO_ACK** (`proto_ver`, minor) and
    speak the lower minor. A new link: HELLO again.
 2. **Protocol 1.4's self-description** for every mode that plays on its own: MODES_REQ / MODES, MODE_SET / MODE,
-   DESC_REQ (DESC_HEAD .. DESC_END with the hash), VALS_REQ, PSET, PVAL, LSTATE, LM_ERR. With it the host shows and
+   DESC_REQ (DESC_HEAD .. DESC_END with the hash), VALS_REQ, PSET, PVAL, LSTATE, LM_ERR, and with 1.5 LVIEW /
+   LVIEW_SET if your screen shows the description's pages (a mode without a device page sends no LVIEW, takes
+   LVIEW_SET's checks and changes nothing). With it the host shows and
    edits your parameters without knowing your device. Your mode ids, names, pages and parameter ids are yours (keep
    ids stable across your firmware versions); a device with one mode lists one. A mode with flag CTRL is a controller
    mode: the host drives your screen with PAGE / VALUE / LEDS / STATUS (1.0 .. 1.2) and you send BTN / ENC / POT; a
@@ -823,4 +920,5 @@ Do not put other data under `7D 52 34`, and check that your other SysEx does not
   (its port's identity) and hash. A kind, flag bit or frame the host does not know: it skips that parameter or frame
   and goes on (it does not drop the device). A malformed frame is dropped.
 * The host voice is used only after an HV_STATE answered HV_ON (no HV_STATE within a second: no host voice).
-* The host never sends 1.4 frames to a device that said a minor below 4, nor 1.3 frames below 3.
+* The host never sends 1.5 frames (LVIEW_SET) to a device that said a minor below 5, 1.4 frames below 4, nor 1.3
+  frames below 3.

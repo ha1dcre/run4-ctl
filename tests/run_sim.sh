@@ -47,8 +47,9 @@ for s in tests/scenarios_noamb/*.txt tests/scenarios_cross/*.txt; do
   if [ $rc -ne 0 ] || grep -q '^FAIL' build/sim/$n.log; then echo "** $n FAILED (exit $rc)"; fail=1; fi
 done
 python3 -I tests/check_btn_order.py build/sim/05_stalled_host.log | tee -a build/sim/05_stalled_host.log || fail=1
-# protocol 1.4: the descriptions the scenarios logged, decoded and checked by the independent host side
-for d in "lm_amb amb 31_modes" "lm_synth synth 31_modes" "lm_noamb_synth synth noamb_02_noamb_modes"; do
+# protocol 1.4: the descriptions the scenarios logged, decoded and checked by the independent host side (1.5: their LVIEWs)
+for d in "lm_amb amb 31_modes" "lm_synth synth 31_modes" "lm_noamb_synth synth noamb_02_noamb_modes" \
+         "lm_views_amb amb 32_views" "lm_views_synth synth 32_views"; do
   set -- $d
   if python3 -I tools/fake_run4.py desc build/sim/$1.bin $2 > build/sim/$1.desc 2>&1; then
     tail -1 build/sim/$1.desc | sed 's/^/  ok /' | tee -a build/sim/$3.log

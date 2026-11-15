@@ -15,7 +15,7 @@ release SEL
 wait 1200
 expect mode 1
 shot synth_home.png
-expect_sysex F0 7D 52 34 01 01 00 08 01 04 F7
+expect_sysex F0 7D 52 34 01 01 00 08 01 05 F7
 sysex_out
 # the host acknowledges and stays quiet; its PAGE frames are ignored in Synth mode
 @ACK@
@@ -144,7 +144,7 @@ wait 300
 expect mode 0
 sysex_out
 wait 1200
-expect_sysex F0 7D 52 34 01 01 00 08 00 04 F7
+expect_sysex F0 7D 52 34 01 01 00 08 00 05 F7
 @ACK@
 wait 100
 @TAPE@

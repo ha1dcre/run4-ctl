@@ -57,7 +57,7 @@ static int dparam_ok(const r4p_dparam_t *d)
 {
     if (d->kind >= R4P_LK_COUNT || (d->flags & ~R4P_PF_ALL) || !d->step || d->step > 127u || d->page >= R4P_LM_PAGES ||
         d->lo > d->hi || d->def < d->lo || d->def > d->hi || d->value < d->lo || d->value > d->hi ||
-        d->nlabels > R4P_LM_LABELS || d->id > R4P_V14_MAX)
+        d->nlabels > R4P_LM_LABELS || d->id >= R4P_LVIEW_NONE)            /* (16383: 1.5's "no parameter") */
         return 0;
     switch (d->kind) {
     case R4P_LK_ENUM: return d->nlabels >= 1 && d->hi - d->lo + 1 == d->nlabels;
@@ -400,13 +400,28 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
         }
         break;
     }
+    /* ------------------------------------------------------------- 1.5 --- */
+    case R4P_LVIEW: {
+        const r4p_lview_t *q = &m->u.lview;
+        w8(&w, q->mode); w8(&w, q->page); w8(&w, q->n);
+        if (!mode_id_ok(q->mode) || q->page >= R4P_LM_PAGES || q->n > R4P_LVIEW_MAX)
+            w.bad = 1;
+        for (i = 0; i < q->n && i < R4P_LVIEW_MAX; i++)
+            w14(&w, q->id[i]);
+        break;
+    }
+    case R4P_LVIEW_SET:
+        w8(&w, m->u.lview.mode); w8(&w, m->u.lview.page);
+        if (!mode_id_ok(m->u.lview.mode))
+            w.bad = 1;
+        break;
     default:
         return 0;
     }
     if (w.n >= w.cap)
         w.bad = 1;
-    if (m->cmd >= R4P_MODES && m->cmd <= R4P_LM_ERR && w.n + 1u > R4P_DEV_MAX)
-        w.bad = 1;                                   /* (1.4 device frames fit the Bluetooth queue whole) */
+    if (m->cmd >= R4P_MODES && m->cmd <= R4P_LVIEW && w.n + 1u > R4P_DEV_MAX)
+        w.bad = 1;                                   /* (1.4 / 1.5 device frames fit the Bluetooth queue whole) */
     if (w.bad)
         return 0;
     w.b[w.n++] = 0xF7;
@@ -836,6 +851,24 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
             r.bad = 1;
         break;
     }
+    /* ------------------------------------------------------------- 1.5 --- */
+    case R4P_LVIEW: {
+        r4p_lview_t *q = &out->u.lview;
+        for (i = 0; i < sizeof *q; i++)
+            ((uint8_t *)q)[i] = 0;
+        q->mode = (uint8_t)r8(&r); q->page = (uint8_t)r8(&r); q->n = (uint8_t)r8(&r);
+        if (!mode_id_ok(q->mode) || q->page >= R4P_LM_PAGES || q->n > R4P_LVIEW_MAX)
+            r.bad = 1;
+        for (i = 0; i < q->n && !r.bad; i++)
+            q->id[i] = (uint16_t)r14(&r);
+        break;
+    }
+    case R4P_LVIEW_SET:
+        out->u.lview.mode = (uint8_t)r8(&r); out->u.lview.page = (uint8_t)r8(&r);
+        out->u.lview.n = 0;
+        if (!mode_id_ok(out->u.lview.mode))
+            r.bad = 1;
+        break;
     default:
         return -1;
     }

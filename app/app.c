@@ -1887,8 +1887,8 @@ int app_sysex(const uint8_t *p, uint32_t n)
         if (ui.connected)
             bk_frame(&m);
         break;
-    /* 1.4: the local modes, in every mode */
-    case R4P_MODES_REQ: case R4P_MODE_SET: case R4P_DESC_REQ: case R4P_VALS_REQ: case R4P_PSET:
+    /* 1.4: the local modes, in every mode; 1.5: LVIEW_SET */
+    case R4P_MODES_REQ: case R4P_MODE_SET: case R4P_DESC_REQ: case R4P_VALS_REQ: case R4P_PSET: case R4P_LVIEW_SET:
         if (ui.connected)
             lm_frame(&m);
         break;
@@ -2199,6 +2199,11 @@ int app_expect(const char *what, int *got)
         *got = (int)c;
     }
     else if (!strcmp(what, "lm_frames")) *got = (int)lm.frames;
+    else if (!strcmp(what, "lm_pvals")) *got = (int)lm.pvals;               /* since the last lm_reset */
+    else if (!strcmp(what, "lm_views")) *got = (int)lm.views;               /* 1.5: LVIEW frames, since the last lm_reset */
+    else if (!strcmp(what, "lm_modes_sent")) *got = (int)lm.nmode;          /* MODE frames, since the last lm_reset */
+    else if (!strcmp(what, "lm_view_page")) *got = lm.view_ok ? lm.view_page : -1;   /* the LVIEW last sent */
+    else if (!strcmp(what, "lm_view_n")) *got = lm.view_ok ? lm.view_n : -1;
     else if (!strcmp(what, "lm_nparams")) *got = lm_desc(mode) ? lm_desc(mode)->nparams : 0;
     else if (!strcmp(what, "lm_hash_lo")) *got = (int)(lm_hash(mode) & 0x3FFFu);
     else if (!strcmp(what, "octave")) *got = ctl.octave;

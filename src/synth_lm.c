@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * RUN4 CTL, protocol 1.4: Synth mode described to the host (src/lm.c, docs/PROTOCOL.md "Synth mode's description"),
  * from the pages' own table (synth_ui.c SP[]): the voice, the macros, the morph, the six operators (each its own page),
- * LFO, effects, GLOBAL, ARP, and the sequencer's transport. Part of the unity build (app.c), after synth_ui.c. */
+ * LFO, effects, GLOBAL, ARP, and the sequencer's transport; 1.5: the page shown, and the host's pick of one. Part of
+ * the unity build (app.c), after synth_ui.c. */
 
 #define SL_N (3 + 8 + 96 + 8 + 8 + 10 + 8 + 2)
 static const char *const SL_PAGES[14] = {"VOICE", "SYNTH", "MORPH", "OP1", "OP2", "OP3", "OP4", "OP5", "OP6", "LFO",
@@ -219,5 +220,69 @@ static void sl_state(r4p_lstate_t *s)
     strcpy(s->text[1], t);
     strcpy(s->text[2], sq_ext() ? "EXT CLOCK" : sq.run ? "PLAYING" : "STOPPED");
 }
+/* 1.5: the description page of a device page (SL_PAGES' order: HOME's two sub-pages are SYNTH and MORPH, EDIT and ENV
+ * one page per operator); VOICE, page 0, is never the device's */
+static uint32_t sl_page_of(uint32_t sp, uint32_t sub, uint32_t op)
+{
+    static const uint8_t SLP[SP_N] = {1, 3, 3, 9, 10, 11, 12, 13};
+    return sp == SP_HOME ? 1u + sub : sp == SP_EDIT || sp == SP_ENV ? 3u + op : SLP[sp % SP_N];
+}
+static void sl_view(uint8_t *page, uint16_t ids[R4P_LVIEW_MAX], uint8_t *n)
+{
+    uint32_t k, i;
+    sl_ref_t r;
+    *page = (uint8_t)sl_page_of(sui.page, sui.sub, sui.op);
+    *n = 0;
+    if (sui.page == SP_SEQ)
+        return;                                      /* (its knobs edit steps: not described) */
+    for (k = 0; k < 4u; k++) {                       /* each knob: the parameter sl_ref puts there, or none (EMPTY) */
+        ids[k] = R4P_LVIEW_NONE;
+        for (i = 3; i < SL_N; i++) {
+            sl_ref(i, &r);
+            if (r.sp == sui.page && r.sub == sui.sub && r.k == k && (r.op == sui.op || !sp_op_page())) {
+                ids[k] = r.id;
+                break;
+            }
+        }
+    }
+    *n = 4;
+}
+/* LVIEW_SET: the page as its button gets there (an operator page keeps OPERATOR / ENVELOPE and its sub-page, the
+ * others keep their sub-page when shown already); 0 = not now (SETUP open, a step held: the player's) */
+static int sl_show(uint32_t page)
+{
+    static const uint8_t SLS[5] = {SP_LFO, SP_FX, SP_GLO, SP_ARP, SP_SEQ};
+    uint32_t sp, sub, op = sui.op;
+    if (page == 1u || page == 2u) {
+        sp = SP_HOME;
+        sub = page - 1u;
+        if (sub >= SP[SP_HOME].nsub)
+            return 1;
+    } else if (page >= 3u && page <= 8u) {
+        op = page - 3u;
+        sp = sp_op_page() ? sui.page : SP_EDIT;
+        sub = sp_op_page() ? sui.sub : 0u;
+    } else if (page >= 9u && page <= 13u) {
+        sp = SLS[page - 9u];
+        sub = sui.page == sp ? sui.sub : 0u;
+    } else {
+        return 1;                                    /* (VOICE: no page of the device's) */
+    }
+    if (sp == sui.page && sub == sui.sub && op == sui.op)
+        return 1;                                    /* (shown already) */
+    if (ui.setup || (sui.page == SP_SEQ && sq_ed.held >= 0))
+        return 0;
+    if (ml.arm) {                                    /* (learning: a page button leaves it) */
+        ml.arm = 0;
+        sp_toast("LEARN OFF");
+    }
+    ctl_card_off();
+    sui.op = (uint8_t)op;
+    if (sp != sui.page || sub != sui.sub)
+        sp_page_show(sp, sub);
+    else
+        sp_select_op(op);
+    return 1;
+}
 static const lm_desc_t SL_DESC = {MODE_SYNTH, "SYNTH", 14, SL_PAGES, SL_N, 3, SL_STATE,
-                                  sl_param, sl_label, sl_get, sl_text, sl_set, sl_state};
+                                  sl_param, sl_label, sl_get, sl_text, sl_set, sl_state, sl_view, sl_show};

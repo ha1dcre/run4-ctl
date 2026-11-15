@@ -1,0 +1,246 @@
+# Protocol 1.5, the local mode's page: a 1.5 host (HELLO_ACK 01 05) is told which description page the FM-1 shows and
+# which parameters K1..K4 hold (LVIEW), after the description, after VALS_REQ and whenever it changes (the player's
+# SELECT and page buttons, an operator change, the host's own LVIEW_SET); the host picks a page with LVIEW_SET (the
+# device shows it as its page buttons would; PLAY / VOICE, page 0, changes nothing; past the pages RANGE; another mode
+# WRONGMODE and a MODE; SETUP open: the page stays, the LVIEW comes again). The values go out while a knob turns. A 1.4
+# host never gets an LVIEW. The logged frames are checked by tools/fake_run4.py desc (every LVIEW's ids on its page).
+@ACK15@
+wait 100
+expect host_minor 5
+expect connected 1
+expect_sysex @SYNC@
+expect_sysex @MODE_RUN4@
+# RUN4 mode has no description: no page to pick
+@LVIEW_SET_RUN4_1@
+wait 30
+expect_sysex @ERR_NODESC_RUN4@
+expect lm_views 0
+sysex_out
+# AMB: the LVIEW after the description (and its LSTATE): GARDEN, page 1, TEMPO EVOLVE MOTION DRIFT
+sysex_log out:lm_views_amb.bin
+@MODE_SET_AMB@
+wait 200
+expect mode 2
+expect amb_view 0
+@DESC_REQ_AMB@
+wait 800
+expect lm_stream 0
+expect_sysex @LVIEW_AMB_1@
+expect lm_views 1
+expect lm_view_page 1
+expect lm_view_n 4
+sysex_out
+# SELECT on the device: the next page, PAD (LEVEL SWELL BRIGHT COLOUR)
+turn SELECT 1
+wait 100
+expect amb_view 1
+expect_sysex @LVIEW_AMB_2@
+expect lm_views 2
+sysex_out
+# the host picks BELLS (page 3): the device shows it, and says so
+@LVIEW_SET_AMB_3@
+wait 100
+expect amb_view 2
+expect_sysex @LVIEW_AMB_3@
+expect lm_views 3
+expect lm_view_page 3
+shot views_amb_bells.png
+sysex_out
+# the page shown already, PLAY (page 0: no page of the device's): nothing, and no error
+@LVIEW_SET_AMB_3@
+wait 100
+@LVIEW_SET_AMB_0@
+wait 100
+expect amb_view 2
+expect lm_views 3
+# past the eight pages: RANGE (id 0); another mode: WRONGMODE and a MODE; the page stays
+@LVIEW_SET_AMB_8@
+wait 60
+expect_sysex @ERR_RANGE_0@
+@LVIEW_SET_SYNTH_1@
+wait 60
+expect_sysex @ERR_WRONG_AMB@
+expect lm_modes_sent 2
+expect amb_view 2
+expect lm_views 3
+expect frames_bad 0
+sysex_out
+# the device's page button: KEY (GLO): ROOT TUNE MIDI OUT SCALE (SCALE as P_MODE's id 20)
+tap GLO
+wait 100
+expect amb_view 6
+expect_sysex @LVIEW_AMB_7@
+# VALS_REQ: every value, the LSTATE, then the page again
+@VALS_REQ_AMB@
+wait 400
+expect lm_known 35
+expect_sysex @LVIEW_AMB_7@
+expect lm_views 5
+# the SETUP page open (SEL + GLO): the host's pick waits for the player; the page shown is told again
+press SEL
+wait 40
+tap GLO
+release SEL
+wait 60
+expect setup 1
+sysex_out
+@LVIEW_SET_AMB_2@
+wait 100
+expect amb_view 6
+expect_sysex @LVIEW_AMB_7@
+expect lm_views 6
+tap HOME
+wait 60
+expect setup 0
+expect amb_view 6
+@LVIEW_SET_AMB_2@
+wait 100
+expect amb_view 1
+expect_sysex @LVIEW_AMB_2@
+sysex_out
+# the values while a knob turns: PAD LEVEL 60 -> 89 in 29 detents 10 ms apart, told along the way (every 40 ms: 64,
+# 68 .. 88 before the turn ends), and the last value at the end
+turn K1 29 10
+expect amb_par0 89
+expect_sysex @PVAL_PAD_64@
+expect_sysex @PVAL_PAD_76@
+expect_sysex @PVAL_PAD_88@
+expect lm_pvals >12
+turn K1 1 10
+wait 100
+expect amb_par0 90
+expect_sysex @PVAL_PAD_90@
+sysex_log off
+sysex_out
+# Synth mode: HOME (SYNTH, ids 0..3) after the description
+sysex_log out:lm_views_synth.bin
+@MODE_SET_SYNTH@
+wait 200
+expect mode 1
+@DESC_REQ_SYNTH@
+wait 1500
+expect lm_stream 0
+expect syn_page 0
+expect_sysex @LVIEW_SY_HOME_0@
+sysex_out
+# HOME again: MORPH (page 2); EDIT: OP1's OPERATOR page; SELECT twice: OP2, OP3; EDIT again: its second sub-page;
+# ENV: OP3's envelope
+tap HOME
+wait 60
+expect_sysex @LVIEW_SY_HOME_1@
+tap EDIT
+wait 60
+expect syn_op 1
+expect_sysex @LVIEW_SY_EDIT_OP1_0@
+turn SELECT 2
+wait 100
+expect syn_op 3
+expect_sysex @LVIEW_SY_EDIT_OP2_0@
+expect_sysex @LVIEW_SY_EDIT_OP3_0@
+tap EDIT
+wait 60
+expect syn_page 11
+expect_sysex @LVIEW_SY_EDIT_OP3_1@
+tap ENV
+wait 60
+expect syn_page 20
+expect_sysex @LVIEW_SY_ENV_OP3_0@
+sysex_out
+# the host picks OP3 (shown already: nothing), OP6 (the ENVELOPE page stays, the operator changes), LFO, GLOBAL's
+# second sub-page by its button (two knobs: the empty ones at the end left out), MORPH, SEQ (no knob described)
+@LVIEW_SET_SYNTH_5@
+wait 100
+expect lm_views 7
+@LVIEW_SET_SYNTH_8@
+wait 100
+expect syn_page 20
+expect syn_op 6
+expect_sysex @LVIEW_SY_ENV_OP6_0@
+@LVIEW_SET_SYNTH_9@
+wait 100
+expect syn_page 30
+expect_sysex @LVIEW_SY_LFO_0@
+tap GLO
+wait 60
+tap GLO
+wait 60
+expect syn_page 51
+expect_sysex @LVIEW_SY_GLO_1@
+expect lm_view_n 2
+@LVIEW_SET_SYNTH_11@
+wait 100
+expect syn_page 51
+@LVIEW_SET_SYNTH_2@
+wait 100
+expect syn_page 1
+expect_sysex @LVIEW_SY_HOME_1@
+@LVIEW_SET_SYNTH_13@
+wait 100
+expect syn_page 70
+expect_sysex @LVIEW_SY_SEQ_0@
+expect lm_view_n 0
+shot views_synth_seq.png
+sysex_out
+# VOICE (page 0): nothing; past the 14 pages: RANGE; OP1 from SEQ: EDIT's first sub-page
+@LVIEW_SET_SYNTH_0@
+wait 100
+expect syn_page 70
+expect lm_views 13
+@LVIEW_SET_SYNTH_14@
+wait 60
+expect_sysex @ERR_RANGE_SYNTH_0@
+@LVIEW_SET_SYNTH_3@
+wait 100
+expect syn_page 10
+expect syn_op 1
+expect_sysex @LVIEW_SY_EDIT_OP1_0@
+shot views_synth_op1.png
+sysex_out
+# the other pages and sub-pages by their buttons: EFFECTS, ARP, GLOBAL's third, LFO's second (each one LVIEW)
+tap FX
+wait 60
+tap FX
+wait 60
+tap ARP
+wait 60
+tap ARP
+wait 60
+tap GLO
+wait 60
+tap GLO
+wait 60
+tap GLO
+wait 60
+tap LFO
+wait 60
+tap LFO
+wait 60
+expect syn_page 31
+expect_sysex @LVIEW_SY_FX_0@
+expect_sysex @LVIEW_SY_FX_1@
+expect_sysex @LVIEW_SY_ARP_0@
+expect_sysex @LVIEW_SY_ARP_1@
+expect_sysex @LVIEW_SY_GLO_0@
+expect_sysex @LVIEW_SY_GLO_1@
+expect_sysex @LVIEW_SY_GLO_2@
+expect_sysex @LVIEW_SY_LFO_0@
+expect_sysex @LVIEW_SY_LFO_1@
+expect lm_views 23
+sysex_log off
+sysex_out
+# a 1.4 host: the same, and never an LVIEW
+@ACK14@
+wait 100
+expect host_minor 4
+@DESC_REQ_SYNTH@
+wait 1500
+expect lm_stream 0
+tap LFO
+wait 60
+@LVIEW_SET_SYNTH_10@
+wait 100
+expect syn_page 40
+@VALS_REQ_SYNTH@
+wait 400
+expect lm_views 0
+expect lm_view_page -1

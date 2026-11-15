@@ -8,10 +8,10 @@
 #include <stdint.h>
 
 #define R4P_VER 1
-#define R4P_MINOR 4               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
+#define R4P_MINOR 5               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
                                    * trailer (cursor, position, path), FOCUS, VALUE flags; 1.3: the host voice, the
                                    * voice list, the tape view, the patch backup; 1.4: the local modes (list, switch,
-                                   * self-description, values, state) */
+                                   * self-description, values, state); 1.5: the local mode's page (LVIEW, LVIEW_SET) */
 #define R4P_CURSOR_NONE 127
 #define R4P_VF_BIG 1              /* VALUE flags bit 0: show the big value view */
 #define R4P_LIST_ROWS 7           /* items in one LIST frame (the window) */
@@ -30,13 +30,15 @@ enum {                            /* device -> host */
     R4P_BK_PART = 0x0A, R4P_BK_END = 0x0B, R4P_BK_GET = 0x0C,                           /* 1.3 */
     R4P_MODES = 0x0D, R4P_MODE = 0x0E, R4P_DESC_HEAD = 0x0F, R4P_DESC_PAGE = 0x10, R4P_DESC_PARAM = 0x11,   /* 1.4 */
     R4P_DESC_LABELS = 0x12, R4P_DESC_END = 0x13, R4P_PVAL = 0x14, R4P_LSTATE = 0x15, R4P_LM_ERR = 0x16,     /* 1.4 */
+    R4P_LVIEW = 0x17,                                                                                       /* 1.5 */
     /* host -> device */
     R4P_HELLO_ACK = 0x41, R4P_PAGE = 0x42, R4P_VALUE = 0x43, R4P_LEDS = 0x44, R4P_STATUS = 0x45, R4P_TOAST = 0x46, R4P_LIST = 0x47,
     R4P_FOCUS = 0x48,
     R4P_HV_ON = 0x49, R4P_HV_VOICE = 0x4A, R4P_HV_PARAM = 0x4B, R4P_NAMES_REQ = 0x4C, R4P_VOICE_GET = 0x4D,   /* 1.3 */
     R4P_TAPE_WAVE = 0x4E, R4P_TAPE_POS = 0x4F, R4P_METERS = 0x50,                                         /* 1.3 */
     R4P_BK_ACK = 0x51, R4P_BK_INFO = 0x52, R4P_BK_DATA = 0x53,                                            /* 1.3 */
-    R4P_MODES_REQ = 0x54, R4P_MODE_SET = 0x55, R4P_DESC_REQ = 0x56, R4P_VALS_REQ = 0x57, R4P_PSET = 0x58  /* 1.4 */
+    R4P_MODES_REQ = 0x54, R4P_MODE_SET = 0x55, R4P_DESC_REQ = 0x56, R4P_VALS_REQ = 0x57, R4P_PSET = 0x58, /* 1.4 */
+    R4P_LVIEW_SET = 0x59                                                                                  /* 1.5 */
 };
 /* protocol 1.4: the local modes */
 #define R4P_LM_STR 16             /* characters in a name, label, value text, page title, state text */
@@ -52,6 +54,8 @@ enum {                            /* device -> host */
 #define R4P_PSET_MAX 16           /* pairs in one PSET */
 #define R4P_S14_MIN (-8192)       /* a signed value on the wire: two 7-bit bytes of v + 8192 */
 #define R4P_S14_MAX 8191
+#define R4P_LVIEW_MAX 4           /* 1.5: knobs in LVIEW (K1..K4) */
+#define R4P_LVIEW_NONE 16383      /* 1.5: LVIEW's id of a knob without a described parameter (never a parameter's id) */
 enum { R4P_MID_RUN4, R4P_MID_SYNTH, R4P_MID_AMB };                   /* mode ids (stable) */
 enum { R4P_MF_AVAIL = 1, R4P_MF_DESC = 2, R4P_MF_CTRL = 4 };          /* MODES / MODE flags */
 enum { R4P_LK_NUMBER, R4P_LK_ENUM, R4P_LK_TOGGLE, R4P_LK_ACTION, R4P_LK_MASK, R4P_LK_COUNT };   /* parameter kinds */
@@ -154,6 +158,9 @@ typedef struct { uint8_t mode, n; uint16_t id[R4P_PVAL_MAX]; int16_t v[R4P_PVAL_
 typedef struct { uint8_t mode, n; uint16_t id[R4P_PSET_MAX]; int16_t v[R4P_PSET_MAX]; } r4p_pset_t;
 typedef struct { uint8_t mode, flags, n; char text[R4P_LM_NSTATE][R4P_LM_STR + 1]; } r4p_lstate_t;
 typedef struct { uint8_t mode, code; uint16_t id; } r4p_lerr_t;
+/* protocol 1.5: the page the device shows (LVIEW: page < R4P_LM_PAGES, n 0..4, the ids of K1..Kn, R4P_LVIEW_NONE for a
+ * knob without a described parameter) and the host's pick (LVIEW_SET: mode, page 0..127; n and id unused) */
+typedef struct { uint8_t mode, page, n; uint16_t id[R4P_LVIEW_MAX]; } r4p_lview_t;
 
 typedef struct {
     uint8_t cmd;
@@ -193,6 +200,7 @@ typedef struct {
         r4p_pset_t pset;
         r4p_lstate_t lstate;
         r4p_lerr_t lerr;
+        r4p_lview_t lview;        /* 1.5: LVIEW, LVIEW_SET (mode, page) */
     } u;
 } r4p_msg_t;
 

@@ -21,10 +21,10 @@ static uint32_t rn(uint32_t n) { return n ? rnd() % n : 0; }
 static const uint8_t CMDS[] = {
     R4P_HELLO, R4P_BTN, R4P_ENC, R4P_POT, R4P_SYNC_REQ, R4P_LIST_PICK, R4P_HV_STATE, R4P_VOICE_NAMES, R4P_VOICE_DATA,
     R4P_BK_PART, R4P_BK_END, R4P_BK_GET, R4P_MODES, R4P_MODE, R4P_DESC_HEAD, R4P_DESC_PAGE, R4P_DESC_PARAM,
-    R4P_DESC_LABELS, R4P_DESC_END, R4P_PVAL, R4P_LSTATE, R4P_LM_ERR,
+    R4P_DESC_LABELS, R4P_DESC_END, R4P_PVAL, R4P_LSTATE, R4P_LM_ERR, R4P_LVIEW,
     R4P_HELLO_ACK, R4P_PAGE, R4P_VALUE, R4P_LEDS, R4P_STATUS, R4P_TOAST, R4P_LIST, R4P_FOCUS, R4P_HV_ON, R4P_HV_VOICE,
     R4P_HV_PARAM, R4P_NAMES_REQ, R4P_VOICE_GET, R4P_TAPE_WAVE, R4P_TAPE_POS, R4P_METERS, R4P_BK_ACK, R4P_BK_INFO,
-    R4P_BK_DATA, R4P_MODES_REQ, R4P_MODE_SET, R4P_DESC_REQ, R4P_VALS_REQ, R4P_PSET};
+    R4P_BK_DATA, R4P_MODES_REQ, R4P_MODE_SET, R4P_DESC_REQ, R4P_VALS_REQ, R4P_PSET, R4P_LVIEW_SET};
 #define NCMDS (sizeof CMDS / sizeof CMDS[0])
 
 /* a valid message of each command, to mutate (filled by hand: plain, short strings) */
@@ -68,6 +68,9 @@ static size_t seed_frame(uint8_t cmd, uint8_t *f, size_t cap)
     case R4P_TAPE_POS: m.u.tpos.in = 10; m.u.tpos.out = 900; break;
     case R4P_PSET: m.u.pset.mode = 2; m.u.pset.n = 16; for (i = 0; i < 16; i++) { m.u.pset.id[i] = (uint16_t)i; m.u.pset.v[i] = (int16_t)-i; } break;
     case R4P_MODE_SET: case R4P_DESC_REQ: case R4P_VALS_REQ: m.u.b1.v = 2; break;
+    case R4P_LVIEW: m.u.lview.mode = 1; m.u.lview.page = 11; m.u.lview.n = 4;
+        for (i = 0; i < 4; i++) m.u.lview.id[i] = (uint16_t)(i == 2 ? R4P_LVIEW_NONE : 128 + i); break;
+    case R4P_LVIEW_SET: m.u.lview.mode = 2; m.u.lview.page = 3; break;
     default: break;
     }
     return r4p_encode(f, cap, &m);
@@ -86,8 +89,8 @@ static int check(const uint8_t *src, size_t n)
     if (r == 1) {
         accepted++;
         k = r4p_encode(back, sizeof back, &m);
-        /* what was accepted encodes again (a 1.4 device frame may come in longer than a device sends one) */
-        if (!k && !(m.cmd >= R4P_MODES && m.cmd <= R4P_LM_ERR)) {
+        /* what was accepted encodes again (a 1.4 / 1.5 device frame may come in longer than a device sends one) */
+        if (!k && !(m.cmd >= R4P_MODES && m.cmd <= R4P_LVIEW)) {
             printf("FAIL: accepted but does not encode (cmd 0x%02X, %zu bytes)\n", m.cmd, n);
             free(f);
             return 1;

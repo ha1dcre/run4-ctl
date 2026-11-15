@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * RUN4 CTL, protocol 1.4: the local modes for the host (docs/PROTOCOL.md "Protocol 1.4"). The host lists the modes,
  * switches them, and gets the playing local mode's self-description: its pages and parameters (lm_desc_t, one per
- * mode: src/synth_lm.c, src/amb_lm.c), then their values as they change and a status line. Everything here is
- * table-driven: a new mode only adds its lm_desc_t. Part of the unity build (app.c), main-loop context only. */
+ * mode: src/synth_lm.c, src/amb_lm.c), then their values as they change and a status line. Protocol 1.5 ("Protocol
+ * 1.5"): the description page the device shows and its knobs' ids (LVIEW), and the host's pick of one (LVIEW_SET).
+ * Everything here is table-driven: a new mode only adds its lm_desc_t. Part of the unity build (app.c), main-loop
+ * context only. */
 
 typedef struct {
     uint16_t id;                             /* stable: the host keeps it */
@@ -25,10 +27,13 @@ typedef struct {
     void (*text)(uint32_t i, int v, char *t);            /* the value as the device shows it, <= 16 characters */
     int (*set)(uint32_t i, int v);                       /* R4P_LE_OK or why not (the range is checked before) */
     void (*lstate)(r4p_lstate_t *s);                     /* the status line */
+    /* 1.5 (0: the mode has no device page to tell) */
+    void (*view)(uint8_t *page, uint16_t ids[R4P_LVIEW_MAX], uint8_t *n);   /* the page shown, K1..Kn's ids (NONE: none) */
+    int (*show)(uint32_t page);                          /* LVIEW_SET: show it as the page buttons would; 0 = not now */
 } lm_desc_t;
 
 #define LM_MAX 160                           /* parameters a description may have here (Synth mode's 147) */
-#define LM_PERIOD_MS 67u                     /* value changes and the status line: at most 15 a second */
+#define LM_PERIOD_MS 40u                     /* value changes, the status line, 1.5's page: at most 25 a second */
 #define LM_NERR 4
 #define LM_NMODES 3
 static const char *const LM_MNAME[LM_NMODES] = {"RUN4", "SYNTH", "AMB"};
@@ -39,6 +44,10 @@ static struct {
     uint8_t sub;                             /* the host asked for this mode's description or values: it gets changes */
     uint8_t want_mode, want_modes, want_state;
     uint8_t pending;                         /* MODE_SET: the mode + 1, switched in input() (not inside app_sysex) */
+    uint8_t vpending;                        /* 1.5 LVIEW_SET: the page + 1, shown in input() (as a page button) */
+    uint8_t view_ok, view_page, view_n;      /* 1.5: the LVIEW last sent (view_ok 0: none yet, one is owed) */
+    uint16_t view_id[R4P_LVIEW_MAX];
+    uint32_t view_at;
     uint8_t st, label;                       /* the description under way: where; the next label of the param */
     uint16_t si;
     uint16_t scan;                           /* the value pass: the next parameter to look at */
@@ -47,11 +56,13 @@ static struct {
     uint32_t pass_at, state_at, state_sig;
     uint32_t hash[LM_NMODES];                /* each description's hash, once worked out (0: not yet) */
     uint32_t sets, frames;                   /* host-simulator checks: PSET pairs applied, frames sent */
+    uint32_t pvals, views, nmode;            /* ... PVAL, LVIEW and MODE frames sent since the last lm_reset */
     int16_t shadow[LM_MAX];                  /* the value last sent */
     uint32_t known[(LM_MAX + 31) / 32];      /* ... is valid */
 } lm;
 
 static int host14(void) { return ctl.session && ui.connected && ctl.host_minor >= 4; }
+static int host15(void) { return host14() && ctl.host_minor >= 5; }
 static int lm_avail(uint32_t m) { return m == MODE_RUN4 || m == MODE_SYNTH || (m == MODE_AMB && R4_AMB); }
 static uint8_t lm_mflags(uint32_t m)
 {
@@ -79,6 +90,9 @@ static void lm_reset(int tell)
     lm.want_modes = 0;
     lm_forget_all();
     lm.want_mode = (uint8_t)(tell != 0);
+    lm.vpending = 0;
+    lm.view_ok = 0;
+    lm.pvals = lm.views = lm.nmode = 0;
 }
 static void lm_link_lost(void) { lm_reset(0); lm.pending = 0; }
 
@@ -234,7 +248,17 @@ static void lm_pset(const r4p_pset_t *q)
             lm.sets++;
     }
 }
-/* 1.4 frames from the host (after its HELLO_ACK, any minor; answers go to a 1.4 host only) */
+/* 1.5 LVIEW_SET: checked here (as PSET), carried out in input() as the device's page buttons would */
+static void lm_view_set(const r4p_lview_t *q)
+{
+    const lm_desc_t *d = lm_desc(mode);
+    if (q->mode != mode) { lm_err(R4P_LE_WRONGMODE, 0); lm.want_mode = 1; return; }
+    if (!d) { lm_err(R4P_LE_NODESC, 0); return; }
+    if (q->page >= d->npages) { lm_err(R4P_LE_RANGE, 0); return; }
+    if (d->show)
+        lm.vpending = (uint8_t)(q->page + 1u);
+}
+/* 1.4 frames from the host (after its HELLO_ACK, any minor; answers go to a 1.4 host only); 1.5's LVIEW_SET as well */
 static void lm_frame(const r4p_msg_t *m)
 {
     uint32_t v = m->u.b1.v;
@@ -261,21 +285,32 @@ static void lm_frame(const r4p_msg_t *m)
             lm.scan = 0;
             lm.pass_at = plat_ms() - LM_PERIOD_MS;
         }
+        lm.view_ok = 0;                      /* 1.5: the page again, after the LSTATE */
         break;
     case R4P_PSET:
         lm_pset(&m->u.pset);
+        break;
+    case R4P_LVIEW_SET:
+        lm_view_set(&m->u.lview);
         break;
     default:
         break;
     }
 }
-static void lm_switch_owed(void)            /* input(): a MODE_SET, carried out as SEL + HOME would */
+static void lm_switch_owed(void)            /* input(): a MODE_SET, carried out as SEL + HOME would; 1.5's LVIEW_SET */
 {
     if (lm.pending) {
         uint8_t to = (uint8_t)(lm.pending - 1u);
         lm.pending = 0;
-        mode_switch(to);
+        mode_switch(to);                     /* (lm_reset: an LVIEW_SET for the mode left is forgotten) */
         lm.want_mode = 1;
+    }
+    if (lm.vpending) {
+        const lm_desc_t *d = lm_desc(mode);
+        uint32_t pg = lm.vpending - 1u;
+        lm.vpending = 0;
+        if (d && d->show && !d->show(pg))
+            lm.view_ok = 0;                  /* (not now: the page shown is told again, the host's tab goes back) */
     }
 }
 
@@ -399,6 +434,7 @@ static int lm_values(const lm_desc_t *d, uint32_t now)   /* the changed values, 
     if (!(len = r4p_encode(lm_f, sizeof lm_f, &lm_m)) || !send_frame(lm_f, len))
         return 0;                            /* (no room: the same values again next time) */
     lm.frames++;
+    lm.pvals++;
     for (i = 0; i < lm_m.u.pval.n; i++) {       /* what went is known now, as it went (the engine may move on) */
         lm.shadow[ix[i]] = lm_m.u.pval.v[i];
         lm.known[ix[i] / 32] |= 1u << (ix[i] % 32);
@@ -427,6 +463,40 @@ static int lm_state(const lm_desc_t *d, uint32_t now)
     lm.state_sig = sig;
     lm.state_at = now;
     lm.want_state = 0;
+    return 1;
+}
+/* 1.5: the page shown and its knobs, to a 1.5 host, after the LSTATE a subscription owes, then when it changes, looked
+ * at once a value period */
+static int lm_view(const lm_desc_t *d, uint32_t now)
+{
+    uint8_t page = 0, n = 0;
+    uint16_t id[R4P_LVIEW_MAX];
+    uint32_t k;
+    if (!host15() || !d->view || lm.want_state)
+        return 0;
+    if (lm.view_ok && now - lm.view_at < LM_PERIOD_MS)
+        return 0;
+    memset(id, 0, sizeof id);
+    d->view(&page, id, &n);
+    n = n > R4P_LVIEW_MAX ? R4P_LVIEW_MAX : n;
+    while (n && id[n - 1u] == R4P_LVIEW_NONE)
+        n--;                                 /* (empty knobs at the end are left out) */
+    lm.view_at = now;
+    if (lm.view_ok && page == lm.view_page && n == lm.view_n && !memcmp(id, lm.view_id, n * sizeof id[0]))
+        return 0;
+    lm_m.cmd = R4P_LVIEW;
+    lm_m.u.lview.mode = d->id;
+    lm_m.u.lview.page = page;
+    lm_m.u.lview.n = n;
+    for (k = 0; k < R4P_LVIEW_MAX; k++)
+        lm_m.u.lview.id[k] = k < n ? id[k] : 0;
+    if (!lm_send(&lm_m))
+        return 0;                            /* (no room: again at the next look) */
+    lm.view_ok = 1;
+    lm.view_page = page;
+    lm.view_n = n;
+    memcpy(lm.view_id, id, sizeof id);
+    lm.views++;
     return 1;
 }
 static int lm_job1(uint32_t now)            /* one frame owed to the host; 1 = one went */
@@ -466,6 +536,7 @@ static int lm_job1(uint32_t now)            /* one frame owed to the host; 1 = o
         if (!lm_send(&lm_m))
             return 0;
         lm.want_mode = 0;
+        lm.nmode++;
         return 1;
     }
     if (!d || !lm.sub)
@@ -474,7 +545,9 @@ static int lm_job1(uint32_t now)            /* one frame owed to the host; 1 = o
         return lm_stream(d);
     if (lm_values(d, now))
         return 1;
-    return lm_state(d, now);
+    if (lm_state(d, now))
+        return 1;
+    return lm_view(d, now);
 }
 static void lm_jobs(uint32_t now)           /* (jobs_send, when nothing of 1.3 is owed) a few frames as there is room */
 {
