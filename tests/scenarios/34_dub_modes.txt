@@ -4,6 +4,8 @@
 # or PERFORM page come back together), fires actions, the errors; the clock has the transport while it runs; LVIEW
 # follows the device's pages (SELECT, a page button, EDIT's CHORDS with the slot picked, SEL's PERFORM, white 6's MIX)
 # and LVIEW_SET picks them (CHORDS as EDIT, PERFORM as SEL; MIX only while white 6 is held: not now, told again).
+# The drum pattern: each lane's steps and accents as two 8-step MASKs (ids 160..179); the host sets them (Auto's
+# pattern taken over, as the keys do), the PATTERN page's keys send them; the description's hash stays as they change.
 @ACK15@
 wait 100
 expect host_minor 5
@@ -22,9 +24,9 @@ expect dub_playing 0
 wait 1500
 expect lm_stream 0
 expect lm_sub 1
-expect lm_nparams 115
+expect lm_nparams 135
 expect dub_playing 1
-expect lm_known 115
+expect lm_known 135
 expect lm_ram <1024
 expect_sysex @LVIEW_DUB_1@
 expect lm_view_page 1
@@ -137,6 +139,47 @@ expect_sysex @LVIEW_DUB_2@
 wait 100
 expect dub_view 15
 expect_sysex @LVIEW_DUB_14_0@
+# the pattern from the host: the kick's steps 1-8, 9-16 and its accents; Auto's pattern taken over (PLAY: PATTERN)
+expect dub_par105 0
+sysex_out
+@PSET_DUB_STEPS@
+wait 150
+expect dub_par105 1
+expect dub_par89 3925
+expect dub_par94 5
+expect_sysex @PVAL_DUB_STEPS@
+@PSET_DUB_STEPS_RANGE@
+wait 60
+expect_sysex @ERR_DUB_RANGE_160@
+expect dub_par89 3925
+# one half alone: the shaker's steps 9-16 (X-X--X-X), its 1-8 kept
+@PSET_DUB_SHAKER_HI@
+wait 150
+expect_sysex @PVAL_DUB_SHAKER_HI@
+# the PATTERN page's keys (lane KICK): white 1 takes step 1 off; a black key held, white 16 accents step 16 (on, too)
+sysex_out
+key 0 down
+wait 40
+key 0 up
+wait 100
+expect dub_par89 3924
+expect_sysex @PVAL_DUB_KEY_STEP1@
+key 1 down
+wait 20
+key 26 down
+wait 40
+key 26 up
+key 1 up
+wait 100
+expect dub_par89 -28844
+expect dub_par94 -32763
+expect_sysex @PVAL_DUB_KEY_ACC16@
+shot lm_dub_pattern.png
+# the description again, the values changed: the same hash (tools/fake_run4.py desc dub checks it)
+@DESC_REQ_DUB@
+wait 1500
+expect lm_known 135
+expect_sysex @LVIEW_DUB_14_0@
 @LVIEW_SET_DUB_17@
 wait 100
 expect dub_view 16
@@ -170,10 +213,10 @@ wait 100
 expect dub_view 0
 expect dub_perf 1
 expect_sysex @LVIEW_DUB_1@
-# every value again (a host with the description cached): all 115 known
+# every value again (a host with the description cached): all 135 known
 @VALS_REQ_DUB@
 wait 600
-expect lm_known 115
+expect lm_known 135
 expect_sysex @LVIEW_DUB_1@
 sysex_log off
 # a 1.3 host: a mode switch is the HELLO again; 1.4: the player's SEL + HOME from DUB goes to RUN4

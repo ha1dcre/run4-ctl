@@ -679,14 +679,20 @@ toast as for its own buttons (GROWING, NEXT CHORD, SAVED ...).
 
 20 pages: 0 PLAY, then the device's pages in the order SELECT and the page buttons reach them: 1 DUB, 2 KEY, 3 CHORD, 4
 CHORD SOUND, 5 CHORD FM, 6 TEXTURE, 7 PING SOUND, 8 PING FM, 9 BASS, 10 BASS SOUND, 11 BASS FM, 12 DRUMS, 13 DRUM SOUND,
-14 PATTERN, 15 SPACE, 16 GLOBAL, 17 CHORDS, 18 PERFORM, 19 MIX. 115 parameters. Ids 0..105 are DUB's engine
+14 PATTERN, 15 SPACE, 16 GLOBAL, 17 CHORDS, 18 PERFORM, 19 MIX. 135 parameters. Ids 0..105 are DUB's engine
 parameters (`src/dub/dub.h` DP_*); 128..137 the PLAY page's and PERFORM's mutes and solos; 140 SLOT, 143 LANE, 145..148
-the master actions FILTER, DUB, ENERGY, SPACE (what the device keeps beside the pieces); id + 256 is a second place of
+the master actions FILTER, DUB, ENERGY, SPACE (what the device keeps beside the pieces); 160..179 the drum pattern's
+steps and accents; id + 256 is a second place of
 the same value on another page (KEY's SWING, PERFORM's FILTER, the MIX page's four levels): a PVAL tells both when it
 changes. Besides its four knobs a page may hold values the device sets otherwise: the layer's VOICE (ALGORITHM), the
 pings' OCTAVE (OCT- / OCT+), the drums' KIT; the CHORDS page all eight slots (its K1 SLOT picks which two are on K2,
-K3), the PATTERN page all five chances (K1 LANE picks). The drum pattern's steps and accents (16-bit masks) are not
-described. State texts: PIECE (`BASIC`), CHORD (`Fm7`), SCALE (`F DORIAN`, `F CUSTOM`), STATE (`FULL 3/8`, `BREAK 1/8`
+K3), the PATTERN page all five chances (K1 LANE picks) and every lane's steps and accents (its keys edit the lane K1
+picks). Each lane's sixteen steps are two MASKs of eight, `<LANE> 1-8` and `<LANE> 9-16` (labels `1`..`8`,
+`9`..`16`), its accents two more, `<LANE> ACC 1-8` and `<LANE> ACC 9-16`: id 160 + 4 lane + 0..3, the lanes KICK
+SHAKER OPEN RIM CLAP. While PLAY is AUTO they tell the steps Auto plays (its shaker changes now and then: a PVAL); the
+first write takes Auto's pattern over and turns PLAY to PATTERN, as the device's first key does. An accent written
+leaves its step as it is (the device's black key + white key turns the step on too). Text: the eight steps, `X` set,
+`-` not (`X---X---`). State texts: PIECE (`BASIC`), CHORD (`Fm7`), SCALE (`F DORIAN`, `F CUSTOM`), STATE (`FULL 3/8`, `BREAK 1/8`
 .. the section and its bar while it plays, `EXT FULL 3/8` with a MIDI clock, `RESTING`, `DUB HOLD`, `WAKING`); flags
 PLAYING, FROZEN (dub hold), EXT CLOCK, WAKING. The pieces keep every value per piece (a piece change sends all of
 them); the master actions, SLOT, LANE, KICK, HATS and SOLO are the device's, kept across pieces, not saved.
@@ -764,7 +770,13 @@ them); the master actions, SLOT, LANE, KICK, HATS and SOLO are the device's, kep
 | 101 | PATTERN | OPEN CHANCE | NUMBER |  |
 | 102 | PATTERN | RIM CHANCE | NUMBER |  |
 | 103 | PATTERN | CLAP CHANCE | NUMBER |  |
-| 105 | PATTERN | PLAY | ENUM | AUTO / PATTERN (the steps themselves are not described) |
+| 105 | PATTERN | PLAY | ENUM | AUTO / PATTERN (the steps: 160..179) |
+| 160, 161 | PATTERN | KICK 1-8, KICK 9-16 | MASK | 8 bits: bit k = step k + 1 (+ 9); as the white keys with lane KICK. Text `X---X---` |
+| 162, 163 | PATTERN | KICK ACC 1-8, KICK ACC 9-16 | MASK | 8 bits: the steps accented (a black key held + the white key) |
+| 164..167 | PATTERN | SHAKER 1-8, SHAKER 9-16, SHAKER ACC 1-8, SHAKER ACC 9-16 | MASK | as the kick's |
+| 168..171 | PATTERN | OPEN 1-8, OPEN 9-16, OPEN ACC 1-8, OPEN ACC 9-16 | MASK | as the kick's |
+| 172..175 | PATTERN | RIM 1-8, RIM 9-16, RIM ACC 1-8, RIM ACC 9-16 | MASK | as the kick's |
+| 176..179 | PATTERN | CLAP 1-8, CLAP 9-16, CLAP ACC 1-8, CLAP ACC 9-16 | MASK | as the kick's |
 | 8 | SPACE | ECHO | NUMBER |  |
 | 9 | SPACE | ECHO TIME | ENUM |  |
 | 11 | SPACE | FEEDBACK | NUMBER | text 45% .. 112% (the loop's gain) |

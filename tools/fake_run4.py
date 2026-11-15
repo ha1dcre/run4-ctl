@@ -594,6 +594,8 @@ DUB_PARAMS = [(128, 0, 'enum', 'PIECE'), (129, 0, 'mask', 'NOTES'), (130, 0, 'to
               (48, 13, 'number', 'KICK TUNE'), (49, 13, 'number', 'KICK LEN'), (50, 13, 'number', 'PUNCH'), (51, 13, 'number', 'HATS'),
               (143, 14, 'enum', 'LANE'), (104, 14, 'number', 'ACCENT'), (99, 14, 'number', 'KICK CHANCE'), (100, 14, 'number', 'SHAKER CHANCE'),
               (101, 14, 'number', 'OPEN CHANCE'), (102, 14, 'number', 'RIM CHANCE'), (103, 14, 'number', 'CLAP CHANCE'), (105, 14, 'enum', 'PLAY'),
+              ] + [(160 + 4 * d + h, 14, 'mask', ln + nm) for d, ln in enumerate(["KICK", "SHAKER", "OPEN", "RIM", "CLAP"])
+                   for h, nm in enumerate([" 1-8", " 9-16", " ACC 1-8", " ACC 9-16"])] + [
               (8, 15, 'number', 'ECHO'), (9, 15, 'enum', 'ECHO TIME'), (11, 15, 'number', 'FEEDBACK'), (10, 15, 'number', 'REVERB'),
               (16, 16, 'number', 'TUNE'), (17, 16, 'enum', 'MIDI OUT'), (140, 17, 'enum', 'SLOT'), (64, 17, 'enum', 'ROOT 1'),
               (72, 17, 'enum', 'CHORD 1'), (80, 17, 'enum', 'TYPE 1'), (65, 17, 'enum', 'ROOT 2'), (73, 17, 'enum', 'CHORD 2'),
@@ -653,6 +655,12 @@ def desc_check(path, which=None):
         assert got == DUB_PARAMS, "DUB's parameters differ from docs/PROTOCOL.md:\n%r" % got
         assert [ds.pages[i] for i in range(len(ds.pages))] == DUB_PAGES
         assert ds.head["state"] == ["PIECE", "CHORD", "SCALE", "STATE"]
+        for p in ds.params:                 # the pattern's steps and accents: eight steps a MASK, labelled by step
+            if 160 <= p["id"] < 180:
+                first = 1 + 8 * (p["id"] & 1)
+                assert p["lo"] == 0 and p["hi"] == 255 and p["labels"] == [str(first + k) for k in range(8)], p
+        hs = set(d.head["hash"] for d in descs if d.head["mode"] == 3)
+        assert len(hs) == 1, "DUB's description hash changed with its values: %r" % hs
     if which == "synth":
         ds = [d for d in descs if d.head["mode"] == 1][-1]
         assert [ds.pages[i] for i in range(len(ds.pages))] == SYNTH_PAGES
@@ -774,6 +782,15 @@ def v14_table():
         "PSET_DUB_KICK0": pset(3, [(135, 0), (137, 2)]), "PVAL_DUB_KICK0": pval(3, [(135, 0, "OFF"), (137, 2, "PINGS")]),
         "PSET_DUB_UNKNOWN": pset(3, [(0, 50), (999, 1)]), "PSET_DUB_RANGE": pset(3, [(0, 101)]),
         "PSET_DUB_PIECE2": pset(3, [(128, 1)]),
+        # DUB's pattern (ids 160 + 4 lane: steps 1-8, 9-16, accents 1-8, 9-16): the kick's steps and accents from Auto's
+        # four on the floor (PLAY turns to PATTERN); then the keys: step 1 off, step 16 accented (on, too)
+        "PSET_DUB_STEPS": pset(3, [(160, 0x55), (161, 0x0F), (162, 0x05), (163, 0x00)]),
+        "PVAL_DUB_STEPS": pval(3, [(105, 1, "PATTERN"), (160, 0x55, "X-X-X-X-"), (161, 0x0F, "XXXX----"),
+                                   (162, 0x05, "X-X-----")]),
+        "PVAL_DUB_KEY_STEP1": pval(3, [(160, 0x54, "--X-X-X-")]),
+        "PVAL_DUB_KEY_ACC16": pval(3, [(161, 0x8F, "XXXX---X"), (163, 0x80, "-------X")]),
+        "PSET_DUB_STEPS_RANGE": pset(3, [(160, 256)]), "ERR_DUB_RANGE_160": lm_err(3, "RANGE", 160),
+        "PSET_DUB_SHAKER_HI": pset(3, [(165, 0xA5)]), "PVAL_DUB_SHAKER_HI": pval(3, [(165, 0xA5, "X-X--X-X")]),
         # AMB (mode 2): PAD LEVEL (id 0), FREEZE (35), NEXT CHORD (36), NOTES (33), GROW (34), PIECE (32), SCALE (20)
         "PSET_PAD70": pset(2, [(0, 70)]), "PVAL_PAD70": pval(2, [(0, 70, "70")]), "PVAL_PAD73": pval(2, [(0, 73, "73")]),
         "PSET_FREEZE1": pset(2, [(35, 1)]), "PVAL_FREEZE1": pval(2, [(35, 1, "ON")]),

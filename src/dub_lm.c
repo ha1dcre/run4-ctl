@@ -3,12 +3,17 @@
  * 0 PLAY: the piece, the notes of the scale, the transport, dub hold and the actions; pages 1..19 the device's pages
  * (DUB-1's views: the seven pages, their sound / FM / pattern pages, KEY, CHORDS, PERFORM, MIX), their knobs in knob
  * order, and a few values the device sets with ALGORITHM and OCT- / OCT+ (the voices, the pings' octave) or keeps
- * behind a knob that picks (the CHORDS page's eight slots, the PATTERN page's five chances). Ids: the engine's
- * parameter numbers (dub.h DP_*), 128.. the PLAY page's and the device's own knobs, + 256 a second place of the same
- * value (KEY's SWING, PERFORM's FILTER, the MIX page). Part of the unity build (app.c), after dub_ui.c. */
+ * behind a knob that picks (the CHORDS page's eight slots, the PATTERN page's five chances) or on its keys (the
+ * PATTERN page's steps and accents: each lane's 16-bit mask as two 8-step MASKs, 1-8 and 9-16). Ids: the engine's
+ * parameter numbers (dub.h DP_*), 128.. the PLAY page's and the device's own knobs, 160..179 the steps and accents
+ * (160 + 4 lane: its steps 1-8, 9-16, its accents 1-8, 9-16), + 256 a second place of the same value (KEY's SWING,
+ * PERFORM's FILTER, the MIX page). Part of the unity build (app.c), after dub_ui.c. */
 
-enum { DR_PIECE = 220, DR_NOTES, DR_PLAY, DR_HOLD, DR_NEXT, DR_SAVE, DR_RESET, DR_KICK, DR_HATS, DR_SOLO };
+enum { DR_PIECE = 220, DR_NOTES, DR_PLAY, DR_HOLD, DR_NEXT, DR_SAVE, DR_RESET, DR_KICK, DR_HATS, DR_SOLO,
+       DR_PAT = 230 };                       /* DR_PAT + 4 lane + h: the lane's steps (h 0: 1-8, 1: 9-16), accents (2, 3) */
+_Static_assert(DR_PAT + 4 * DU_NDRUM <= 256, "the pattern's refs fit a uint8_t");
 #define DL_ALIAS 256u
+#define DL_PAT_ID 160u
 #define DL_NPAGES 20
 static const char *const DL_PAGES[DL_NPAGES] = {"PLAY", "DUB", "KEY", "CHORD", "CHORD SOUND", "CHORD FM", "TEXTURE",
                                                 "PING SOUND", "PING FM", "BASS", "BASS SOUND", "BASS FM", "DRUMS",
@@ -17,6 +22,8 @@ static const uint8_t DL_PAGE_OF[DV_N] = {1, 3, 6, 9, 12, 15, 16, 2, 4, 5, 7, 8, 
 static const char *const DL_STATE[4] = {"PIECE", "CHORD", "SCALE", "STATE"};
 typedef struct { uint8_t page, ref, alias; const char *name; } dl_ent_t;   /* ref: DP_*, DK_* or DR_* */
 #define CS(i, n) {17, DP_CR0 + i, 0, "ROOT " n}, {17, DP_CQ0 + i, 0, "CHORD " n}, {17, DP_CX0 + i, 0, "TYPE " n}
+#define PT(d, n) {14, DR_PAT + 4 * d, 0, n " 1-8"}, {14, DR_PAT + 4 * d + 1, 0, n " 9-16"}, \
+                 {14, DR_PAT + 4 * d + 2, 0, n " ACC 1-8"}, {14, DR_PAT + 4 * d + 3, 0, n " ACC 9-16"}
 static const dl_ent_t DL[] = {
     {0, DR_PIECE, 0, "PIECE"}, {0, DR_NOTES, 0, "NOTES"}, {0, DR_PLAY, 0, "PLAY"}, {0, DR_HOLD, 0, "DUB HOLD"},
     {0, DR_NEXT, 0, "NEXT CHORD"}, {0, DR_SAVE, 0, "SAVE"}, {0, DR_RESET, 0, "RESET PIECE"},
@@ -40,6 +47,7 @@ static const dl_ent_t DL[] = {
     {14, DK_LANE, 0, "LANE"}, {14, DP_DACCENT, 0, "ACCENT"}, {14, DP_DCH0, 0, "KICK CHANCE"},
     {14, DP_DCH0 + 1, 0, "SHAKER CHANCE"}, {14, DP_DCH0 + 2, 0, "OPEN CHANCE"}, {14, DP_DCH0 + 3, 0, "RIM CHANCE"},
     {14, DP_DCH0 + 4, 0, "CLAP CHANCE"}, {14, DP_DMODE, 0, "PLAY"},
+    PT(0, "KICK"), PT(1, "SHAKER"), PT(2, "OPEN"), PT(3, "RIM"), PT(4, "CLAP"),
     {15, DP_ECHO, 0, "ECHO"}, {15, DP_ETIME, 0, "ECHO TIME"}, {15, DP_FEEDBACK, 0, "FEEDBACK"}, {15, DP_REVERB, 0, "REVERB"},
     {16, DP_TUNE, 0, "TUNE"}, {16, DP_MIDI, 0, "MIDI OUT"},
     {17, DK_SLOT, 0, "SLOT"}, CS(0, "1"), CS(1, "2"), CS(2, "3"), CS(3, "4"),
@@ -49,12 +57,14 @@ static const dl_ent_t DL[] = {
     {19, DP_CHORD, 1, "CHORD"}, {19, DP_PINGS, 1, "PINGS"}, {19, DP_BASS, 1, "BASS"}, {19, DP_DRUMS, 1, "DRUMS"},
 };
 #undef CS
+#undef PT
 #define DL_N ((uint32_t)(sizeof DL / sizeof DL[0]))
 _Static_assert(sizeof DL / sizeof DL[0] <= LM_MAX, "DUB's description fits the value shadow");
 
 static uint16_t dl_id(const dl_ent_t *e)
 {
-    uint32_t r = e->ref, id = r < DP_NPARAMS ? r : r == DK_MODE ? DP_MODE : r >= DR_PIECE ? 128u + (r - DR_PIECE)
+    uint32_t r = e->ref, id = r < DP_NPARAMS ? r : r == DK_MODE ? DP_MODE : r >= DR_PAT ? DL_PAT_ID + (r - DR_PAT)
+                            : r >= DR_PIECE ? 128u + (r - DR_PIECE)
                             : 140u + (r - DK_SLOT);   /* SLOT 140, ... LANE 143, FILTER 145 .. SPACE 148 */
     return (uint16_t)(id + (e->alias ? DL_ALIAS : 0u));
 }
@@ -64,6 +74,12 @@ static int dl_choice_n(uint32_t r)           /* the labels of a choice (0: not o
     if (dl_eng(r) && db_choice((int)r)) return du_param_info((int)r)->hi - du_param_info((int)r)->lo + 1;
     return r == DK_MODE ? DU_NMODES + 1 : r == DK_SLOT ? DU_NPROG : r == DK_LANE ? DU_NDRUM : r == DR_PIECE ? DU_NPIECES : 0;
 }
+static uint32_t dl_pat_mask(uint32_t r)      /* the 16 bits a pattern ref's half is of (as the lane plays: Auto's too) */
+{
+    uint32_t q = r - DR_PAT, d = q >> 2;
+    return q & 2u ? (uint32_t)(uint16_t)DB_CUR->par[DP_DACC0 + d] : db_lane_steps((int)d);
+}
+static uint32_t dl_pat_get(uint32_t r) { return (dl_pat_mask(r) >> (((r - DR_PAT) & 1u) * 8u)) & 0xFFu; }
 static void dl_param(uint32_t i, lm_param_t *p)
 {
     const dl_ent_t *e = &DL[i < DL_N ? i : 0];
@@ -75,6 +91,12 @@ static void dl_param(uint32_t i, lm_param_t *p)
     p->name = e->name;
     p->step = 1;
     p->unit = "";
+    if (r >= DR_PAT) {                       /* the PATTERN page's steps and accents: eight a MASK */
+        p->kind = R4P_LK_MASK;
+        p->hi = 255;
+        p->nlabels = 8;
+        return;
+    }
     if (r >= DR_PIECE) {                     /* the PLAY page's, PERFORM's mutes and solos */
         static const uint8_t K[] = {R4P_LK_ENUM, R4P_LK_MASK, R4P_LK_TOGGLE, R4P_LK_TOGGLE, R4P_LK_ACTION,
                                     R4P_LK_ACTION, R4P_LK_ACTION, R4P_LK_TOGGLE, R4P_LK_TOGGLE, R4P_LK_MASK};
@@ -106,7 +128,8 @@ static void dl_label(uint32_t i, uint32_t k, char *t)
 {
     static const char *const SOLO[5] = {"CHORD", "PINGS", "BASS", "KICK", "HATS"};
     uint32_t r = DL[i < DL_N ? i : 0].ref;
-    if (r == DR_PIECE) db_upper(t, du_piece_name((int)k), R4P_LM_STR);
+    if (r >= DR_PAT) u_int(k + 1u + ((r - DR_PAT) & 1u) * 8u, t);   /* the step: 1..8, 9..16 */
+    else if (r == DR_PIECE) db_upper(t, du_piece_name((int)k), R4P_LM_STR);
     else if (r == DR_NOTES) strcpy(t, DU_NOTE_NAME[k % 12u]);
     else if (r == DR_PLAY) strcpy(t, k ? "PLAYING" : "RESTING");
     else if (r == DR_SOLO) strcpy(t, SOLO[k % 5u]);
@@ -121,6 +144,8 @@ static int dl_get(uint32_t i)
     uint32_t r = DL[i < DL_N ? i : 0].ref, a = 0, k;
     if (r < DR_PIECE)
         return db_kget((int)r);
+    if (r >= DR_PAT)
+        return (int)dl_pat_get(r);
     switch (r) {
     case DR_PIECE: return db.piece;
     case DR_NOTES:
@@ -144,6 +169,12 @@ static void dl_text(uint32_t i, int v, char *t)
     if (r < DR_PIECE) {
         if (r == DK_MODE || r == DK_SLOT || r == DK_LANE) dl_label(i, (uint32_t)v, t);
         else db_ktext((int)r, v, t);
+        return;
+    }
+    if (r >= DR_PAT) {                       /* the eight steps: X a hit (an accent), - none */
+        for (k = 0; k < 8u; k++)
+            t[k] = ((uint32_t)v >> k) & 1u ? 'X' : '-';
+        t[8] = 0;
         return;
     }
     switch (r) {
@@ -177,6 +208,15 @@ static int dl_set(uint32_t i, int v)
             if (v && !DB_CUR->par[DP_PMODE])
                 db_set(DP_PMODE, 1);         /* a chord written: the slots play (as the knob) */
         } else db_kset((int)r, v);
+        db_build();
+        return R4P_LE_OK;
+    }
+    if (r >= DR_PAT) {                       /* eight steps or accents: as the keys, Auto's pattern taken over first */
+        uint32_t q = r - DR_PAT, sh = (q & 1u) * 8u, p = (q & 2u ? DP_DACC0 : DP_DPAT0) + (q >> 2), m;
+        db_pattern_own();
+        m = (uint32_t)(uint16_t)DB_CUR->par[p];
+        m = (m & ~(0xFFu << sh)) | ((uint32_t)v & 0xFFu) << sh;
+        db_set((int)p, (int)(int16_t)(uint16_t)m);
         db_build();
         return R4P_LE_OK;
     }

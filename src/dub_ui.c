@@ -573,6 +573,15 @@ static uint32_t db_lane_steps(int d)
 {
     return DB_CUR->par[DP_DMODE] ? (uint32_t)(uint16_t)DB_CUR->par[DP_DPAT0 + d] : du_drum_pat[d];
 }
+static void db_pattern_own(void)              /* the first edit (a key, or RUN4's): what Auto plays, taken over */
+{
+    int k;
+    if (DB_CUR->par[DP_DMODE])
+        return;
+    for (k = 0; k < DU_NDRUM; k++)
+        db_set(DP_DPAT0 + k, (int)(int16_t)(uint16_t)du_drum_pat[k]);
+    db_set(DP_DMODE, 1);
+}
 static void db_pattern_key(uint32_t key, uint32_t keys)   /* the PATTERN page: a white key, a step; a black one held: accent */
 {
     int st = db_white(key), d = dbr.lane, k;
@@ -582,11 +591,7 @@ static void db_pattern_key(uint32_t key, uint32_t keys)   /* the PATTERN page: a
         return;
     for (k = 0; k < 16; k++)
         black &= ~(1u << DB_WHITE[k]);
-    if (!DB_CUR->par[DP_DMODE]) {            /* the first edit: what Auto plays, taken over */
-        for (k = 0; k < DU_NDRUM; k++)
-            db_set(DP_DPAT0 + k, (int)(int16_t)(uint16_t)du_drum_pat[k]);
-        db_set(DP_DMODE, 1);
-    }
+    db_pattern_own();
     m = (uint32_t)(uint16_t)DB_CUR->par[DP_DPAT0 + d];
     if (black) {                             /* accent it (on, too), or not */
         db_set(DP_DACC0 + d, (int)(int16_t)(uint16_t)((uint32_t)(uint16_t)DB_CUR->par[DP_DACC0 + d] ^ (1u << st)));

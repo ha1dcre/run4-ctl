@@ -159,7 +159,8 @@ engine's 78 KB of it): about +80..100 KB, ~380..400 KB of the 581,564 B slot. CP
 this Mac: 0.60 % of real time at its busiest (Haze, Cloud and the pings up; the overload guard's step 2 0.58 %, step 4
 0.55 %), AMB 0.43 %; on the device not measured (DUB-1 runs the same engine on the FM-1 at 360 MHz). The overload guard
 sheds in four steps: the plate's input diffusers, the cloud, two of the six pings and the crackle, one saw a chord
-voice. DUB's description: 20 pages, 115 parameters, 267 frames with its LVIEWs (`34_dub_modes`).
+voice. DUB's description: 20 pages, 135 parameters (the drum pattern's steps and accents among them, two MASKs of
+eight a lane, ids 160..179), 239 frames (`34_dub_modes`).
 
 ### AMB and DUB mode off
 

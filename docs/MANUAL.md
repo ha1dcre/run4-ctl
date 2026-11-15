@@ -451,7 +451,8 @@ takes its note out of the scale or puts it back. Out (GLOBAL > MIDI OUT): OFF (t
 on channel 1, the pings on 2, the bass on 3, the drums on 10).
 
 **With RUN4.** As AMB mode: a local mode for RUN4, SEL + REC / SEL + PLAY are RUN4's, the sound goes to RUN4 over the
-USB cable, and RUN4 can pick DUB, show its pages and set its values (protocol 1.4 / 1.5, mode 3).
+USB cable, and RUN4 can pick DUB, show its pages and set its values (protocol 1.4 / 1.5, mode 3), the drum pattern's
+steps and accents too: an edit in RUN4 takes over what AUTO was playing, as the first key does.
 
 ## Help cards
 
