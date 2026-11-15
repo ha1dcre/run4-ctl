@@ -325,8 +325,14 @@ HELLO says mode 1, as Synth mode's (a 1.4 host learns which from MODE and can de
 input as ever. Nothing new on the wire; a host needs no change. In AMB mode a MIDI clock from the host drives the
 garden (START grows it, STOP rests it), and a note on channel 1 changes its scale (unless it is the host voice's
 channel: those notes are ignored there); its MIDI OUT is off unless the player sets it (clock, or notes on channels 1,
-2, 3 and 10). SEL + HOME goes RUN4 -> SYNTH -> AMB -> RUN4: from Synth mode back to RUN4 the host sees two HELLOs
-(mode 1, then 0).
+2, 3 and 10). SEL + HOME goes RUN4 -> SYNTH -> AMB -> DUB -> RUN4 (firmware 0.9): from Synth mode back to RUN4 a
+1.0 .. 1.3 host sees three HELLOs (mode 1, 1, then 0).
+
+**DUB mode (firmware 0.9).** A fourth mode, DUB (DUB-1's generative dub techno, MANUAL "DUB mode"), is a local mode as
+AMB is, in every way above: HELLO mode 1, a MIDI clock drives it (START plays it from the top, STOP rests it), a note on
+channel 1 changes its scale, MIDI OUT off unless the player sets it (clock, or notes on channels 1, 2, 3 and 10), SEL +
+REC / SEL + PLAY sent as BTN 11 / 10. Nothing new on the wire: a 1.4 host learns it from MODES (id 3) and its
+description.
 
 **Synth mode.** When the player switches to Synth mode (SEL + HOME) Synth mode takes over: the host voice's notes are
 cut, HV_STATE says 2, and Synth mode plays with its own voice and settings. What the host sends meanwhile (HV_ON,
@@ -440,7 +446,7 @@ from the device, a restore 33 request / answer round trips.
 
 ## Protocol 1.4: local modes
 
-Version 1.4 lets the host pick the FM-1's mode and remote-control its **local modes** (Synth, AMB, and any later one)
+Version 1.4 lets the host pick the FM-1's mode and remote-control its **local modes** (Synth, AMB, DUB, and any later one)
 without knowing them in advance: the device lists its modes, switches on request, describes the playing local mode
 (pages, parameters, their kinds, ranges, labels, values and the text it shows for them) and reports value changes and
 a short status line. A host built on this document needs no update for a new mode or a new parameter; it caches a
@@ -471,6 +477,7 @@ as for SEL + HOME); before the HELLO_ACK they are ignored.
 | 0 | RUN4 | AVAIL, CTRL | the controller: the host draws its pages (1.0 .. 1.3). No description |
 | 1 | SYNTH | AVAIL, DESC | Synth mode, described (below) |
 | 2 | AMB | AVAIL, DESC; in the package without AMB (`app-noamb`): **0** (listed, not available) | AMB mode, described (below) |
+| 3 | DUB | AVAIL, DESC (firmware 0.9); in `app-noamb`: **0** (listed, not available) | DUB mode, described (below) |
 
 Mode ids are stable; a later mode takes the next free id (3, 4, ...), up to 126. **Flags** (MODES, MODE): bit 0
 **AVAIL** = this firmware has the mode, bit 1 **DESC** = it is described (DESC_REQ works), bit 2 **CTRL** = the
@@ -588,14 +595,14 @@ not in bursts (one frame at a time, see "Bluetooth MIDI").
 
 | code | name | when |
 | --- | --- | --- |
-| 1 | NOMODE | MODE_SET: no such mode, or not in this firmware (AMB in `app-noamb`) |
+| 1 | NOMODE | MODE_SET: no such mode, or not in this firmware (AMB and DUB in `app-noamb`) |
 | 2 | WRONGMODE | DESC_REQ / VALS_REQ / PSET name another mode than the one playing (a MODE follows) |
 | 3 | NODESC | DESC_REQ / VALS_REQ / PSET in a mode without a description (RUN4) |
 | 4 | UNKNOWN | PSET: no parameter with that id |
 | 5 | RANGE | PSET: outside `lo..hi`, off the step, an ACTION with a value other than 1 |
 | 6 | READONLY | PSET: a READONLY parameter |
-| 7 | REFUSED | PSET: in range but not now (AMB: a note mask without the root or with fewer than three notes; Synth: an empty user voice) |
-| 8 | CLOCK | PSET: the transport (AMB's GROW, Synth's PLAY) while a MIDI clock leads it (below) |
+| 7 | REFUSED | PSET: in range but not now (AMB, DUB: a note mask without the root or with fewer than three notes; Synth: an empty user voice) |
+| 8 | CLOCK | PSET: the transport (AMB's GROW, DUB's PLAY, Synth's PLAY) while a MIDI clock leads it (below) |
 | 9 | BUSY | reserved |
 
 ### Sequences
@@ -604,7 +611,7 @@ not in bursts (one frame at a time, see "Bluetooth MIDI").
   MODE. In a local mode the host then sends DESC_REQ (or VALS_REQ if it has MODE's hash cached) -> description ->
   LSTATE -> PVAL / LSTATE as things change.
 * **The host picks AMB.** MODES_REQ -> MODES; MODE_SET 2 -> MODE `02 03 hash`; DESC_REQ 2 (or VALS_REQ 2) -> ... AMB
-  grows 0.7 s after it came in (LSTATE WAKING, then PLAYING; PVAL GROW 1).
+  grows 0.7 s after it came in (LSTATE WAKING, then PLAYING; PVAL GROW 1). DUB the same way (MODE_SET 3; PVAL PLAY 1).
 * **The player switches on the device** (SEL + HOME): MODE with the new mode; the subscription ends. Into RUN4 mode:
   SYNC_REQ, POT, MODE; the host resyncs as after any SYNC_REQ. Into a local mode: the host asks DESC_REQ / VALS_REQ.
 * **Resync after SYNC_REQ.** A SYNC_REQ comes only in RUN4 mode (after a HELLO_ACK or a switch into it): the host
@@ -612,7 +619,8 @@ not in bursts (one frame at a time, see "Bluetooth MIDI").
   lost track (a replug, its own restart) sends HELLO_ACK `01 04` -> MODE, then DESC_REQ / VALS_REQ.
 * **A new link** (cable, Bluetooth): HELLO again; nothing is subscribed, a MODE_SET not yet carried out is forgotten.
 
-Sizes: AMB's description is 57 frames, 1,707 bytes (the longest frame 78 bytes); Synth mode's 187 frames, 5,751 bytes
+Sizes: AMB's description is 57 frames, 1,707 bytes (the longest frame 78 bytes); DUB's 199 frames, 6,155 bytes (the
+longest 76; `tests/scenarios/34_dub_modes.txt`); Synth mode's 187 frames, 5,751 bytes
 (measured in the simulator, `tests/scenarios/31_modes.txt`). The device sends up to four 1.4 frames per pass of its
 main loop as the link has room, behind the button events and the 1.3 answers (HV_STATE, then MODE / MODES / LM_ERR,
 then VOICE_DATA, VOICE_NAMES, the backup, then the description, PVAL, LSTATE, and to a 1.5 host LVIEW). Over USB a description takes a few
@@ -666,6 +674,122 @@ PLAY page's. State texts: PIECE (`GARDEN`), CHORD (`Em7`), SCALE (`D DORIAN`, `D
 Every value the host sets goes into the piece playing (or the player's TUNE / MIDI OUT) and is saved as the device's
 own edits are (a few seconds later while resting; SAVE at once). The device redraws its page and shows the same
 toast as for its own buttons (GROWING, NEXT CHORD, SAVED ...).
+
+### DUB's description (mode 3)
+
+20 pages: 0 PLAY, then the device's pages in the order SELECT and the page buttons reach them: 1 DUB, 2 KEY, 3 CHORD, 4
+CHORD SOUND, 5 CHORD FM, 6 TEXTURE, 7 PING SOUND, 8 PING FM, 9 BASS, 10 BASS SOUND, 11 BASS FM, 12 DRUMS, 13 DRUM SOUND,
+14 PATTERN, 15 SPACE, 16 GLOBAL, 17 CHORDS, 18 PERFORM, 19 MIX. 115 parameters. Ids 0..105 are DUB's engine
+parameters (`src/dub/dub.h` DP_*); 128..137 the PLAY page's and PERFORM's mutes and solos; 140 SLOT, 143 LANE, 145..148
+the master actions FILTER, DUB, ENERGY, SPACE (what the device keeps beside the pieces); id + 256 is a second place of
+the same value on another page (KEY's SWING, PERFORM's FILTER, the MIX page's four levels): a PVAL tells both when it
+changes. Besides its four knobs a page may hold values the device sets otherwise: the layer's VOICE (ALGORITHM), the
+pings' OCTAVE (OCT- / OCT+), the drums' KIT; the CHORDS page all eight slots (its K1 SLOT picks which two are on K2,
+K3), the PATTERN page all five chances (K1 LANE picks). The drum pattern's steps and accents (16-bit masks) are not
+described. State texts: PIECE (`BASIC`), CHORD (`Fm7`), SCALE (`F DORIAN`, `F CUSTOM`), STATE (`FULL 3/8`, `BREAK 1/8`
+.. the section and its bar while it plays, `EXT FULL 3/8` with a MIDI clock, `RESTING`, `DUB HOLD`, `WAKING`); flags
+PLAYING, FROZEN (dub hold), EXT CLOCK, WAKING. The pieces keep every value per piece (a piece change sends all of
+them); the master actions, SLOT, LANE, KICK, HATS and SOLO are the device's, kept across pieces, not saved.
+
+| id | page | name | kind | notes |
+| --- | --- | --- | --- | --- |
+| 128 | PLAY | PIECE | ENUM | as PRESETS: the piece as it was left (its ping loops too) |
+| 129 | PLAY | NOTES | MASK | the scale as the keys toggle it. REFUSED without the root or with fewer than 3 notes. Text `7 NOTES` |
+| 130 | PLAY | PLAY | TOGGLE | PLAY: plays / rests. AUTO. CLOCK while a MIDI clock runs. Text `WAKING` while it is about to play |
+| 131 | PLAY | DUB HOLD | TOGGLE | REC tapped: the echo and the cloud hold, the chord holds |
+| 132 | PLAY | NEXT CHORD | ACTION | EDIT held: the next chord, on the next bar while playing |
+| 133 | PLAY | SAVE | ACTION | SAVE: the pieces into the store |
+| 134 | PLAY | RESET PIECE | ACTION | SAVE held: the piece back to its recipe (not saved until SAVE) |
+| 145 | DUB | FILTER | NUMBER | the master filter: -50..-1 SHUT 100..2, 0 OFF, 1..50 OPEN 2..100. For playing: never saved |
+| 5 | DUB | EVOLVE | NUMBER |  |
+| 15 | DUB | MOTION | NUMBER |  |
+| 6 | DUB | DRIFT | ENUM | 2 BARS .. 64 BARS, HOLD |
+| 18 | KEY | TEMPO | NUMBER | (a running MIDI clock's tempo leads) |
+| 19 | KEY | ROOT | ENUM |  |
+| 20 | KEY | MODE | ENUM | 8 = CUSTOM: notes taken out or put in; setting 8 keeps the notes |
+| 282 | KEY | SWING | NUMBER | the same value as DRUMS' SWING (26) |
+| 0 | CHORD | LEVEL | NUMBER |  |
+| 28 | CHORD | STABS | NUMBER |  |
+| 13 | CHORD | DECAY | NUMBER |  |
+| 12 | CHORD | CUTOFF | NUMBER |  |
+| 22 | CHORD | VOICE | ENUM | ALGORITHM on CHORD's pages: SAWS KEYS ORGAN PAD BELL TONEWHEEL NOISE |
+| 36 | CHORD SOUND | ATTACK | NUMBER |  |
+| 37 | CHORD SOUND | COLOUR | NUMBER |  |
+| 38 | CHORD SOUND | RESO | NUMBER |  |
+| 39 | CHORD SOUND | ENV | NUMBER |  |
+| 52 | CHORD FM | ALGO | ENUM | VOICE (the voice's own), 1..8, 2-OP; the FM pages act on FM voices only (the chord's KEYS, BELL; every ping; the bass's PUNCH .. GROWL) |
+| 53 | CHORD FM | RATIO | NUMBER |  |
+| 54 | CHORD FM | FEEDBACK | NUMBER |  |
+| 55 | CHORD FM | MOD DEC | NUMBER |  |
+| 1 | TEXTURE | PINGS | NUMBER |  |
+| 4 | TEXTURE | DENSITY | NUMBER |  |
+| 32 | TEXTURE | CLOUD | NUMBER |  |
+| 29 | TEXTURE | CRACKLE | NUMBER |  |
+| 33 | TEXTURE | VOICE | ENUM | ALGORITHM on TEXTURE's pages: BLIP MARIMBA GLASS WOOD DROP |
+| 21 | TEXTURE | OCTAVE | NUMBER | OCT- / OCT+ |
+| 40 | PING SOUND | TONE | NUMBER |  |
+| 41 | PING SOUND | RATIO | NUMBER |  |
+| 42 | PING SOUND | LENGTH | NUMBER |  |
+| 43 | PING SOUND | BEND | NUMBER |  |
+| 56 | PING FM | ALGO | ENUM |  |
+| 57 | PING FM | RATIO | NUMBER |  |
+| 58 | PING FM | FEEDBACK | NUMBER |  |
+| 59 | PING FM | MOD DEC | NUMBER |  |
+| 2 | BASS | LEVEL | NUMBER |  |
+| 23 | BASS | OCTAVE | NUMBER |  |
+| 24 | BASS | GROOVE | ENUM |  |
+| 25 | BASS | FIFTH | NUMBER |  |
+| 34 | BASS | VOICE | ENUM | ALGORITHM on BASS's pages: SUB PUNCH RUBBER PLUCK GROWL |
+| 44 | BASS SOUND | BITE | NUMBER |  |
+| 45 | BASS SOUND | SHAPE | NUMBER |  |
+| 46 | BASS SOUND | LENGTH | NUMBER |  |
+| 47 | BASS SOUND | SLIDE | NUMBER |  |
+| 60 | BASS FM | ALGO | ENUM |  |
+| 61 | BASS FM | RATIO | NUMBER |  |
+| 62 | BASS FM | FEEDBACK | NUMBER |  |
+| 63 | BASS FM | MOD DEC | NUMBER |  |
+| 3 | DRUMS | LEVEL | NUMBER |  |
+| 7 | DRUMS | HITS | NUMBER |  |
+| 26 | DRUMS | SWING | NUMBER | text 50% .. 70% |
+| 30 | DRUMS | DUCK | NUMBER |  |
+| 35 | DRUMS | KIT | ENUM | ALGORITHM on DRUMS' pages: TIGHT DEEP PUNCH SOFT DUSTY |
+| 48 | DRUM SOUND | KICK TUNE | NUMBER |  |
+| 49 | DRUM SOUND | KICK LEN | NUMBER |  |
+| 50 | DRUM SOUND | PUNCH | NUMBER |  |
+| 51 | DRUM SOUND | HATS | NUMBER |  |
+| 143 | PATTERN | LANE | ENUM | which lane the device's PATTERN page edits (its CHANCE on K3) |
+| 104 | PATTERN | ACCENT | NUMBER |  |
+| 99 | PATTERN | KICK CHANCE | NUMBER |  |
+| 100 | PATTERN | SHAKER CHANCE | NUMBER |  |
+| 101 | PATTERN | OPEN CHANCE | NUMBER |  |
+| 102 | PATTERN | RIM CHANCE | NUMBER |  |
+| 103 | PATTERN | CLAP CHANCE | NUMBER |  |
+| 105 | PATTERN | PLAY | ENUM | AUTO / PATTERN (the steps themselves are not described) |
+| 8 | SPACE | ECHO | NUMBER |  |
+| 9 | SPACE | ECHO TIME | ENUM |  |
+| 11 | SPACE | FEEDBACK | NUMBER | text 45% .. 112% (the loop's gain) |
+| 10 | SPACE | REVERB | NUMBER |  |
+| 16 | GLOBAL | TUNE | NUMBER | the player's, not the piece's |
+| 17 | GLOBAL | MIDI OUT | ENUM | the player's, not the piece's: OFF CLOCK NOTES |
+| 140 | CHORDS | SLOT | ENUM | which slot the device's CHORDS page edits (its CHORD and TYPE on K2, K3) |
+| 88 | CHORDS | PLAY | ENUM | RANDOM / PROG (the slots in turn) |
+| 401 | PERFORM | FILTER | NUMBER | the same value as DUB's FILTER (145) |
+| 146 | PERFORM | DUB | NUMBER | -50..50: the echo's send and feedback. For playing |
+| 147 | PERFORM | ENERGY | NUMBER | -50..50: density, hits, stabs, the phrases. For playing |
+| 148 | PERFORM | SPACE | NUMBER | -50..50: reverb, cloud, the plate's size. For playing |
+| 135 | PERFORM | KICK | TOGGLE | OFF / ON (1): muted (PERFORM's white 4) |
+| 136 | PERFORM | HATS | TOGGLE | OFF / ON (1): muted (white 5) |
+| 137 | PERFORM | SOLO | MASK | 5 bits: CHORD PINGS BASS KICK HATS soloed (black 1-5); text `NONE`, a name, `2 SOLO` |
+| 256 | MIX | CHORD | NUMBER | the same value as CHORD's LEVEL (0); the MIX page: PERFORM, white 6 held |
+| 257 | MIX | PINGS | NUMBER | the same as TEXTURE's PINGS (1) |
+| 258 | MIX | BASS | NUMBER | the same as BASS' LEVEL (2) |
+| 259 | MIX | DRUMS | NUMBER | the same as DRUMS' LEVEL (3) |
+| 64..71, 72..79, 80..87 | CHORDS | ROOT 1..8, CHORD 1..8, TYPE 1..8 | ENUM | in the order ROOT 1, CHORD 1, TYPE 1, ROOT 2 ..; ROOT C .. B, CHORD EMPTY MAJOR MINOR SUS2 SUS4 DIM AUG (a chord written: PLAY becomes PROG), TYPE TRIAD 6 7 MAJ7 9 11 ADD9 |
+
+Ranges, labels and defaults are in the description (`tools/fake_run4.py` DUB_PARAMS has the list as the device sends
+it, checked in `tests/run_sim.sh`). Every value the host sets goes into the piece playing (or the player's TUNE / MIDI
+OUT, or the device's own) and is saved as the device's own edits are; the device redraws its page and shows the toast
+its buttons would.
 
 ### Synth mode's description (mode 1)
 
@@ -768,6 +892,34 @@ SCALE as id 20 (P_MODE). Page 0 PLAY is never the device's page. LVIEW_SET p (1.
 | 6 SPACE | 8 9 10 11 |
 | 7 KEY | 19 16 17 20 |
 
+**DUB's pages** (mode 3): the device's page is the description page of the same name (the order of DUB's description above), its
+knobs these ids. Page 0 PLAY is never the device's page. LVIEW_SET p shows page p as the device's buttons get there:
+DUB .. GLOBAL as their buttons, KEY, the SOUND, FM and PATTERN pages as their button pressed again; CHORDS as EDIT
+tapped (EDIT again goes back to where it came from); PERFORM as SEL tapped (PERFORM on); MIX only while the player holds
+white 6 in PERFORM: not now (the device sends the LVIEW of the page it shows, the host's tab goes back).
+
+| page | K1..K4 ids |
+| --- | --- |
+| 1 DUB | 145 5 15 6 |
+| 2 KEY | 18 19 20 282 |
+| 3 CHORD | 0 28 13 12 |
+| 4 CHORD SOUND | 36 37 38 39 |
+| 5 CHORD FM | 52 53 54 55 |
+| 6 TEXTURE | 1 4 32 29 |
+| 7 PING SOUND | 40 41 42 43 |
+| 8 PING FM | 56 57 58 59 |
+| 9 BASS | 2 23 24 25 |
+| 10 BASS SOUND | 44 45 46 47 |
+| 11 BASS FM | 60 61 62 63 |
+| 12 DRUMS | 3 7 26 30 |
+| 13 DRUM SOUND | 48 49 50 51 |
+| 14 PATTERN, lane l | 143 104 99+l 105 |
+| 15 SPACE | 8 9 11 10 |
+| 16 GLOBAL | 16 17 (n = 2) |
+| 17 CHORDS, slot s | 140 72+s 80+s 88 |
+| 18 PERFORM | 401 146 147 148 |
+| 19 MIX | 256 257 258 259 |
+
 **Synth mode's pages** (mode 1), from the same table as its description (`src/synth_lm.c` sl_ref). Page 0 VOICE is
 never the device's page.
 
@@ -796,6 +948,8 @@ sub-page, or on the sub-page it shows when the device is on that page already.
 * **The host's tab BELLS**: LVIEW_SET `02 03` -> the device shows BELLS -> LVIEW `02 03 04 00 01 00 04 00 0E 00 15`.
   LVIEW_SET `02 03` again: nothing. LVIEW_SET `02 00`: nothing. LVIEW_SET `02 08`: LM_ERR `02 05 00 00`.
 * **Synth mode, OP3 picked on the EDIT page**: LVIEW `01 05 04 00 30 00 31 00 32 00 33`.
+* **DUB, EDIT tapped with slot 4 picked**: LVIEW `03 11 04 01 0C 00 4B 00 53 00 58`; the host's PERFORM tab: LVIEW_SET
+  `03 12` -> PERFORM on -> LVIEW `03 12 04 03 11 01 12 01 13 01 14`.
 
 Sizes: LVIEW is 9 to 17 bytes (F0 and F7 included), LVIEW_SET 8.
 
@@ -829,11 +983,11 @@ Sizes: LVIEW is 9 to 17 bytes (F0 and F7 included), LVIEW_SET 8.
 
 ## The modes, and Bluetooth
 
-**Modes.** The firmware has three (two in `app-noamb`): RUN4 mode (everything above), **Synth mode**, a standalone
+**Modes.** The firmware has four (two in `app-noamb`): RUN4 mode (everything above), **AMB mode**, **DUB mode** (above), **Synth mode**, a standalone
 six-operator FM synthesizer, and **AMB mode** (docs/MANUAL.md). **SEL + HOME** switches, round (the HOME press is not
 sent); a 1.4 host switches with MODE_SET ("Protocol 1.4"). With a 1.4 host the link stays up at a switch (MODE, not
 HELLO); what follows is how it is with a 1.0 .. 1.3 host. The mode the FM-1 was left in is kept and booted
-into. HELLO's `mode` byte says which: 0 = RUN4, 1 = a local mode (SYNTH or AMB). After a switch the firmware sends a HELLO with the new mode
+into. HELLO's `mode` byte says which: 0 = RUN4, 1 = a local mode (SYNTH, AMB or DUB). After a switch the firmware sends a HELLO with the new mode
 every second until HELLO_ACK, in both directions (the first HELLO goes at once, so a host that answers resyncs
 immediately). In Synth mode it sends nothing else but two buttons: **SEL + REC** and **SEL + PLAY** go out as BTN
 REC and BTN PLAY (press and release, ids 11 and 10, no SEL) while a HELLO_ACK for mode 1 was received, so the host's
@@ -870,7 +1024,7 @@ the USB-only package. **Not verified on a device**: the simulator models the lin
 the device. Minors so far: 1.0 (no minor byte), 1.1 (LIST, LIST_PICK), 1.2 (PAGE trailer, FOCUS, VALUE flags, the big
 value view), 1.3 (host voice, voice list, tape view, patch backup), 1.4 (local modes: list, switch, self-description,
 values, status line), 1.5 (the local mode's page: LVIEW, LVIEW_SET; the value pace 40 ms); the firmware's HELLO says
-5 (RUN4 CTL firmware 0.8). Both sides speak the lower of the two minors.
+5 (RUN4 CTL firmware 0.8 and 0.9: 0.9 adds DUB mode, id 3, with no new message). Both sides speak the lower of the two minors.
 
 ## Implementing RUN4 CTL in your own firmware or device
 

@@ -1,6 +1,6 @@
 # RUN4 CTL
 
-RUN4 CTL is a firmware for the M-VAVE FM-1 with three modes:
+RUN4 CTL is a firmware for the M-VAVE FM-1 with four modes:
 
 * **RUN4 mode** turns the FM-1 into a hardware controller for the iOS app RUN4: the 27 keys, 14 buttons, 7 encoders
   and the MASTER knob are sent to the app over USB-MIDI or Bluetooth MIDI, and the app draws its pages and lights on
@@ -12,9 +12,16 @@ RUN4 CTL is a firmware for the M-VAVE FM-1 with three modes:
   Airports*): breathing pads, bells on tape loops of unequal length, a gliding bass, quiet Euclidean percussion, a
   tape echo and a plate reverb, in eight pieces. You tend it rather than play it.
 
-Switch with **SEL + HOME**: each press goes to the next mode, round: RUN4 -> SYNTH -> AMB -> RUN4. The FM-1 remembers
-the mode it was left in. (Before firmware 0.7 SEL + HOME went back and forth between RUN4 and Synth; from Synth mode
-back to RUN4 it is now two presses, through AMB mode, which stays quiet if you pass through it in under 0.7 s.)
+* **DUB mode** turns the FM-1 into a generative dub techno machine (DUB-1's, after Basic Channel's chords dissolving
+  in a tape echo): chord stabs through a resonant filter into a tape echo, FM pings on loops of unequal length, a sub
+  bass on five grooves, a kick that ducks the rest, hats, a granular cloud, a plate, vinyl crackle, in eight pieces that
+  arrange themselves in eight-bar phrases. You steer it: the master actions Filter, Dub, Energy and Space, mutes, solos
+  and dub moves, dub hold and an effects grid.
+
+Switch with **SEL + HOME**: each press goes to the next mode, round: RUN4 -> SYNTH -> AMB -> DUB -> RUN4. The FM-1
+remembers the mode it was left in. (Before firmware 0.7 SEL + HOME went back and forth between RUN4 and Synth; since
+0.9 the round has four stops: from Synth mode back to RUN4 it is three presses, through AMB and DUB mode, which stay
+quiet if you pass through them in under 0.7 s.)
 
 **Hold any button for a second** (alone, touching nothing else) and a **help card** says what it does in this mode and
 on this page; let go and the card closes. See "Help cards".
@@ -348,6 +355,104 @@ tempo), NOTES (also the pad on channel 1, the bells on 2, the bass on 3, the pul
 PLAY, and the garden goes to RUN4 over the USB cable (choose the FM-1 as the input; LOCAL OUT works too). RUN4 needs no
 update for it.
 
+## DUB mode
+
+DUB mode is DUB-1, Santiago Begueria's generative dub techno for the FM-1 (a fork of AMB-1, release 1.2), in RUN4
+CTL's look. It starts playing by itself 0.7 s after you enter it. Four layers draw on one scale and one chord that
+moves now and then (or through the eight **chord slots** you write): the **chord** (a stab of four voices, Saws, Keys,
+Organ, Pad, Bell, Tonewheel or Noise, struck off the beat through a resonant low-pass, most of it into the echo), the
+**pings** (short FM blips on four loops of 13, 17, 23 and 29 eighths), the **bass** (a sub on the chord's root, on
+one of five grooves) and the **drums** (a four-on-the-floor kick that ducks the rest, a shaker, an open hat, a rim, a
+clap; one of five kits). Over it, the **arrangement**: eight-bar phrases, Full, Break (the kick and the bass out, the
+filter building), Groove or Thin, with a fill before the kick comes back; MOTION sets how often it leaves Full. Then a
+tape echo (to 5.6 s, two heads, a band-pass in its feedback, the feedback past 100 % held by a soft clip), a short
+Echoplex, a granular cloud blooming into the plate, and vinyl crackle.
+
+| Control | Use |
+| --- | --- |
+| Keys | the scale: a lit key's note is in it. Press a key to take its note out, again to put it back. The root stays, and three notes at least |
+| PLAY | plays / rests (resting, the echo rings out) |
+| REC | **tapped: DUB HOLD** (the echo and the cloud play what they hold, the chord holds; again: off). **Held: the effects grid** (below) |
+| EDIT | **tapped: the CHORDS page** (again: back); **held** (half a second): the next chord, on the next bar |
+| SEL | **tapped alone: PERFORM** on / off (below). Held with another button: SHIFT, as everywhere |
+| HOME, ENV, ARP, LFO, SEQ, FX, GLO | the pages DUB, CHORD, TEXTURE, BASS, DRUMS, SPACE, GLOBAL. Pressed again: HOME the KEY page; ENV, ARP and LFO their layer's SOUND page, then its FM page, then back; SEQ the DRUM SOUND page, then the PATTERN page, then back. A sub-page's button blinks |
+| SELECT | the previous / next page; with HOME held: the tempo |
+| ALGORITHM | on a layer's pages: its voice (the drums: the kit); elsewhere the scale (the modes, CUSTOM once you changed it with the keys) |
+| PRESETS | the piece |
+| K1 to K4 | the page's four values |
+| OCT-, OCT+ | the pings an octave down / up (-2 to +2; the footer's OCT shows it) |
+| SAVE | saves all eight pieces; **held 2 s**: the piece back to its recipe (saved with the next save) |
+| SEL + HOME, SEL + GLO, SEL + REC / PLAY | the next mode, the SETUP page, RUN4's REC / PLAY (as in Synth mode) |
+
+| Page | K1 | K2 | K3 | K4 |
+| --- | --- | --- | --- | --- |
+| DUB (HOME) | FILTER (the master filter: left SHUT, right OPEN, the middle off; the kick stays out of it) | EVOLVE | MOTION | DRIFT (2 to 64 BARS a chord, or HOLD) |
+| KEY (HOME again) | TEMPO (90-140) | ROOT | MODE | SWING |
+| CHORD (ENV) | LEVEL | STABS (1 to 6 a bar) | DECAY | CUTOFF |
+| CHORD SOUND (ENV again) | ATTACK | COLOUR | RESO | ENV |
+| CHORD FM (ENV a third time) | ALGO (VOICE: the voice's own, 1-8, 2-OP) | RATIO | FEEDBACK | MOD DEC (Keys and Bell only: the title says NOT FM otherwise) |
+| TEXTURE (ARP) | PINGS (their level) | DENSITY | CLOUD | CRACKLE |
+| PING SOUND / PING FM (ARP again) | TONE / ALGO | RATIO / RATIO | LENGTH / FEEDBACK | BEND / MOD DEC |
+| BASS (LFO) | LEVEL | OCTAVE | GROOVE (DRONE, OFFBEAT, DOTTED, ROLLER, SYNC) | FIFTH |
+| BASS SOUND / BASS FM (LFO again) | BITE / ALGO | SHAPE / RATIO | LENGTH / FEEDBACK | SLIDE / MOD DEC (FM: Punch, Rubber, Pluck, Growl) |
+| DRUMS (SEQ) | LEVEL | HITS | SWING | DUCK |
+| DRUM SOUND (SEQ again) | KICK TUNE | KICK LEN | PUNCH | HATS |
+| PATTERN (SEQ a third time) | LANE (KICK, SHAKER, OPEN, RIM, CLAP) | ACCENT | CHANCE | PLAY (AUTO, PATTERN) |
+| SPACE (FX) | ECHO | ECHO TIME (1/8 to 1 BAR) | FEEDBACK (45 % to 112 %) | REVERB |
+| GLOBAL (GLO) | TUNE | MIDI OUT (OFF, CLOCK, NOTES) | | |
+| CHORDS (EDIT tapped) | SLOT (1-8) | CHORD (EMPTY, MAJOR, MINOR, SUS2, SUS4, DIM, AUG) | TYPE (TRIAD, 6, 7, MAJ7, 9, 11, ADD9) | PLAY (RANDOM, PROG) |
+| PERFORM (SEL tapped) | FILTER | DUB | ENERGY | SPACE |
+| MIX (PERFORM, white 6 held) | CHORD | PINGS | BASS | DRUMS |
+
+**The chords** (EDIT tapped). Eight slots: K1 picks one, a key sets its root (an empty slot becomes a minor chord on
+it, and the slots start to play), K2 and K3 its chord and type, K4 PLAY: RANDOM (the scale's own chords, a weighted
+walk that keeps coming home) or PROG (the slots in turn, a chord every DRIFT bars; an empty slot between two holds the
+one before). The band shows the eight slots, the one playing lit.
+
+**The pattern** (SEQ three times). The white keys are the lane's sixteen steps; a black key held with a white one
+accents that step. The first edit takes over what AUTO was playing, and PLAY turns to PATTERN; K1 the lane, K2 how
+much quieter the steps without an accent are, K3 the lane's chance, K4 back to AUTO.
+
+**PERFORM** (SEL tapped alone; SEL lit). The keys from F3 up, in three sets with a dark key between them: **white 1-5**
+the layers, a press each (CHORD, PINGS, BASS: their level to 0 and back to 100; KICK, HATS: muted and back), **black
+1-5** the same layers soloed (more than one: they play together, the rest muted; a solo blinks), **white 6 held** the
+MIX on the knobs, **white 7-11 held** the dub moves: THROW (every stab into the echo), OPEN (the filter pushed open),
+SHUT (pushed shut), DROP (the kick and the bass out), ECHO (everything pushed into the echo). The knobs are the **master
+actions**, each from -100 to +100 with the piece as it is in the middle: **FILTER** (as on the DUB page), **DUB** (more
+into the echo, longer, darker), **ENERGY** (the notes, hits and stabs thin out or fill in; far down the next phrases
+are Thin, far up Full with a fill), **SPACE** (the reverb, the cloud and the plate's size). They are for playing: never
+saved, kept when you change the piece, back in the middle at power-on. The page buttons still work in PERFORM (the keys
+stay PERFORM's); SEL tapped again leaves it (the moves let go, the mutes stay).
+
+**The effects grid** (REC held; the band shows the sixteen names in four groups). The white keys from F3 up: THROW,
+TIME X2, TAPE STOP, SWELL (the echo); LOW-PASS, HIGH-PASS, WAH, PHONE (a filter on everything); VERB, CRASH, FREEZE,
+WASH (the space); STUTTER, GATE, SIREN, RISER (rhythm and noise). Each plays while its key is held, even after you let
+go of REC. A REC press that played an effect, or was held past 0.3 s, is not a dub hold.
+
+**The pieces** (PRESETS): BASIC (F Dorian, 122), CHAMBER (A Aeolian, 118), STEPPERS (D Dorian, 126), FOG (G Aeolian,
+112), CONCRETE (C pentatonic minor, 130), NIGHT DRIVE (Bb Dorian, 124), PRESSURE (E Phrygian, 128), HAZE (Eb Ionian,
+116). Each remembers how you left it, its ping loops too; TUNE and MIDI OUT are shared.
+
+**The screen.** The header: the page, the piece, the seven pages as a strip, a dot while something is not saved. The
+band: the twelve notes as a ring (the scale grey, the chord in the accent, the root framed, the chord's name and the
+section inside: FULL, BREAK, GROOVE, THIN, or RESTING, DUB HOLD, EXT CLOCK, WAKING); the phrase's eight bars; the bar
+as it plays, a row each for the stabs, the kick, the hats, the rim, the clap and the bass (dim when muted in PERFORM);
+the four layers' levels and the kick's ducking; PERFORM and the move held; a line filling up on the way to the next
+chord. On the PATTERN page the five lanes, on the CHORDS page the eight slots, with REC held the effects grid. The
+footer: the tempo, bar and beat, the play triangle, the red disc in dub hold, the pings' octave. The keys light the
+scale (the root bright); in PERFORM the layers heard, the solos, the moves and white 6; on the PATTERN page the lane's
+steps; on the CHORDS page the slot's root; with REC held the grid.
+
+**Kept.** All eight pieces (with their ping loops), the piece playing, TUNE and MIDI OUT: a few seconds after a change
+while it rests, with SAVE, and when you leave DUB mode. If you switch off in DUB mode, it starts in DUB mode.
+
+**MIDI.** As AMB mode: a MIDI clock drives it (EXT CLOCK; START plays from the top, STOP rests), a note on channel 1
+takes its note out of the scale or puts it back. Out (GLOBAL > MIDI OUT): OFF (the default), CLOCK, NOTES (the chord
+on channel 1, the pings on 2, the bass on 3, the drums on 10).
+
+**With RUN4.** As AMB mode: a local mode for RUN4, SEL + REC / SEL + PLAY are RUN4's, the sound goes to RUN4 over the
+USB cable, and RUN4 can pick DUB, show its pages and set its values (protocol 1.4 / 1.5, mode 3).
+
 ## Help cards
 
 Hold a button alone for a second: a card over the screen says what it does, in this mode and on this page (on the
@@ -355,14 +460,15 @@ SETUP page: there). Let go and it closes. The card only explains; the press did 
 opened its page, PLAY started, REC armed or froze) and so does the release. It never comes, or goes at once, when
 another button, a key or a knob is touched; that touch does what it always did. So nothing about the gestures that hold
 a button changed: SEL with another button (SHIFT), a step held on the grid with a page button, SEL + SEQ held (FILL),
-MIDI learn (SEL + a knob), RUN4's HOME double tap, and AMB's SAVE held 2 s (the card shows at 1 s and closes when the
-piece goes back to its recipe).
+MIDI learn (SEL + a knob), RUN4's HOME double tap, DUB's EDIT held (the next chord), and AMB's and DUB's SAVE held 2 s (the card shows at 1 s and closes when the
+piece goes back to its recipe). In DUB mode REC has no card (held, it shows the effects grid, which
+names them), and SEL tapped alone turns PERFORM on or off; held for its card, its release does nothing more.
 
 ## RUN4 and Synth mode together
 
 Switching modes keeps the link: after SEL + HOME the FM-1 says hello to RUN4 at once, so RUN4 knows which mode it is in
 and takes over the screen again as soon as you are back in RUN4 mode. While RUN4 is connected in Synth mode (and in
-AMB mode, see there):
+AMB and DUB mode, see there):
 
 * **SEL + REC** and **SEL + PLAY** are RUN4's REC and PLAY (the screen says RUN4 REC / RUN4 PLAY); REC and PLAY alone
   stay the synth's. So you can arm a RUN4 track and record the synth without touching the app.
@@ -373,8 +479,8 @@ AMB mode, see there):
 
 ### RUN4 picks the mode and plays the FM-1's controls (firmware 0.8)
 
-From firmware 0.8 (protocol 1.4) RUN4 can choose the FM-1's mode itself and show the controls of Synth mode and AMB
-mode in the app: the FM-1 tells RUN4 its modes, and for the mode playing its pages and every parameter (name, range,
+From firmware 0.8 (protocol 1.4) RUN4 can choose the FM-1's mode itself and show the controls of Synth mode, AMB
+mode and (firmware 0.9) DUB mode in the app: the FM-1 tells RUN4 its modes, and for the mode playing its pages and every parameter (name, range,
 the text the FM-1 shows), so RUN4 needs no update for a new mode. When RUN4 switches the mode it is exactly as if you
 pressed SEL + HOME, and the other way round: switch on the FM-1 and RUN4 follows. The link stays up through a switch
 (no NOT CONNECTED screen, no new hello). Whatever you or RUN4 change shows on both: the FM-1 redraws its page and shows
@@ -465,7 +571,7 @@ sequencer's patterns: for everything, use the USB backup.
 ## USB backup
 
 Everything the FM-1 keeps (the SETUP page with MIDI learn, Synth mode's settings with the morph, the 32 user voices,
-the 16 patterns with their locks and the song, AMB mode's pieces, the Bluetooth record) goes into one file over USB,
+the 16 patterns with their locks and the song, AMB mode's and DUB mode's pieces, the Bluetooth record) goes into one file over USB,
 and back. Only the
 knobs' calibration stays with the unit. Use fm1-base's backup page or its tool on a computer:
 
@@ -473,19 +579,19 @@ knobs' calibration stays with the unit. Use fm1-base's backup page or its tool o
     python3 base/tools/fm1_backup.py restore run4ctl.bak
 
 A backup can be taken while the FM-1 plays (what is not saved yet is left out: stop first to have it). A restore needs
-the sequencer stopped and, in AMB mode, the garden resting (STOP FIRST), checks the whole file before anything
+the sequencer stopped and, in AMB or DUB mode, the music resting (STOP FIRST), checks the whole file before anything
 changes, and asks on the screen: RESTORE FROM USB? SEL yes, HOME no. Then everything is as in the file; the mode you are
 in stays until the next power-on. Another firmware's backup does not restore. The VOICE BACKUP to RUN4 (above) stays
 as it was.
 
-**A backup of firmware 0.6 or older** (before AMB mode) is restored with RUN4 CTL's own tool, which adds the AMB part
-as absent (AMB mode at its recipes; everything else as in the file):
+**A backup of firmware 0.8 or older** (before DUB mode; 0.6 and older: before AMB mode too) is restored with RUN4 CTL's
+own tool, which adds the parts it lacks as absent (those modes at their recipes; everything else as in the file):
 
     python3 tools/r4ctl_backup.py restore old.bak
     python3 tools/r4ctl_backup.py upgrade old.bak new.bak     (for fm1-base's backup page: then restore new.bak there)
 
-The FM-1's own restore takes only backups of its own format (version 2 since firmware 0.7). The package without AMB
-mode (see the README) makes and takes the same format, so a backup goes back and forth between the two.
+The FM-1's own restore takes only backups of its own format (version 3 since firmware 0.9). The package without AMB
+and DUB mode (see the README) makes and takes the same format, so a backup goes back and forth between the two.
 
 ## Screen mirror
 
@@ -514,7 +620,8 @@ DEFAULT CCS on / off, K4 CLEAR (turn, then SAVE: that binding goes).
 **Overload guard.** If the sound ever takes too long to compute (many voices, every effect, the FM-1 busy), the FM-1
 makes it lighter a step at a time instead of crackling. Synth mode (and RUN4's FM-1 track): 1 the reverb without its
 input diffusion, 2 six voices, 3 no chorus and no delay, 4 four voices. AMB mode: 1 the same for its reverb, 2 three
-pad voices, 3 no hi-hats and no octave doublings of the bells, 4 two pad voices and four bells. It says CPU HIGH: SOUND
+pad voices, 3 no hi-hats and no octave doublings of the bells, 4 two pad voices and four bells. DUB mode: 1 the same
+for its reverb, 2 no cloud, 3 four pings instead of six and no crackle, 4 one saw a chord voice. It says CPU HIGH: SOUND
 LIGHTER once; after 3 seconds of easy going a step comes back. On a normal day it never shows.
 
 Aftertouch is measured with the keys' own sensors. The velocity and pressure curves were set up without a device; if a
