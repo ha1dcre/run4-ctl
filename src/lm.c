@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * RUN4 CTL, protocol 1.4: the local modes for the host (docs/PROTOCOL.md "Protocol 1.4"). The host lists the modes,
  * switches them, and gets the playing local mode's self-description: its pages and parameters (lm_desc_t, one per
- * mode: src/synth_lm.c, src/amb_lm.c), then their values as they change and a status line. Protocol 1.5 ("Protocol
+ * mode: src/synth_lm.c, src/amb_lm.c, src/dub_lm.c), then their values as they change and a status line. Protocol 1.5 ("Protocol
  * 1.5"): the description page the device shows and its knobs' ids (LVIEW), and the host's pick of one (LVIEW_SET).
  * Everything here is table-driven: a new mode only adds its lm_desc_t. Part of the unity build (app.c), main-loop
  * context only. */
@@ -35,8 +35,8 @@ typedef struct {
 #define LM_MAX 160                           /* parameters a description may have here (Synth mode's 147) */
 #define LM_PERIOD_MS 40u                     /* value changes, the status line, 1.5's page: at most 25 a second */
 #define LM_NERR 4
-#define LM_NMODES 3
-static const char *const LM_MNAME[LM_NMODES] = {"RUN4", "SYNTH", "AMB"};
+#define LM_NMODES 4
+static const char *const LM_MNAME[LM_NMODES] = {"RUN4", "SYNTH", "AMB", "DUB"};
 static const lm_desc_t *lm_desc(uint32_t mode);         /* (below: the modes' tables) */
 
 enum { LMS_IDLE, LMS_HEAD, LMS_PAGES, LMS_PARAMS, LMS_END };
@@ -63,7 +63,10 @@ static struct {
 
 static int host14(void) { return ctl.session && ui.connected && ctl.host_minor >= 4; }
 static int host15(void) { return host14() && ctl.host_minor >= 5; }
-static int lm_avail(uint32_t m) { return m == MODE_RUN4 || m == MODE_SYNTH || (m == MODE_AMB && R4_AMB); }
+static int lm_avail(uint32_t m)
+{
+    return m == MODE_RUN4 || m == MODE_SYNTH || (m == MODE_AMB && R4_AMB) || (m == MODE_DUB && R4_DUB);
+}
 static uint8_t lm_mflags(uint32_t m)
 {
     return (uint8_t)((lm_avail(m) ? R4P_MF_AVAIL : 0) | (lm_desc(m) ? R4P_MF_DESC : 0) | (m == MODE_RUN4 ? R4P_MF_CTRL : 0));

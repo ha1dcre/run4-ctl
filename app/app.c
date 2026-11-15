@@ -10,9 +10,10 @@
 #include "tape_ui.c"
 
 #define FW_MAJOR 0
-#define FW_MINOR 8
-enum { MODE_RUN4 = 0, MODE_SYNTH = 1, MODE_AMB = 2 };   /* SEL + HOME: the next one, round (RUN4, SYNTH, AMB); HELLO
-                                                         * says RUN4 or a local mode (SYNTH: Synth and AMB alike) */
+#define FW_MINOR 9
+enum { MODE_RUN4 = 0, MODE_SYNTH = 1, MODE_AMB = 2, MODE_DUB = 3 };   /* SEL + HOME: the next one, round (RUN4, SYNTH,
+                                                         * AMB, DUB); HELLO says RUN4 or a local mode (SYNTH: Synth, AMB
+                                                         * and DUB alike) */
 #define KEY_VEL 100                      /* fixed velocity, and the fallback when a key has no reading */
 #define HELLO_MS 1000u
 #define POT_STEP 6                       /* 14-bit counts: the ADC's noise stays quiet */
@@ -37,7 +38,7 @@ typedef struct {
 _Static_assert(sizeof(setup_t) == 56u, "SETUP store layout");
 static const int8_t VEL_CURVE[VEL_N] = {-3, 0, 3, 0};              /* touch_curve(): needs tuning on the device */
 static setup_t setup;
-static uint8_t mode;                                              /* MODE_RUN4 / MODE_SYNTH / MODE_AMB */
+static uint8_t mode;                                              /* MODE_RUN4 / MODE_SYNTH / MODE_AMB / MODE_DUB */
 
 static struct {
     uint32_t btn, keys;                  /* held at the last poll */
@@ -846,7 +847,9 @@ static int synth_step_rec(void);
  *   - any other button going down or up, any key going down, any encoder turned, its own release: it is gone (or
  *     never comes), and that input does exactly what it did before (SEL + HOME, SEL + GLO, a held step's page
  *     buttons, SEL + SEQ's FILL, MIDI learn, a HOME double tap: all untouched);
- *   - a hold gesture of its own that fires (AMB's SAVE held 2 s) closes it;
+ *   - a hold gesture of its own that fires (AMB's and DUB's SAVE held 2 s) closes it;
+ *   - DUB's REC has none: held, the band shows the effects grid (which names the effects), and SEL tapped alone is
+ *     PERFORM (held past the card's second: only the card);
  *   - the press acted as always (a page button opened its page first: the card explains that page). */
 static struct { uint8_t arm, shown, gone; uint32_t at, keys; } hc;
 static uint8_t hc_setup;                                 /* the button went down on the SETUP page */
@@ -882,6 +885,23 @@ static void am_lights(uint32_t *lb, uint32_t *lk, uint32_t *db, uint32_t *dk) { 
 static void am_draw_head(void) {}
 static void am_draw_band(int full) { (void)full; }
 #endif
+#if R4_DUB
+#include "dub_ui.c"
+#else
+/* R4_DUB 0 (app-noamb/): DUB mode is not in this build. Its store object (OBJ_DUB) stays in the store map and the backup
+ * image, untouched; none of its code, buffers or state is built. These stand in for what the mode code calls. */
+static void db_leave(void) {}
+static void db_enter(void) {}
+static void db_boot_flag(int dub) { (void)dub; }
+static void db_build(void) {}
+static void db_button(uint32_t k) { (void)k; }
+static void db_release(uint32_t k, uint32_t now) { (void)k; (void)now; }
+static void db_sel_press(uint32_t now) { (void)now; }
+static void db_frame(uint32_t keys, uint32_t btn, uint32_t now) { (void)keys; (void)btn; (void)now; }
+static void db_lights(uint32_t *lb, uint32_t *lk, uint32_t *db_, uint32_t *dk) { (void)lb; (void)lk; (void)db_; (void)dk; }
+static void db_draw_head(void) {}
+static void db_draw_band(int full) { (void)full; }
+#endif
 
 /* ------------------------------------------------- protocol 1.4: local modes --- */
 static void mode_switch(uint8_t to);
@@ -890,6 +910,9 @@ static void mode_switch(uint8_t to);
 #if R4_AMB
 #include "amb_lm.c"
 #endif
+#if R4_DUB
+#include "dub_lm.c"
+#endif
 static const lm_desc_t *lm_desc(uint32_t m)
 {
     if (m == MODE_SYNTH)
@@ -897,6 +920,10 @@ static const lm_desc_t *lm_desc(uint32_t m)
 #if R4_AMB
     if (m == MODE_AMB)
         return &AL_DESC;
+#endif
+#if R4_DUB
+    if (m == MODE_DUB)
+        return &DL_DESC;
 #endif
     return 0;
 }
@@ -919,6 +946,13 @@ static void synth_notes_off_keys(void)         /* held keys: the note-offs of th
     }
 }
 static volatile uint8_t mode_hold;                 /* a mode switch under way: the render is silent */
+static uint8_t mode_next(uint8_t m)                /* SEL + HOME: RUN4 -> SYNTH -> AMB -> DUB -> RUN4 (the modes built) */
+{
+    do
+        m = (uint8_t)((m + 1u) % 4u);
+    while ((m == MODE_AMB && !R4_AMB) || (m == MODE_DUB && !R4_DUB));
+    return m;
+}
 static void mode_switch(uint8_t to)
 {
     uint8_t from = mode;
@@ -943,33 +977,40 @@ static void mode_switch(uint8_t to)
         }
     } else if (from == MODE_AMB) {
         am_leave();                                /* (stops it, its MIDI off, saves) */
+    } else if (from == MODE_DUB) {
+        db_leave();                                /* (the same) */
     }
     if (from == MODE_RUN4 && hv.on)
         ctl.want_hvstate = 1;                      /* 1.3: the host voice is suspended while a local mode plays */
     if ((from == MODE_RUN4) != (to == MODE_RUN4))
         syn_swap();                                /* the other set sounds (synth.c): Synth mode's, or the host voice's */
     else
-        syn_reset_sound();                         /* (Synth <-> AMB: the arena's Synth lines and the plate silent) */
-    syn_arena_mine = (uint8_t)(to != MODE_AMB);
+        syn_reset_sound();                         /* (between local modes: the arena's Synth lines and the plate silent) */
+    syn_arena_mine = (uint8_t)(to != MODE_AMB && to != MODE_DUB);
     if (to == MODE_AMB)
         am_enter();                                /* the arena is AMB's: its buffers set up */
+    else if (to == MODE_DUB)
+        db_enter();                                /* ... or DUB's */
     syn_hold = 0;
     mode = to;
-    setup.mode = to == MODE_AMB ? MODE_SYNTH : to; /* (an older firmware reads SETUP: it knows two modes) */
+    setup.mode = to == MODE_AMB || to == MODE_DUB ? MODE_SYNTH : to;   /* (an older firmware reads SETUP: it knows two) */
     am_boot_flag(to == MODE_AMB);
+    db_boot_flag(to == MODE_DUB);
     if (bk_hold) ctl.setup_owed = 1; else plat_store_save(OBJ_SETUP, &setup, sizeof setup);
     ui.setup = 0;
     ui.list_open = 0;
     ui_connect(0);                                 /* a new HELLO, with the new mode, until the host answers */
     ctl.hello_at = plat_ms() - HELLO_MS;
     ui.local = to != MODE_RUN4;
-    ui.amb = to == MODE_AMB;
+    ui.amb = to == MODE_AMB ? 1 : to == MODE_DUB ? 2 : 0;
     ui.octave = ctl.octave;
     if (to == MODE_SYNTH) {
         syn_event(6, 0, 0, 0);
         sp_build();
     } else if (to == MODE_AMB) {
         am_build();
+    } else if (to == MODE_DUB) {
+        db_build();
     } else {
         ui_reset_page();
     }
@@ -1429,6 +1470,18 @@ static void midi_pump(uint32_t n)
             syn_timed(&(syn_ev_t){11, (uint8_t)st, 0, 0}, midi_frame);   /* MIDI clock, start, stop: the sequencer and the arp follow */
             continue;
         }
+#if R4_DUB
+        if (mode == MODE_DUB) {                        /* DUB: as AMB (a clock drives it, START plays, STOP rests; a note
+                                                        * on channel 1 takes its note out of the scale or puts it back) */
+            if (st == 0xFAu || st == 0xFBu || st == 0xFCu)
+                db_clk_run = st != 0xFCu;
+            if (st == 0xF8u || st == 0xFAu || st == 0xFBu || st == 0xFCu)
+                du_clock_isr(st == 0xF8u ? DU_CLK_TICK : st == 0xFAu ? DU_CLK_START : st == 0xFBu ? DU_CLK_CONTINUE : DU_CLK_STOP);
+            else if ((st & 0xF0u) == 0x90u && d2 && ch == 0u && !(hv.on && hv.chan == 0u && (port == PORT_USB || port == PORT_BLE)))
+                db_note_in((uint8_t)d1);
+            continue;
+        }
+#endif
 #if R4_AMB
         if (mode == MODE_AMB) {                        /* AMB: a clock drives the garden (START grows, STOP rests); a note
                                                         * on channel 1 takes its note out of the scale or puts it back
@@ -1592,7 +1645,7 @@ static void input(void)
             break;                                     /* queue full: this change is seen again next frame */
         ctl.btn = (ctl.btn & ~bit) | (btn & bit);
         ctl_card_off();                                /* the cards: any other button, or this one let go */
-        if ((btn & bit) && btn == bit && !keys && !(ui.list_open && mode == MODE_RUN4)) {
+        if ((btn & bit) && btn == bit && !keys && !(ui.list_open && mode == MODE_RUN4) && !(mode == MODE_DUB && k == B_REC)) {
             hc.arm = (uint8_t)(k + 1u);                /* alone: its card in a second, if nothing else happens */
             hc.at = now;
             hc_setup = ui.setup;
@@ -1623,9 +1676,9 @@ static void input(void)
                     setup_save_press();
                 continue;
             }
-            if (shift && k == B_HOME) {                /* SEL + HOME: the next mode, round: RUN4, SYNTH, AMB */
+            if (shift && k == B_HOME) {                /* SEL + HOME: the next mode, round: RUN4, SYNTH, AMB, DUB */
                 ctl.suppress |= bit;
-                mode_switch(mode == MODE_RUN4 ? MODE_SYNTH : mode == MODE_SYNTH && R4_AMB ? MODE_AMB : MODE_RUN4);
+                mode_switch(mode_next(mode));
                 return;
             }
             if (mode != MODE_RUN4 && shift && (k == B_REC || k == B_PLAY) && ui.connected) {
@@ -1643,6 +1696,13 @@ static void input(void)
                     am_button(k);
                 continue;
             }
+            if (mode == MODE_DUB) {                    /* and DUB mode (SEL alone: perhaps a tap, PERFORM) */
+                if (k == B_SEL)
+                    db_sel_press(now);
+                else if (!shift)
+                    db_button(k);
+                continue;
+            }
             if (!shift && k == B_OCTDN) octave_step(-1);
             else if (!shift && k == B_OCTUP) octave_step(1);
         }
@@ -1655,6 +1715,8 @@ static void input(void)
             if (!(btn & bit) && (ctl.fwd & bit)) {     /* the release of a forwarded SEL + REC / PLAY */
                 ctl.fwd &= ~bit;
                 ctl.txq[ctl.txq_n++] = (uint16_t)(k << 1);
+            } else if (mode == MODE_DUB && !(btn & bit)) {
+                db_release(k, now);                    /* DUB: SEL, REC, EDIT act on their release (a tap or held) */
             }
             continue;
         }
@@ -1674,6 +1736,10 @@ static void input(void)
     }
     if (mode == MODE_AMB) {
         am_frame(keys, btn, now);
+        return;
+    }
+    if (mode == MODE_DUB) {
+        db_frame(keys, btn, now);
         return;
     }
     keys_poll(keys);
@@ -1806,6 +1872,8 @@ static void lights(void)
         synth_lights(&lb, &lk, &db, &dk);
     else if (mode == MODE_AMB)
         am_lights(&lb, &lk, &db, &dk);
+    else if (mode == MODE_DUB)
+        db_lights(&lb, &lk, &db, &dk);
     else if (!ui.connected)
         lk |= ctl.keys;
     plat_lights(lb, lk, db, dk, setup.led);
@@ -1908,6 +1976,13 @@ void en_midi_out(uint32_t st, uint32_t d1, uint32_t d2)
         plat_midi_send(st >> 4 | st << 8 | d1 << 16 | d2 << 24, TO_LINKS);
 }
 #endif
+#if R4_DUB
+void du_midi_out(uint32_t st, uint32_t d1, uint32_t d2)   /* DUB mode's (its GLOBAL page's MIDI OUT), the same way */
+{
+    if (plat_midi_out_room(TO_LINKS))
+        plat_midi_send(st >> 4 | st << 8 | d1 << 16 | d2 << 24, TO_LINKS);
+}
+#endif
 static void sq_send_rt(uint8_t b)                      /* the sequencer's MIDI clock out (clock OUT): render context */
 {
     if (plat_midi_out_room(TO_LINKS))
@@ -1939,6 +2014,13 @@ void app_init(void)
     if (mode == MODE_SYNTH && am.boot)
         mode = MODE_AMB;                               /* (left in AMB mode: SETUP says SYNTH, the AMB store says AMB) */
 #endif
+#if R4_DUB
+    db_init();                                         /* DUB mode's engine and its store (not its buffers yet) */
+    if (mode == MODE_SYNTH && db.boot)
+        mode = MODE_DUB;                               /* (left in DUB mode: SETUP says SYNTH, the DUB store says DUB) */
+#endif
+    if (mode > MODE_DUB || (mode == MODE_AMB && !R4_AMB) || (mode == MODE_DUB && !R4_DUB))
+        mode = MODE_SYNTH;
     sy_hold_store = 0;
 #if PLAT_USB_CH >= 4
     syn_stem_out = stem_out;                           /* (the app-stems build) */
@@ -1946,11 +2028,17 @@ void app_init(void)
     local_off = 0;
     if (mode == MODE_RUN4)
         syn_swap();                                    /* RUN4 mode: they are the ones that sound */
-    syn_arena_mine = (uint8_t)(mode != MODE_AMB);
+    syn_arena_mine = (uint8_t)(mode != MODE_AMB && mode != MODE_DUB);
 #if R4_AMB
     if (mode == MODE_AMB) {
         en_enter();                                    /* (the render has not started: the arena is AMB's from the start) */
         amr.grow_at = 1;                               /* it grows at once (a garden switched on) */
+    }
+#endif
+#if R4_DUB
+    if (mode == MODE_DUB) {
+        du_enter();                                    /* (the same: the arena is DUB's from the start) */
+        dbr.play_at = 1;                               /* it plays at once */
     }
 #endif
 }
@@ -1968,6 +2056,19 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         uint32_t t0 = plat_ticks24(), dt;
         en_shed = syn_shed;
         en_render(lr, n, master_q12);
+        dt = plat_ticks24() - t0;
+        ctl.rend_ticks += dt;
+        ctl.rend_frames += n;
+        syn_shed_calm(n, r4_udiv64_32(r4_umul64(dt, 44100u), PLAT_TICKS_PER_US * 1000u * n));
+        syn_timed_due(0, 0xFFFFu);
+        return;
+    }
+#endif
+#if R4_DUB
+    if (mode == MODE_DUB) {                            /* DUB mode (src/dub/dub.c), the overload guard on it */
+        uint32_t t0 = plat_ticks24(), dt;
+        du_shed = syn_shed;
+        du_render(lr, n, master_q12);
         dt = plat_ticks24() - t0;
         ctl.rend_ticks += dt;
         ctl.rend_frames += n;
@@ -2006,9 +2107,11 @@ void app_ui_init(void)
     memset(&ui, 0, sizeof ui);
     ui_reset_page();
     ui.local = mode != MODE_RUN4;
-    ui.amb = mode == MODE_AMB;
-    if (ui.amb)
+    ui.amb = mode == MODE_AMB ? 1 : mode == MODE_DUB ? 2 : 0;
+    if (ui.amb == 1)
         am_build();
+    else if (ui.amb == 2)
+        db_build();
     else if (ui.local)
         sp_build();
     ui.dirty = D_ALL;
@@ -2045,11 +2148,18 @@ void app_say(const char *a, const char *b) { (void)a; (void)b; }
 /* fm1.toml backup = true (base/device/backup.c, tools/fm1_backup.py): everything the store holds but the panel's
  * calibration (the unit's own) as one image, app.h APP_BACKUP_*. Each object carries its own layout version and loads
  * older ones (SETUP 1 / 2, settings 2 / 3 / 4, patterns 1 / 2), so a backup of an older RUN4 CTL restores. */
+int app_backup_playing(void)                           /* the sequencer plays, AMB grows, DUB plays: STOP FIRST */
+{
 #if R4_AMB
-int app_backup_playing(void) { return sq.run || (mode == MODE_AMB && en_playing); }   /* playing / growing: STOP FIRST */
-#else
-int app_backup_playing(void) { return sq.run; }      /* the sequencer plays: STOP FIRST */
+    if (mode == MODE_AMB && en_playing)
+        return 1;
 #endif
+#if R4_DUB
+    if (mode == MODE_DUB && du_playing)
+        return 1;
+#endif
+    return sq.run;
+}
 void app_backup_flush(void)                            /* a backup starts: what is not saved yet, saved */
 {
     if (mode == MODE_SYNTH && (sui.dirty_set || syn_bank_dirty || sq_dirty))
@@ -2057,6 +2167,10 @@ void app_backup_flush(void)                            /* a backup starts: what 
 #if R4_AMB
     if (amr.dirty)
         am_save();
+#endif
+#if R4_DUB
+    if (dbr.dirty)
+        db_save();
 #endif
     if (ctl.setup_dirty || ctl.setup_owed) {
         plat_store_save(OBJ_SETUP, &setup, sizeof setup);
@@ -2069,7 +2183,7 @@ void app_backup_restored(void)                         /* a restore: everything 
     uint8_t m = mode;
     syn_set_t hvs = syn;
     setup_load();
-    setup.mode = m == MODE_AMB ? MODE_SYNTH : m;       /* (the mode playing stays; the restored one is the next boot's) */
+    setup.mode = m == MODE_AMB || m == MODE_DUB ? MODE_SYNTH : m;   /* (the mode playing stays; the restored one: the next boot's) */
 #if R4_AMB
     {
         uint8_t boot;
@@ -2081,6 +2195,14 @@ void app_backup_restored(void)                         /* a restore: everything 
             am_apply();
             en_regrow();
         }
+    }
+#endif
+#if R4_DUB
+    db_load();                                         /* DUB mode's pieces (an older backup: none, the recipes) */
+    db.boot = m == MODE_DUB;                           /* (in RAM: as SETUP's mode, the flash keeps the restored one) */
+    if (m == MODE_DUB) {
+        db_apply();
+        du_regrow();
     }
 #endif
     memset(syn_bank, 0, sizeof syn_bank);
@@ -2108,6 +2230,8 @@ void app_backup_restored(void)                         /* a restore: everything 
         sp_build();
     else if (mode == MODE_AMB)
         am_build();
+    else if (mode == MODE_DUB)
+        db_build();
     ui.dirty = D_ALL;
     ui_toast("RESTORED", 20);
 }
@@ -2171,6 +2295,33 @@ int app_expect(const char *what, int *got)
     if (!strcmp(what, "connected")) *got = ui.connected;
     else if (!strcmp(what, "card")) *got = ui.card;                         /* the help card's button + 1, 0 = none */
     else if (!strcmp(what, "r4_amb")) *got = R4_AMB;                       /* the build has AMB mode */
+    else if (!strcmp(what, "r4_dub")) *got = R4_DUB;                       /* ... DUB mode */
+#if R4_DUB
+    else if (!strcmp(what, "dub_piece")) *got = db.piece + 1;               /* DUB mode */
+    else if (!strcmp(what, "dub_view")) *got = dbr.view;
+    else if (!strcmp(what, "dub_pool")) *got = DB_CUR->pool;
+    else if (!strcmp(what, "dub_playing")) *got = du_playing;
+    else if (!strcmp(what, "dub_hold")) *got = du_frozen;
+    else if (!strcmp(what, "dub_ext")) *got = du_ext;
+    else if (!strcmp(what, "dub_bars")) *got = (int)du_bars;
+    else if (!strcmp(what, "dub_dirty")) *got = dbr.dirty;
+    else if (!strcmp(what, "dub_saves")) *got = (int)dbr.saves;
+    else if (!strcmp(what, "dub_boot")) *got = db.boot;
+    else if (!strcmp(what, "dub_midi")) *got = db.midi;
+    else if (!strcmp(what, "dub_shed")) *got = du_shed;
+    else if (!strcmp(what, "dub_perf")) *got = dbr.perf;
+    else if (!strcmp(what, "dub_mutes")) *got = (int)dbr.mutes;
+    else if (!strcmp(what, "dub_solo")) *got = (int)dbr.solo;
+    else if (!strcmp(what, "dub_moves")) *got = (int)dbr.moves;
+    else if (!strcmp(what, "dub_fx")) *got = (int)dbr.fx;
+    else if (!strcmp(what, "dub_slot")) *got = dbr.slot;
+    else if (!strcmp(what, "dub_lane")) *got = dbr.lane;
+    else if (!strcmp(what, "dub_throws")) *got = (int)du_throws;
+    else if (!strcmp(what, "dub_frames")) *got = (int)dbr.frames;
+    else if (!strcmp(what, "dub_bpf")) *got = dbr.frames ? (int)(dbr.bytes / dbr.frames) : 0;
+    else if (!strncmp(what, "dub_mac", 7)) *got = dbr.mac[atoi(what + 7) % DU_NMAC];   /* dub_macN: master action N */
+    else if (!strncmp(what, "dub_par", 7)) *got = db_par(atoi(what + 7) % DP_NPARAMS);   /* dub_parN: parameter N (dub.h DP_*) */
+#endif
 #if R4_AMB
     else if (!strcmp(what, "amb_piece")) *got = am.piece + 1;               /* AMB mode */
     else if (!strcmp(what, "amb_view")) *got = amr.view;

@@ -1,0 +1,408 @@
+# DUB mode (firmware 0.9): SEL + HOME goes round RUN4 -> SYNTH -> AMB -> DUB. DUB-1's dub techno plays by itself (0.7 s
+# after the mode comes in); the keys take notes out of the scale and put them back, PLAY rests / plays, REC tapped is dub
+# hold and held the effects grid on the white keys, EDIT tapped the chord slots and held the next chord, SEL tapped
+# PERFORM (mutes, solos, moves; the knobs the master actions, white 6 held the mix), the page buttons the layers' pages
+# and, again, their sound, FM and pattern pages, OCT-/OCT+ the pings' octave, PRESETS the piece. RUN4 sees a local mode
+# (HELLO mode 1): the link stays, SEL + REC / PLAY go to RUN4. Stored (OBJ_DUB), kept over a reboot (it boots into DUB
+# mode), backed up over USB. MIDI clock in drives it; the overload guard covers it.
+@ACK@
+wait 100
+expect connected 1
+expect r4_dub 1
+press SEL
+wait 40
+tap HOME
+wait 60
+tap HOME
+wait 60
+tap HOME
+release SEL
+wait 100
+expect mode 3
+expect set_mode 1
+expect dub_boot 1
+expect amb_boot 0
+expect_sysex F0 7D 52 34 01 01 00 09 01 05 F7
+@ACK@
+wait 100
+expect connected 1
+expect dub_playing 0
+wait 800
+expect dub_playing 1
+expect render_reset 0
+peakreset
+wait 6000
+expect peak_db_min -40
+expect peak_db_max -0.5
+expect render_permille <150
+expect dub_view 0
+expect dub_frames >5
+shot dub_main.png
+# the pages: ENV the chord, K1 its level; again its sound, again its FM page (Saws: not an FM voice), again back
+tap ENV
+wait 60
+expect dub_view 1
+turn K1 3
+wait 60
+expect dub_par0 73
+expect dub_dirty 1
+tap ENV
+wait 60
+expect dub_view 8
+shot dub_chord_sound.png
+tap ENV
+wait 60
+expect dub_view 9
+shot dub_chord_fm.png
+tap ENV
+wait 60
+expect dub_view 1
+# ALGORITHM on a layer's page: its voice (Saws -> Keys -> Saws)
+turn ALGO 1
+wait 60
+expect dub_par22 1
+turn ALGO -1
+wait 60
+expect dub_par22 0
+# SEQ, again, again: the drums, their sound, their pattern; a white key takes Auto's pattern over (the kick's first
+# step off: 0x1111 -> 0x1110); K1 the lane
+tap SEQ
+wait 60
+tap SEQ
+wait 60
+expect dub_view 14
+tap SEQ
+wait 60
+expect dub_view 15
+key 0 down
+wait 40
+key 0 up
+wait 60
+expect dub_par105 1
+expect dub_par89 4368
+turn K1 1
+wait 60
+expect dub_lane 1
+shot dub_pattern.png
+key 0 down
+wait 40
+key 0 up
+wait 40
+turn K1 -1
+wait 40
+# HOME: DUB; again KEY (TEMPO ROOT MODE SWING); again DUB
+tap HOME
+wait 60
+expect dub_view 0
+tap HOME
+wait 60
+expect dub_view 7
+shot dub_key.png
+tap HOME
+wait 60
+expect dub_view 0
+# HOME held + SELECT: the tempo (122 -> 124); SELECT alone: the pages
+press HOME
+wait 40
+turn SELECT 2
+wait 40
+release HOME
+wait 40
+expect dub_par18 124
+turn SELECT 1
+wait 40
+expect dub_view 1
+turn SELECT -1
+wait 40
+expect dub_view 0
+# ALGORITHM on DUB: the scale (Dorian -> Phrygian, and back)
+turn ALGO 1
+wait 60
+expect dub_par20 2
+expect dub_pool 1451
+turn ALGO -1
+wait 60
+expect dub_pool 1709
+# the keys: G (key 2) out of F dorian, in again; the root F (key 0) stays; a MIDI note on channel 1 as a key
+key 2 down
+wait 40
+key 2 up
+wait 60
+expect dub_pool 1705
+expect toast 1
+key 2 down
+wait 40
+key 2 up
+wait 40
+expect dub_pool 1709
+key 0 down
+wait 40
+key 0 up
+wait 40
+expect dub_pool 1709
+midi 90 43 64
+wait 40
+midi 80 43 00
+wait 60
+expect dub_pool 1705
+midi 90 43 64
+wait 40
+expect dub_pool 1709
+# REC tapped: dub hold, again off; REC held: the effects grid, a white key an effect while held (no dub hold after)
+tap REC
+wait 60
+expect dub_hold 1
+shot dub_hold.png
+tap REC
+wait 60
+expect dub_hold 0
+press REC
+wait 500
+expect card 0
+key 0 down
+wait 100
+expect dub_fx 1
+shot dub_grid.png
+key 0 up
+wait 40
+expect dub_fx 0
+key 16 down
+wait 100
+expect dub_fx 512
+release REC
+wait 100
+expect dub_fx 512
+key 16 up
+wait 60
+expect dub_fx 0
+expect dub_hold 0
+# EDIT tapped: the CHORDS page; a key: the slot's root (D: an empty slot becomes D minor, the slots play); K1 the
+# next slot, K2 its chord; EDIT again: back; EDIT held: the next chord
+tap EDIT
+wait 60
+expect dub_view 16
+key 9 down
+wait 40
+key 9 up
+wait 60
+expect dub_par64 2
+expect dub_par72 2
+expect dub_par88 1
+turn K1 1
+wait 40
+expect dub_slot 1
+turn K2 1
+wait 40
+expect dub_par73 1
+shot dub_chords.png
+tap EDIT
+wait 60
+expect dub_view 0
+press EDIT
+wait 700
+release EDIT
+wait 60
+expect toast 1
+expect dub_view 0
+# SEL tapped: PERFORM. The knobs: FILTER, DUB, ENERGY, SPACE (for playing: not saved); white 4 mutes the kick, black 1
+# solos the chord, white 1 the chord's level 0 / 100, white 7 held throws; white 6 held: the mix on the knobs
+expect dub_perf 0
+tap SEL
+wait 60
+expect dub_perf 1
+expect dub_view 17
+turn K1 -3
+wait 40
+expect dub_mac0 -3
+turn K2 5
+wait 40
+expect dub_mac1 5
+key 6 down
+wait 40
+key 6 up
+wait 40
+expect dub_mutes 8
+key 1 down
+wait 40
+key 1 up
+wait 40
+expect dub_solo 1
+shot dub_perform.png
+key 1 down
+wait 40
+key 1 up
+wait 40
+expect dub_solo 0
+key 0 down
+wait 40
+key 0 up
+wait 40
+expect dub_par0 0
+key 0 down
+wait 40
+key 0 up
+wait 40
+expect dub_par0 100
+key 11 down
+wait 40
+expect dub_moves 1
+key 11 up
+wait 40
+expect dub_moves 0
+key 9 down
+wait 60
+expect dub_view 18
+turn K2 -2
+wait 40
+expect dub_par1 28
+shot dub_mix.png
+key 9 up
+wait 60
+expect dub_view 17
+key 6 down
+wait 40
+key 6 up
+wait 40
+expect dub_mutes 0
+# SEL held a second alone: its card, and no PERFORM change at the release; SEL tapped: PERFORM off, the page as before
+press SEL
+wait 1200
+expect card 2
+shot card_dub_sel.png
+release SEL
+wait 60
+expect card 0
+expect dub_perf 1
+tap SEL
+wait 60
+expect dub_perf 0
+expect dub_view 0
+expect dub_mac0 -3
+turn K1 3
+wait 40
+expect dub_mac0 0
+# OCT+: the pings an octave up
+tap OCT+
+wait 60
+expect dub_par21 1
+# SEL + REC with RUN4 there: RUN4's REC (DUB's REC stays its own)
+sysex_out
+press SEL
+wait 40
+tap REC
+wait 40
+release SEL
+wait 100
+expect_sysex @BTN11_1@
+expect_sysex @BTN11_0@
+expect dub_hold 0
+expect dub_perf 0
+# PLAY rests it (the echo rings out), again it plays; resting, a change is saved by itself after a few seconds
+tap PLAY
+wait 60
+expect dub_playing 0
+wait 4600
+expect dub_dirty 0
+expect dub_saves >0
+tap PLAY
+wait 60
+expect dub_playing 1
+# the piece: PRESETS (Basic -> Chamber), back: as it was left
+turn PRESET 1
+wait 100
+expect dub_piece 2
+expect dub_par0 75
+shot dub_chamber.png
+turn PRESET -1
+wait 100
+expect dub_piece 1
+expect dub_par0 100
+expect dub_par21 1
+expect dub_par64 2
+# SAVE, then a reboot: it boots into DUB mode with everything as left
+tap SAVE
+wait 100
+expect dub_dirty 0
+reboot
+wait 1500
+expect mode 3
+expect dub_piece 1
+expect dub_par0 100
+expect dub_par21 1
+expect dub_par18 124
+expect dub_playing 1
+# SAVE held 2 s: the piece back to its recipe (its card first, at 1 s; the reset closes it)
+press SAVE
+wait 1200
+expect card 8
+wait 1000
+expect card 0
+expect dub_par0 70
+expect dub_par21 0
+expect dub_par64 0
+release SAVE
+wait 100
+# MIDI clock in: START plays from the top, 24 ticks are a beat (four sixteenths), STOP rests
+midi FA
+wait 20
+expect dub_ext 1
+clock 24 18
+expect dub_bars 4
+midi FC
+wait 40
+expect dub_playing 0
+wait 1000
+expect dub_ext 0
+# the overload guard covers DUB too
+tap PLAY
+wait 200
+overload 1
+wait 30
+expect shed 1
+expect dub_shed 1
+expect toast 1
+wait 3500
+expect shed 0
+# a USB backup in DUB mode: playing, the restore says STOP FIRST; resting, it restores
+turn PRESET 2
+wait 100
+expect dub_piece 3
+expect dub_view 0
+tap HOME
+wait 40
+expect dub_view 7
+turn K1 5
+wait 60
+expect dub_par18 131
+tap PLAY
+wait 60
+backup out:r4ctl_dub.bak
+wait 100
+tap PLAY
+wait 60
+turn PRESET 1
+wait 100
+expect dub_piece 4
+restore out:r4ctl_dub.bak
+expect restore_rc 10
+tap PLAY
+wait 100
+restore out:r4ctl_dub.bak
+expect restore_rc 0
+wait 100
+expect dub_piece 3
+expect dub_par18 131
+expect mode 3
+# back to RUN4 mode (SEL + HOME from DUB): the link again, DUB's state kept for the next time
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 0
+expect set_mode 0
+expect dub_boot 0
+@ACK@
+wait 100
+expect connected 1
+expect_sysex @SYNC@

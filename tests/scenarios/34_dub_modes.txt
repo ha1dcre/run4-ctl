@@ -1,0 +1,194 @@
+# Protocol 1.4 and 1.5 with DUB mode (mode 3): a 1.5 host lists the modes (RUN4, SYNTH, AMB, DUB), switches to DUB (the
+# link stays), gets its description (checked by tools/fake_run4.py desc dub: frames, labels, counts, the hash, the
+# parameters PROTOCOL.md lists, every LVIEW's ids on its page), sets parameters (a value and its second place on the MIX
+# or PERFORM page come back together), fires actions, the errors; the clock has the transport while it runs; LVIEW
+# follows the device's pages (SELECT, a page button, EDIT's CHORDS with the slot picked, SEL's PERFORM, white 6's MIX)
+# and LVIEW_SET picks them (CHORDS as EDIT, PERFORM as SEL; MIX only while white 6 is held: not now, told again).
+@ACK15@
+wait 100
+expect host_minor 5
+expect_sysex @MODE_RUN4@
+sysex_out
+@MODES_REQ@
+wait 50
+expect_sysex @MODES_0@
+sysex_log out:lm_dub.bin
+@MODE_SET_DUB@
+wait 200
+expect mode 3
+expect connected 1
+expect dub_playing 0
+@DESC_REQ_DUB@
+wait 1500
+expect lm_stream 0
+expect lm_sub 1
+expect lm_nparams 115
+expect dub_playing 1
+expect lm_known 115
+expect lm_ram <1024
+expect_sysex @LVIEW_DUB_1@
+expect lm_view_page 1
+shot lm_dub_remote.png
+sysex_out
+# a value: CHORD LEVEL (id 0) 70 -> 80, echoed with its place on the MIX page (256)
+@PSET_DUB_LEVEL80@
+wait 150
+expect dub_par0 80
+expect dub_dirty 1
+expect_sysex @PVAL_DUB_LEVEL80@
+# a master action: FILTER (145) -20 = SHUT 40, with PERFORM's FILTER (401); not saved
+@PSET_DUB_FILTER@
+wait 150
+expect dub_mac0 -20
+expect_sysex @PVAL_DUB_FILTER@
+# dub hold on, off
+@PSET_DUB_HOLD1@
+wait 150
+expect dub_hold 1
+expect_sysex @PVAL_DUB_HOLD1@
+@PSET_DUB_HOLD0@
+wait 150
+expect dub_hold 0
+expect_sysex @PVAL_DUB_HOLD0@
+# the notes: G out of F dorian (the scale becomes CUSTOM, both told); the root cannot go
+@PSET_DUB_NOTES@
+wait 150
+expect dub_pool 1705
+expect_sysex @PVAL_DUB_NOTES@
+@PSET_DUB_NOROOT@
+wait 60
+expect_sysex @ERR_DUB_REFUSED_129@
+expect dub_pool 1705
+# a chord slot: SLOT 4 and its chord MAJOR (the slots play from then: PLAY PROG); PERFORM's KICK off and the pings soloed
+@PSET_DUB_SLOT3@
+wait 150
+expect dub_slot 3
+expect dub_par75 1
+expect dub_par88 1
+expect_sysex @PVAL_DUB_SLOT3@
+@PSET_DUB_KICK0@
+wait 150
+expect dub_mutes 8
+expect dub_solo 2
+expect_sysex @PVAL_DUB_KICK0@
+sysex_out
+# errors: an unknown id (nothing of that frame applied), out of range, an action with 0, another mode
+@PSET_DUB_UNKNOWN@
+wait 60
+expect_sysex @ERR_DUB_UNKNOWN_999@
+expect dub_par0 80
+@PSET_DUB_RANGE@
+wait 60
+expect_sysex @ERR_DUB_RANGE_0@
+@PSET_DUB_NEXT0@
+wait 60
+expect_sysex @ERR_DUB_RANGE_132@
+@PSET_WRONG@
+wait 60
+expect_sysex @ERR_WRONG_DUB@
+expect frames_bad 0
+@PSET_DUB_NEXT@
+wait 60
+expect toast 1
+# the transport: while a MIDI clock runs its START / STOP has it; REST from the host is refused
+midi FA
+wait 20
+expect dub_ext 1
+@PSET_DUB_PLAY0@
+wait 60
+expect_sysex @ERR_DUB_CLOCK_130@
+expect dub_playing 1
+midi FC
+wait 60
+expect dub_playing 0
+@PSET_DUB_PLAY1@
+wait 100
+expect dub_playing 1
+sysex_out
+# 1.5: the device's pages. SELECT: CHORD; the button again: CHORD SOUND (its LVIEW names its four parameters)
+turn SELECT 1
+wait 100
+expect dub_view 1
+expect_sysex @LVIEW_DUB_3@
+tap FX
+wait 100
+expect_sysex @LVIEW_DUB_15@
+tap GLO
+wait 100
+expect_sysex @LVIEW_DUB_16@
+expect lm_view_n 2
+# EDIT: the CHORDS page with the slot picked (4); K1: slot 5
+tap EDIT
+wait 100
+expect dub_view 16
+expect_sysex @LVIEW_DUB_17_3@
+turn K1 1
+wait 100
+expect_sysex @LVIEW_DUB_17_4@
+tap EDIT
+wait 60
+# the host picks pages: KEY; PATTERN (the lane: KICK); CHORDS as EDIT does; PERFORM as SEL does
+sysex_out
+@LVIEW_SET_DUB_2@
+wait 100
+expect dub_view 7
+expect_sysex @LVIEW_DUB_2@
+@LVIEW_SET_DUB_14@
+wait 100
+expect dub_view 15
+expect_sysex @LVIEW_DUB_14_0@
+@LVIEW_SET_DUB_17@
+wait 100
+expect dub_view 16
+expect_sysex @LVIEW_DUB_17_4@
+@LVIEW_SET_DUB_18@
+wait 100
+expect dub_perf 1
+expect dub_view 17
+expect_sysex @LVIEW_DUB_18@
+shot views_dub_perform.png
+# MIX: only while white 6 is held (the page shown is told again); white 6 held: MIX; PLAY and past the 20 pages
+sysex_out
+@LVIEW_SET_DUB_19@
+wait 100
+expect dub_view 17
+expect_sysex @LVIEW_DUB_18@
+key 9 down
+wait 100
+expect dub_view 18
+expect_sysex @LVIEW_DUB_19@
+key 9 up
+wait 100
+@LVIEW_SET_DUB_0@
+wait 100
+expect dub_view 17
+@LVIEW_SET_DUB_20@
+wait 60
+expect_sysex @ERR_DUB_RANGE_0@
+@LVIEW_SET_DUB_1@
+wait 100
+expect dub_view 0
+expect dub_perf 1
+expect_sysex @LVIEW_DUB_1@
+# every value again (a host with the description cached): all 115 known
+@VALS_REQ_DUB@
+wait 600
+expect lm_known 115
+expect_sysex @LVIEW_DUB_1@
+sysex_log off
+# a 1.3 host: a mode switch is the HELLO again; 1.4: the player's SEL + HOME from DUB goes to RUN4
+@ACK14@
+wait 100
+sysex_out
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
+expect mode 0
+expect connected 1
+expect_sysex @SYNC@
+expect_sysex @MODE_RUN4@
+@MODES_REQ@
+wait 50
+expect_sysex @MODES_0@

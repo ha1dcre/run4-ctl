@@ -15,7 +15,7 @@ release SEL
 wait 1200
 expect mode 1
 shot synth_home.png
-expect_sysex F0 7D 52 34 01 01 00 08 01 05 F7
+expect_sysex F0 7D 52 34 01 01 00 09 01 05 F7
 sysex_out
 # the host acknowledges and stays quiet; its PAGE frames are ignored in Synth mode
 @ACK@
@@ -135,16 +135,18 @@ wait 40
 tap HOME
 release SEL
 wait 1200
-# (firmware 0.7: SEL + HOME goes round RUN4, SYNTH, AMB; once more from AMB to RUN4)
+# (firmware 0.9: SEL + HOME goes round RUN4, SYNTH, AMB, DUB; twice more from AMB, through DUB, to RUN4)
 press SEL
 wait 40
+tap HOME
+wait 60
 tap HOME
 release SEL
 wait 300
 expect mode 0
 sysex_out
 wait 1200
-expect_sysex F0 7D 52 34 01 01 00 08 00 05 F7
+expect_sysex F0 7D 52 34 01 01 00 09 00 05 F7
 @ACK@
 wait 100
 @TAPE@

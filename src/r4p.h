@@ -56,7 +56,7 @@ enum {                            /* device -> host */
 #define R4P_S14_MAX 8191
 #define R4P_LVIEW_MAX 4           /* 1.5: knobs in LVIEW (K1..K4) */
 #define R4P_LVIEW_NONE 16383      /* 1.5: LVIEW's id of a knob without a described parameter (never a parameter's id) */
-enum { R4P_MID_RUN4, R4P_MID_SYNTH, R4P_MID_AMB };                   /* mode ids (stable) */
+enum { R4P_MID_RUN4, R4P_MID_SYNTH, R4P_MID_AMB, R4P_MID_DUB };      /* mode ids (stable) */
 enum { R4P_MF_AVAIL = 1, R4P_MF_DESC = 2, R4P_MF_CTRL = 4 };          /* MODES / MODE flags */
 enum { R4P_LK_NUMBER, R4P_LK_ENUM, R4P_LK_TOGGLE, R4P_LK_ACTION, R4P_LK_MASK, R4P_LK_COUNT };   /* parameter kinds */
 enum { R4P_PF_READONLY = 1, R4P_PF_AUTO = 2, R4P_PF_BIPOLAR = 4, R4P_PF_ALL = 7 };              /* parameter flags */

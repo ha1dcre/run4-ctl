@@ -120,10 +120,12 @@ expect amb_playing 1
 @VALS_REQ_AMB@
 wait 400
 expect lm_known 35
-# the player switches on the device: AMB -> RUN4 (SEL + HOME); the host is told, and asked for its pages
+# the player switches on the device: AMB -> DUB -> RUN4 (SEL + HOME, twice); the host is told, and asked for its pages
 sysex_out
 press SEL
 wait 40
+tap HOME
+wait 60
 tap HOME
 release SEL
 wait 200

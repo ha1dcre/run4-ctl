@@ -6,8 +6,8 @@ It does NOT share code with src/r4p.c, so the host simulator tests also cross-ch
   fake_run4.py hex [DEMO]        print every frame of a demo (tape | tolf | all) as hex, with a label
   fake_run4.py sim SCENARIO      print a host-simulator script (tests/scenarios/*.txt with @NAME@ lines expanded)
   fake_run4.py expect KIND ...   print the hex of one device->host frame: btn ID 0|1, enc ID DELTA, pot V, hello, sync
-  fake_run4.py desc LOG [amb|synth]  protocol 1.4: read a device's raw SysEx (a simulator "sysex_log"), check every
-                                 description in it (frames, labels, counts, the hash) and print it; amb / synth: also
+  fake_run4.py desc LOG [amb|dub|synth]  protocol 1.4: read a device's raw SysEx (a simulator "sysex_log"), check every
+                                 description in it (frames, labels, counts, the hash) and print it; amb / dub / synth: also
                                  check it against the parameters docs/PROTOCOL.md lists for that mode; 1.5: every
                                  LVIEW in it names a page of the description and only parameters on that page
 """
@@ -365,7 +365,7 @@ def v13_table():
 
 
 # ------------------------------------------------------------------ protocol 1.4 ---
-MID = dict(RUN4=0, SYNTH=1, AMB=2)
+MID = dict(RUN4=0, SYNTH=1, AMB=2, DUB=3)
 MF_AVAIL, MF_DESC, MF_CTRL = 1, 2, 4
 LK = ["number", "enum", "toggle", "action", "mask"]
 LE = dict(NOMODE=1, WRONGMODE=2, NODESC=3, UNKNOWN=4, RANGE=5, READONLY=6, REFUSED=7, CLOCK=8, BUSY=9)
@@ -576,6 +576,37 @@ AMB_PARAMS = [(32, 0, "enum", "PIECE"), (33, 0, "mask", "NOTES"), (34, 0, "toggl
               (8, 6, "number", "ECHO"), (9, 6, "enum", "ECHO TIME"), (10, 6, "number", "REVERB"), (11, 6, "number", "SIZE"),
               (19, 7, "enum", "ROOT"), (16, 7, "number", "TUNE"), (17, 7, "enum", "MIDI OUT"), (20, 7, "enum", "SCALE")]
 AMB_PAGES = ["PLAY", "GARDEN", "PAD", "BELLS", "BASS", "PULSE", "SPACE", "KEY"]
+DUB_PARAMS = [(128, 0, 'enum', 'PIECE'), (129, 0, 'mask', 'NOTES'), (130, 0, 'toggle', 'PLAY'), (131, 0, 'toggle', 'DUB HOLD'),
+              (132, 0, 'action', 'NEXT CHORD'), (133, 0, 'action', 'SAVE'), (134, 0, 'action', 'RESET PIECE'), (145, 1, 'number', 'FILTER'),
+              (5, 1, 'number', 'EVOLVE'), (15, 1, 'number', 'MOTION'), (6, 1, 'enum', 'DRIFT'), (18, 2, 'number', 'TEMPO'),
+              (19, 2, 'enum', 'ROOT'), (20, 2, 'enum', 'MODE'), (282, 2, 'number', 'SWING'), (0, 3, 'number', 'LEVEL'),
+              (28, 3, 'number', 'STABS'), (13, 3, 'number', 'DECAY'), (12, 3, 'number', 'CUTOFF'), (22, 3, 'enum', 'VOICE'),
+              (36, 4, 'number', 'ATTACK'), (37, 4, 'number', 'COLOUR'), (38, 4, 'number', 'RESO'), (39, 4, 'number', 'ENV'),
+              (52, 5, 'enum', 'ALGO'), (53, 5, 'number', 'RATIO'), (54, 5, 'number', 'FEEDBACK'), (55, 5, 'number', 'MOD DEC'),
+              (1, 6, 'number', 'PINGS'), (4, 6, 'number', 'DENSITY'), (32, 6, 'number', 'CLOUD'), (29, 6, 'number', 'CRACKLE'),
+              (33, 6, 'enum', 'VOICE'), (21, 6, 'number', 'OCTAVE'), (40, 7, 'number', 'TONE'), (41, 7, 'number', 'RATIO'),
+              (42, 7, 'number', 'LENGTH'), (43, 7, 'number', 'BEND'), (56, 8, 'enum', 'ALGO'), (57, 8, 'number', 'RATIO'),
+              (58, 8, 'number', 'FEEDBACK'), (59, 8, 'number', 'MOD DEC'), (2, 9, 'number', 'LEVEL'), (23, 9, 'number', 'OCTAVE'),
+              (24, 9, 'enum', 'GROOVE'), (25, 9, 'number', 'FIFTH'), (34, 9, 'enum', 'VOICE'), (44, 10, 'number', 'BITE'),
+              (45, 10, 'number', 'SHAPE'), (46, 10, 'number', 'LENGTH'), (47, 10, 'number', 'SLIDE'), (60, 11, 'enum', 'ALGO'),
+              (61, 11, 'number', 'RATIO'), (62, 11, 'number', 'FEEDBACK'), (63, 11, 'number', 'MOD DEC'), (3, 12, 'number', 'LEVEL'),
+              (7, 12, 'number', 'HITS'), (26, 12, 'number', 'SWING'), (30, 12, 'number', 'DUCK'), (35, 12, 'enum', 'KIT'),
+              (48, 13, 'number', 'KICK TUNE'), (49, 13, 'number', 'KICK LEN'), (50, 13, 'number', 'PUNCH'), (51, 13, 'number', 'HATS'),
+              (143, 14, 'enum', 'LANE'), (104, 14, 'number', 'ACCENT'), (99, 14, 'number', 'KICK CHANCE'), (100, 14, 'number', 'SHAKER CHANCE'),
+              (101, 14, 'number', 'OPEN CHANCE'), (102, 14, 'number', 'RIM CHANCE'), (103, 14, 'number', 'CLAP CHANCE'), (105, 14, 'enum', 'PLAY'),
+              (8, 15, 'number', 'ECHO'), (9, 15, 'enum', 'ECHO TIME'), (11, 15, 'number', 'FEEDBACK'), (10, 15, 'number', 'REVERB'),
+              (16, 16, 'number', 'TUNE'), (17, 16, 'enum', 'MIDI OUT'), (140, 17, 'enum', 'SLOT'), (64, 17, 'enum', 'ROOT 1'),
+              (72, 17, 'enum', 'CHORD 1'), (80, 17, 'enum', 'TYPE 1'), (65, 17, 'enum', 'ROOT 2'), (73, 17, 'enum', 'CHORD 2'),
+              (81, 17, 'enum', 'TYPE 2'), (66, 17, 'enum', 'ROOT 3'), (74, 17, 'enum', 'CHORD 3'), (82, 17, 'enum', 'TYPE 3'),
+              (67, 17, 'enum', 'ROOT 4'), (75, 17, 'enum', 'CHORD 4'), (83, 17, 'enum', 'TYPE 4'), (68, 17, 'enum', 'ROOT 5'),
+              (76, 17, 'enum', 'CHORD 5'), (84, 17, 'enum', 'TYPE 5'), (69, 17, 'enum', 'ROOT 6'), (77, 17, 'enum', 'CHORD 6'),
+              (85, 17, 'enum', 'TYPE 6'), (70, 17, 'enum', 'ROOT 7'), (78, 17, 'enum', 'CHORD 7'), (86, 17, 'enum', 'TYPE 7'),
+              (71, 17, 'enum', 'ROOT 8'), (79, 17, 'enum', 'CHORD 8'), (87, 17, 'enum', 'TYPE 8'), (88, 17, 'enum', 'PLAY'),
+              (401, 18, 'number', 'FILTER'), (146, 18, 'number', 'DUB'), (147, 18, 'number', 'ENERGY'), (148, 18, 'number', 'SPACE'),
+              (135, 18, 'toggle', 'KICK'), (136, 18, 'toggle', 'HATS'), (137, 18, 'mask', 'SOLO'), (256, 19, 'number', 'CHORD'),
+              (257, 19, 'number', 'PINGS'), (258, 19, 'number', 'BASS'), (259, 19, 'number', 'DRUMS')]
+DUB_PAGES = ["PLAY", "DUB", "KEY", "CHORD", "CHORD SOUND", "CHORD FM", "TEXTURE", "PING SOUND", "PING FM", "BASS",
+             "BASS SOUND", "BASS FM", "DRUMS", "DRUM SOUND", "PATTERN", "SPACE", "GLOBAL", "CHORDS", "PERFORM", "MIX"]
 SYNTH_PAGES = ["VOICE", "SYNTH", "MORPH", "OP1", "OP2", "OP3", "OP4", "OP5", "OP6", "LFO", "EFFECTS", "GLOBAL", "ARP", "SEQ"]
 
 
@@ -615,6 +646,12 @@ def desc_check(path, which=None):
         got = [(p["id"], p["page"], p["kind"], p["name"]) for p in ds.params]
         assert got == AMB_PARAMS, "AMB's parameters differ from docs/PROTOCOL.md:\n%r" % got
         assert [ds.pages[i] for i in range(len(ds.pages))] == AMB_PAGES
+        assert ds.head["state"] == ["PIECE", "CHORD", "SCALE", "STATE"]
+    if which == "dub":
+        ds = [d for d in descs if d.head["mode"] == 3][-1]
+        got = [(p["id"], p["page"], p["kind"], p["name"]) for p in ds.params]
+        assert got == DUB_PARAMS, "DUB's parameters differ from docs/PROTOCOL.md:\n%r" % got
+        assert [ds.pages[i] for i in range(len(ds.pages))] == DUB_PAGES
         assert ds.head["state"] == ["PIECE", "CHORD", "SCALE", "STATE"]
     if which == "synth":
         ds = [d for d in descs if d.head["mode"] == 1][-1]
@@ -685,6 +722,16 @@ def v15_table():
         for op in range(6):
             for sub in range(2):
                 t["LVIEW_SY_%s_OP%d_%d" % (sp, op + 1, sub)] = synth_view(sp, sub, op)
+    dub_views = {1: [145, 5, 15, 6], 2: [18, 19, 20, 282], 3: [0, 28, 13, 12], 15: [8, 9, 11, 10], 16: [16, 17],
+                 18: [401, 146, 147, 148], 19: [256, 257, 258, 259]}
+    for pg, ids in dub_views.items():       # DUB's device pages (PROTOCOL.md "DUB's description": the knobs' ids)
+        t["LVIEW_DUB_%d" % pg] = lview(3, pg, ids)
+    for sl in range(8):                     # CHORDS: SLOT, the slot's CHORD and TYPE, PLAY
+        t["LVIEW_DUB_17_%d" % sl] = lview(3, 17, [140, 72 + sl, 80 + sl, 88])
+    for ln in range(5):                     # PATTERN: LANE, ACCENT, the lane's CHANCE, PLAY
+        t["LVIEW_DUB_14_%d" % ln] = lview(3, 14, [143, 104, 99 + ln, 105])
+    for pg in range(0, 24):
+        t["LVIEW_SET_DUB_%d" % pg] = lview_set(3, pg)
     for v in range(0, 101):                 # AMB's PAD LEVEL (id 0) as a knob turns
         t["PVAL_PAD_%d" % v] = pval(2, [(0, v, "%d" % v)])
     t.update({"ERR_RANGE_SYNTH_0": lm_err(1, "RANGE", 0), "ERR_WRONG_SYNTH": lm_err(1, "WRONGMODE"),
@@ -700,14 +747,33 @@ def v14_table():
         t["DESC_REQ_" + nm] = frame("DESC_REQ", [i])
         t["VALS_REQ_" + nm] = frame("VALS_REQ", [i])
     av = lambda amb: [(0, MF_AVAIL | MF_CTRL, "RUN4"), (1, MF_AVAIL | MF_DESC, "SYNTH"),     # noqa: E731
-                      (2, (MF_AVAIL | MF_DESC) if amb else 0, "AMB")]
-    for cur in range(3):
+                      (2, (MF_AVAIL | MF_DESC) if amb else 0, "AMB"), (3, (MF_AVAIL | MF_DESC) if amb else 0, "DUB")]
+    for cur in range(4):
         t["MODES_%d" % cur] = modes_frame(cur, av(True))
         t["MODES_NOAMB_%d" % cur] = modes_frame(cur, av(False))
     t["MODE_RUN4"] = mode_frame(0, MF_AVAIL | MF_CTRL, 0)
     t.update({
         "ERR_NODESC_RUN4": lm_err(0, "NODESC"), "ERR_NOMODE_RUN4": lm_err(0, "NOMODE"), "ERR_NOMODE_SYNTH": lm_err(1, "NOMODE"),
-        "ERR_WRONG_AMB": lm_err(2, "WRONGMODE"),
+        "ERR_WRONG_AMB": lm_err(2, "WRONGMODE"), "ERR_WRONG_DUB": lm_err(3, "WRONGMODE"),
+        "ERR_NOMODE_DUB": lm_err(3, "NOMODE"), "ERR_RANGE_DUB_0": lm_err(3, "RANGE", 0),
+        # DUB (mode 3): CHORD LEVEL (id 0), FILTER (145), DUB HOLD (131), NEXT CHORD (132), NOTES (129), PLAY (130),
+        # SLOT (140), the slot's CHORD (72 + s), KICK (135), SOLO (137), the MIX's CHORD (256), PIECE (128)
+        "PSET_DUB_LEVEL80": pset(3, [(0, 80)]), "PVAL_DUB_LEVEL80": pval(3, [(0, 80, "80"), (256, 80, "80")]),
+        "PSET_DUB_FILTER": pset(3, [(145, -20)]), "PVAL_DUB_FILTER": pval(3, [(145, -20, "SHUT 40"), (401, -20, "SHUT 40")]),
+        "PSET_DUB_HOLD1": pset(3, [(131, 1)]), "PVAL_DUB_HOLD1": pval(3, [(131, 1, "ON")]),
+        "PSET_DUB_HOLD0": pset(3, [(131, 0)]), "PVAL_DUB_HOLD0": pval(3, [(131, 0, "OFF")]),
+        "PSET_DUB_NEXT": pset(3, [(132, 1)]), "PSET_DUB_NEXT0": pset(3, [(132, 0)]),
+        "PSET_DUB_NOTES": pset(3, [(129, 0x5AD & ~(1 << 7))]),        # G taken out of F dorian
+        "PVAL_DUB_NOTES": pval(3, [(129, 0x5AD & ~(1 << 7), "6 NOTES"), (20, 8, "CUSTOM")]),
+        "PSET_DUB_NOROOT": pset(3, [(129, 0x5AD & ~(1 << 5))]),       # F taken out: the root stays
+        "ERR_DUB_REFUSED_129": lm_err(3, "REFUSED", 129), "ERR_DUB_CLOCK_130": lm_err(3, "CLOCK", 130),
+        "ERR_DUB_UNKNOWN_999": lm_err(3, "UNKNOWN", 999), "ERR_DUB_RANGE_0": lm_err(3, "RANGE", 0),
+        "ERR_DUB_RANGE_132": lm_err(3, "RANGE", 132),
+        "PSET_DUB_PLAY0": pset(3, [(130, 0)]), "PSET_DUB_PLAY1": pset(3, [(130, 1)]),
+        "PSET_DUB_SLOT3": pset(3, [(140, 3), (75, 1)]), "PVAL_DUB_SLOT3": pval(3, [(140, 3, "4"), (75, 1, "MAJOR"), (88, 1, "PROG")]),
+        "PSET_DUB_KICK0": pset(3, [(135, 0), (137, 2)]), "PVAL_DUB_KICK0": pval(3, [(135, 0, "OFF"), (137, 2, "PINGS")]),
+        "PSET_DUB_UNKNOWN": pset(3, [(0, 50), (999, 1)]), "PSET_DUB_RANGE": pset(3, [(0, 101)]),
+        "PSET_DUB_PIECE2": pset(3, [(128, 1)]),
         # AMB (mode 2): PAD LEVEL (id 0), FREEZE (35), NEXT CHORD (36), NOTES (33), GROW (34), PIECE (32), SCALE (20)
         "PSET_PAD70": pset(2, [(0, 70)]), "PVAL_PAD70": pval(2, [(0, 70, "70")]), "PVAL_PAD73": pval(2, [(0, 73, "73")]),
         "PSET_FREEZE1": pset(2, [(35, 1)]), "PVAL_FREEZE1": pval(2, [(35, 1, "ON")]),
@@ -745,8 +811,8 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 8, 0, 5]), "SYNC": frame("SYNC_REQ"),
-        "HELLO_LOCAL": frame("HELLO", [1, 0, 8, 1, 5]),
+        "HELLO": frame("HELLO", [1, 0, 9, 0, 5]), "SYNC": frame("SYNC_REQ"),
+        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 5]),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -796,7 +862,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 8, 0, 5]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 5]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

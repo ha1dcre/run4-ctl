@@ -1,0 +1,40 @@
+# A USB backup of firmware 0.7 / 0.8 (image version 2: an AMB part, no DUB part): fm1-base refuses another version, so
+# tools/r4ctl_backup.py upgrades it (the DUB part absent) and that restores: everything as it was then, DUB mode at its
+# recipes, whatever it held before. (tests/run_sim.sh makes old_v2.bak from 27_usb_backup's image, as 0.8 wrote it,
+# and upgrades it.)
+press SEL
+wait 40
+tap HOME
+wait 60
+tap HOME
+wait 60
+tap HOME
+release SEL
+wait 1000
+expect mode 3
+expect dub_playing 1
+tap ENV
+wait 60
+turn K1 5
+wait 60
+expect dub_par0 75
+tap PLAY
+wait 100
+expect dub_playing 0
+tap SAVE
+wait 100
+expect dub_dirty 0
+restore out:old_v2.bak
+expect restore_rc >0
+restore out:old_v2_up.bak
+expect restore_rc 0
+wait 200
+expect seq_on 4
+expect set_vel 2
+expect user_bank 1
+expect mode 3
+expect dub_piece 1
+expect dub_par0 70
+reboot
+wait 300
+expect mode 1

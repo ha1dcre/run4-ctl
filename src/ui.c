@@ -32,7 +32,7 @@ typedef struct {
     uint16_t dirty;
     uint8_t setup;                  /* the firmware-local SETUP page is open (app.c) */
     uint8_t local;                  /* Synth or AMB mode: the pages are ours, no host needed (synth_ui.c, amb_ui.c) */
-    uint8_t amb;                    /* AMB mode (amb_ui.c draws the header and the band) */
+    uint8_t amb;                    /* AMB mode, 1 (amb_ui.c draws the header and the band), or DUB mode, 2 (dub_ui.c) */
     uint8_t card;                   /* a help card is up: its button + 1 (app.c, help.c) */
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
     r4p_list_t list;
@@ -445,6 +445,8 @@ static void sp_draw_band(int full);
 static void sp_draw_tiles(void);
 static void am_draw_head(void);             /* amb_ui.c: AMB mode's header and band */
 static void am_draw_band(int full);
+static void db_draw_head(void);             /* dub_ui.c: DUB mode's */
+static void db_draw_band(int full);
 static void help_draw(void);                /* help.c: a card over the band and the tiles */
 static void ui_draw(void)
 {
@@ -498,12 +500,12 @@ static void ui_draw(void)
     if (ui.dirty & D_CLEAR)
         lcd_fill(0, 0, 240, 240, R4_BG);
     if (ui.dirty & D_HEAD)
-        ui.amb ? am_draw_head() : ui.local ? sp_draw_head() : draw_head();
+        ui.amb == 2 ? db_draw_head() : ui.amb ? am_draw_head() : ui.local ? sp_draw_head() : draw_head();
     if (ui.local) {
         if (ui.dirty & (D_TILE0 | D_TILE0 << 1 | D_CLEAR))
-            ui.amb ? am_draw_band(1) : sp_draw_band(1);
+            ui.amb == 2 ? db_draw_band(1) : ui.amb ? am_draw_band(1) : sp_draw_band(1);
         else if (ui.dirty & D_LIVE) {
-            ui.amb ? am_draw_band(0) : sp_draw_band(0);
+            ui.amb == 2 ? db_draw_band(0) : ui.amb ? am_draw_band(0) : sp_draw_band(0);
             if (ui.toast_until)
                 ui.dirty |= D_TOAST;                           /* (the live band drew under the toast: it again) */
         }

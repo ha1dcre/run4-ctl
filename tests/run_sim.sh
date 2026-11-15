@@ -1,7 +1,7 @@
 #!/bin/sh
 # Host-simulator tests: builds the firmware app natively (base/tools/build.py --host) and runs tests/scenarios/*.txt;
 # then the app-stems build (six USB audio channels) and tests/scenarios_stems/*.txt; then the app-noamb build (no AMB
-# mode) and tests/scenarios_noamb/*.txt, and tests/scenarios_cross/*.txt on the full build again.
+# or DUB mode) and tests/scenarios_noamb/*.txt, and tests/scenarios_cross/*.txt on the full build again.
 # Each scenario is expanded by tools/fake_run4.py (@NAME@ -> sysex HEX), run by the simulator ("expect" lines fail the run),
 # and its screenshots are copied to tests/screens/.
 set -e
@@ -19,6 +19,11 @@ for s in tests/scenarios/*.txt; do
   if [ "$n" = 30_backup_v1 ]; then
     python3 -I tools/r4ctl_backup.py downgrade build/sim/r4ctl.bak build/sim/old_v1.bak >/dev/null &&
       python3 -I tools/r4ctl_backup.py upgrade build/sim/old_v1.bak build/sim/old_v1_up.bak >/dev/null || fail=1
+  fi
+  # a firmware 0.7 / 0.8 backup (version 2: AMB's part, no DUB part) from the same image, and its upgrade
+  if [ "$n" = 35_backup_v2 ]; then
+    python3 -I tools/r4ctl_backup.py downgrade build/sim/r4ctl.bak build/sim/old_v2.bak 2 >/dev/null &&
+      python3 -I tools/r4ctl_backup.py upgrade build/sim/old_v2.bak build/sim/old_v2_up.bak >/dev/null || fail=1
   fi
   python3 -I tools/fake_run4.py sim "$s" > build/sim/$n.script
   echo "== $n"
@@ -49,7 +54,7 @@ done
 python3 -I tests/check_btn_order.py build/sim/05_stalled_host.log | tee -a build/sim/05_stalled_host.log || fail=1
 # protocol 1.4: the descriptions the scenarios logged, decoded and checked by the independent host side (1.5: their LVIEWs)
 for d in "lm_amb amb 31_modes" "lm_synth synth 31_modes" "lm_noamb_synth synth noamb_02_noamb_modes" \
-         "lm_views_amb amb 32_views" "lm_views_synth synth 32_views"; do
+         "lm_views_amb amb 32_views" "lm_views_synth synth 32_views" "lm_dub dub 34_dub_modes"; do
   set -- $d
   if python3 -I tools/fake_run4.py desc build/sim/$1.bin $2 > build/sim/$1.desc 2>&1; then
     tail -1 build/sim/$1.desc | sed 's/^/  ok /' | tee -a build/sim/$3.log

@@ -125,4 +125,23 @@ wait 40
 tap HOME
 release SEL
 wait 200
+expect mode 3
+# DUB: REC held has no card (the band shows the effects grid, which names them); EDIT's card (held: the next chord)
+press REC
+wait 1200
+expect card 0
+release REC
+wait 60
+press EDIT
+wait 1200
+expect card 5
+shot card_dub_edit.png
+release EDIT
+wait 60
+expect card 0
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 200
 expect mode 0

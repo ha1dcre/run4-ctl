@@ -9,6 +9,9 @@
 static const char *const BTN_NAME[14] = {"FX", "SEL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY",
                                          "REC", "OCT-", "OCT+"};
 
+#if R4_DUB
+static int db_perf_on(void);                  /* dub_ui.c: PERFORM is on */
+#endif
 /* the card's lines for button b; *tag: the mode or page it speaks for. A line that starts with "SEL+" or "HOLD" is a
  * combination: drawn grey */
 static int help_lines(uint32_t b, const char *l[HELP_LINES], const char **tag)
@@ -26,7 +29,7 @@ static int help_lines(uint32_t b, const char *l[HELP_LINES], const char **tag)
     if (mode == MODE_AMB) {
         *tag = "AMB";
         switch (b) {
-        case B_HOME: L("GARDEN: TEMPO, EVOLVE,"); L("MOTION, DRIFT"); L("HOLD + SELECT: THE TEMPO"); L("SEL+HOME: NEXT MODE (RUN4)"); break;
+        case B_HOME: L("GARDEN: TEMPO, EVOLVE,"); L("MOTION, DRIFT"); L("HOLD + SELECT: THE TEMPO"); L(R4_DUB ? "SEL+HOME: NEXT MODE (DUB)" : "SEL+HOME: NEXT MODE (RUN4)"); break;
         case B_ENV: L("PAD: LEVEL, SWELL,"); L("BRIGHT, COLOUR"); break;
         case B_ARP: L("BELLS: LEVEL, DENSITY,"); L("TONE, OCTAVE"); break;
         case B_LFO: L("BASS: LEVEL, OCTAVE,"); L("GLIDE, FIFTH"); break;
@@ -39,7 +42,36 @@ static int help_lines(uint32_t b, const char *l[HELP_LINES], const char **tag)
         case B_SAVE: L("SAVES ALL EIGHT PIECES"); L("KEPT DOWN 2 S: THIS PIECE"); L("BACK TO ITS RECIPE"); break;
         case B_OCTDN: L("THE BELLS AN OCTAVE DOWN"); break;
         case B_OCTUP: L("THE BELLS AN OCTAVE UP"); break;
-        default: L("SHIFT, HOLD IT WITH"); L("HOME: NEXT MODE (RUN4)"); L("GLO: SETUP"); L("REC, PLAY: RUN4'S"); break;
+        default: L("SHIFT, HOLD IT WITH"); L(R4_DUB ? "HOME: NEXT MODE (DUB)" : "HOME: NEXT MODE (RUN4)"); L("GLO: SETUP"); L("REC, PLAY: RUN4'S"); break;
+        }
+        return n;
+    }
+#endif
+#if R4_DUB
+    if (mode == MODE_DUB) {                   /* DUB mode: DUB-1's cards, as its own buttons do here */
+        *tag = "DUB";
+        if (db_perf_on() && b != B_SEL) {         /* (PERFORM on: the keys are its) */
+            if (b == B_HOME || b == B_ENV || b == B_ARP || b == B_LFO || b == B_SEQ || b == B_FX || b == B_GLO) {
+                *tag = "PERFORM";
+                L("ITS PAGE ON THE KNOBS;"); L("THE KEYS STAY PERFORM'S"); L("SEL TAPPED: PERFORM OFF");
+                return n;
+            }
+        }
+        switch (b) {
+        case B_HOME: L("DUB: FILTER, EVOLVE,"); L("MOTION, DRIFT"); L("AGAIN: TEMPO, ROOT, MODE,"); L("SWING; HOLD + SELECT: TEMPO"); L("SEL+HOME: NEXT MODE (RUN4)"); break;
+        case B_ENV: L("CHORD: LEVEL, STABS,"); L("DECAY, CUTOFF"); L("ALGORITHM: ITS VOICE"); L("AGAIN: SOUND; AGAIN: FM"); break;
+        case B_ARP: L("TEXTURE: PINGS, DENSITY,"); L("CLOUD, CRACKLE"); L("ALGORITHM: THE PINGS' VOICE"); L("AGAIN: SOUND; AGAIN: FM"); break;
+        case B_LFO: L("BASS: LEVEL, OCTAVE,"); L("GROOVE, FIFTH"); L("ALGORITHM: ITS VOICE"); L("AGAIN: SOUND; AGAIN: FM"); break;
+        case B_SEQ: L("DRUMS: LEVEL, HITS,"); L("SWING, DUCK"); L("ALGORITHM: THE KIT"); L("AGAIN: SOUND; AGAIN:"); L("THE PATTERN (WHITE KEYS)"); break;
+        case B_FX: L("SPACE: ECHO, ECHO TIME,"); L("FEEDBACK, REVERB"); break;
+        case B_GLO: L("GLOBAL (EVERY PIECE):"); L("TUNE, MIDI OUT"); L("SEL+GLO: SETUP"); break;
+        case B_EDIT: L("TAP: THE CHORDS, 8 SLOTS"); L("(THE KEYS: THE SLOT'S ROOT)"); L("HOLD: THE NEXT CHORD"); break;
+        case B_SEL: L("TAP: PERFORM. KNOBS FILTER,"); L("DUB, ENERGY, SPACE; WHITE 6"); L("HELD: THE MIX. WHITE 1-5 MUTE,"); L("BLACK 1-5 SOLO; WHITE 7-11"); L("THROW OPEN SHUT DROP ECHO"); L("SEL+HOME NEXT MODE, +GLO SETUP"); break;
+        case B_PLAY: L("PLAYS / RESTS"); L("SEL+PLAY: RUN4'S PLAY"); break;
+        case B_SAVE: L("SAVES ALL EIGHT PIECES"); L("KEPT DOWN 2 S: THIS PIECE"); L("BACK TO ITS RECIPE"); break;
+        case B_OCTDN: L("THE PINGS AN OCTAVE DOWN"); break;
+        case B_OCTUP: L("THE PINGS AN OCTAVE UP"); break;
+        default: L("TAP: DUB HOLD"); L("HOLD: THE EFFECTS GRID"); break;
         }
         return n;
     }
@@ -53,7 +85,7 @@ static int help_lines(uint32_t b, const char *l[HELP_LINES], const char **tag)
             return n;
         }
         switch (b) {
-        case B_HOME: L("SYNTH: BRIGHT, FEEDBACK,"); L("ENV SPEED, LEVEL"); L("AGAIN: THE MORPH (A / B)"); L(R4_AMB ? "SEL+HOME: NEXT MODE (AMB)" : "SEL+HOME: NEXT MODE (RUN4)"); break;
+        case B_HOME: L("SYNTH: BRIGHT, FEEDBACK,"); L("ENV SPEED, LEVEL"); L("AGAIN: THE MORPH (A / B)"); L(R4_AMB ? "SEL+HOME: NEXT MODE (AMB)" : R4_DUB ? "SEL+HOME: NEXT MODE (DUB)" : "SEL+HOME: NEXT MODE (RUN4)"); break;
         case B_EDIT: L("OPERATOR: RATIO, FINE,"); L("LEVEL, DETUNE; AGAIN: MORE"); L("SELECT, BLACK KEYS: OP 1-6"); L("SEL+EDIT: MUTATE"); break;
         case B_ENV: L("ENVELOPE: RATES 1-4"); L("AGAIN: LEVELS 1-4"); L("SELECT, BLACK KEYS: OP 1-6"); break;
         case B_LFO: L("LFO: SPEED, DELAY,"); L("PITCH MOD, AMP MOD"); L("AGAIN: WAVE, SENS, SYNC"); break;

@@ -400,9 +400,11 @@ wait 40
 release HOME
 release SEL
 wait 300
-# (firmware 0.7: SEL + HOME goes round RUN4, SYNTH, AMB; once more from AMB to RUN4)
+# (firmware 0.9: SEL + HOME goes round RUN4, SYNTH, AMB, DUB; twice more from AMB, through DUB, to RUN4)
 press SEL
 wait 40
+tap HOME
+wait 60
 tap HOME
 release SEL
 wait 300

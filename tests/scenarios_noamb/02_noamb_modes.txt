@@ -1,4 +1,4 @@
-# Protocol 1.4 in the package without AMB mode: MODES lists AMB as not available, switching to it is refused (NOMODE),
+# Protocol 1.4 in the package without AMB and DUB mode: MODES lists them as not available, switching to them is refused (NOMODE),
 # SYNTH works and is described.
 @ACK14@
 wait 100
@@ -8,6 +8,10 @@ sysex_out
 wait 50
 expect_sysex @MODES_NOAMB_0@
 @MODE_SET_AMB@
+wait 100
+expect_sysex @ERR_NOMODE_RUN4@
+expect mode 0
+@MODE_SET_DUB@
 wait 100
 expect_sysex @ERR_NOMODE_RUN4@
 expect mode 0

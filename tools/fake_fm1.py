@@ -18,7 +18,7 @@ builders are shared with tools/fake_run4.py. Keys on the terminal (TAB switches 
   MASTER    9 down, 0 up (512 of 16383 each)
   1.3       B send a backup of the fake's user voices, R restore the host's last one (both answer like the firmware;
             the fake also answers NAMES_REQ, VOICE_GET and the host voice's frames with HV_STATE)
-  1.4       M the next mode (as SEL + HOME: RUN4, SYNTH, AMB; told with MODE to a 1.4 host); the fake answers MODES_REQ,
+  1.4       M the next mode (as SEL + HOME: RUN4, SYNTH, AMB, not DUB; told with MODE to a 1.4 host); the fake answers MODES_REQ,
             MODE_SET, DESC_REQ, VALS_REQ and PSET for AMB with the firmware's AMB parameters (docs/PROTOCOL.md; its
             ranges and texts simplified: the real description comes from the firmware or its emulator), G grows / rests
   piano     (after TAB) z s x d c v g b h n j m , l . ; /  = C4 up;  q 2 w 3 e r 5 t 6 y 7 u = C5 up;  - + octave; TAB back
@@ -285,7 +285,7 @@ def show(d):
 
 
 # ------------------------------------------------------------------ the device ---
-MODE_RUN4, FW = 0, (0, 8)
+MODE_RUN4, FW = 0, (0, 9)
 
 
 def hello(mode=0):
@@ -496,7 +496,8 @@ class Device:
     def on_frame14(self, d):
         c = d["cmd"]
         if c == "MODES_REQ":
-            self.send(f4.modes_frame(self.mode, [(0, 5, "RUN4"), (1, 1, "SYNTH"), (2, 3, "AMB")]))   # (the fake: SYNTH undescribed)
+            self.send(f4.modes_frame(self.mode, [(0, 5, "RUN4"), (1, 1, "SYNTH"), (2, 3, "AMB"), (3, 0, "DUB")]))   # (the fake: SYNTH
+            # undescribed, DUB listed, not in the fake: NOMODE)
         elif c == "MODE_SET":
             if d["mode"] > 2:
                 self.err("NOMODE")
@@ -756,7 +757,7 @@ def selftest():
 
     h = lambda s: [int(x, 16) for x in s.split()]  # noqa: E731
     # device -> host: the bytes the C codec produces (tests/r4p_test.c, tests/scenarios)
-    eq(hello(), h("F0 7D 52 34 01 01 00 08 00 04 F7"), "HELLO")
+    eq(hello(), h("F0 7D 52 34 01 01 00 09 00 04 F7"), "HELLO")
     eq(btn(0, True), h("F0 7D 52 34 02 00 01 F7"), "BTN down")
     eq(btn(13, False), h("F0 7D 52 34 02 0D 00 F7"), "BTN up")
     eq(enc(3, 1), h("F0 7D 52 34 03 03 41 F7"), "ENC +1")
