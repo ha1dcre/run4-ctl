@@ -14,6 +14,9 @@ for a second shows a help card.
 **Not affiliated with M-VAVE.** FM-1 is M-VAVE's product name; this is an independent project built on the community
 firmware platform [fm1-base](https://github.com/charlesvestal/fm1-base). See `NOTICE`.
 
+**Other apps are welcome to speak the protocol** (MIT, `docs/PROTOCOL.md`). The names "RUN4" and "RUN4 CTL" belong to
+the RUN4 app; please don't use them for another app or a modified firmware, or in a way that suggests it is RUN4.
+
 Status: **complete in the host simulator, not yet run on an FM-1.** RUN4 mode (protocol v1.3 in `docs/PROTOCOL.md`: codec,
 LIST, non-blocking output, SETUP page, touch velocity and aftertouch, the host voice, the voice list, the tape view, the
 patch backup) and Synth mode (Felucca's FM6 engine, effects, DX7
