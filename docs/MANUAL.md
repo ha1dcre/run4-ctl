@@ -512,9 +512,16 @@ You need a Chrome or Edge browser (Web MIDI) and a USB cable.
    project owner). Follow its steps. The command-line installer in fm1-base (`tools/fm1_install.py`) does the same.
 3. After the install the FM-1 restarts and shows RUN4 CTL.
 
+**With RUN4 on an iPad or iPhone** you need no computer: connect the FM-1 with a USB cable and open Settings > MIDI >
+FM-1 Firmware in RUN4. It shows what the FM-1 runs, backs up RUN4 CTL's data, downloads and checks the package and
+installs it. An install that was cut off (the cable pulled) is finished from the same page.
+
 **Going back to stock.** Install M-VAVE's own firmware package (V15) with the same installer: it accepts M-VAVE's
-package. RUN4 CTL's own settings (SETUP page) and the user voices of Synth mode are not part of it and are simply gone
-afterwards: take a USB backup first (see USB backup) to have them back later.
+package. This works only on an FM-1 that has never run V16: V16 rewrites the flash's boot head and the FM-1 refuses
+V15 on it (nothing is written). A unit that ever ran V16 goes back to V16 with M-VAVE's own M-UPGRADE tool; a unit that
+shipped with V16 installs RUN4 CTL normally and goes back the same way. RUN4 CTL's own settings (SETUP page) and the
+user voices of Synth mode are not part of M-VAVE's package and are simply gone afterwards: take a USB backup first
+(see USB backup) to have them back later.
 
 ## Connect to RUN4
 

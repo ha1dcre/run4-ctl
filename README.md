@@ -231,7 +231,19 @@ The JieLi toolchain is Linux x86-64 only; on macOS fm1-base's `tools/build.py` r
    `get_sdk.sh` calls `sha256sum`; if the Mac lacks it, `brew install coreutils`.
 3. Build: `python3 base/tools/build.py app --no-ble` → `app/build/<name>-usb.fwsc` (phase 1 is USB only).
 4. Install over USB: the web installer, or `base/tools/fm1_install.py app/build/<name>-usb.fwsc`
-   (needs `pip install mido python-rtmidi` in a venv). The stock V15 can be restored; back up presets first.
+   (needs `pip install mido python-rtmidi` in a venv). With an FM-1 connected to an iPad or iPhone, the RUN4 app
+   installs RUN4 CTL itself (Settings > MIDI > FM-1 Firmware: backup, download, install, resume of a cut-off install;
+   its Swift source is `tools/ios/`, MPL-2.0). Back up first either way.
+
+   **Going back to M-VAVE's firmware.** M-VAVE's V15 package (`fm1_open/sdk/firmware/FM-1_015.fwsc`) can be installed
+   only on an FM-1 that has never run V16: M-VAVE's V16 rewrites the flash's boot head, and the FM-1 refuses V15 on
+   a V16 head (it checks the package before anything is written, so nothing changes). A unit that ever ran V16
+   goes back to V16 with M-VAVE's own M-UPGRADE tool. A unit that shipped with V16 installs RUN4 CTL normally; its
+   way back is V16 too. RUN4 CTL's data area (flash `0xC8000..0xE0000`, `app/app.h` `APP_STORE_MAP`: two 4 KiB sectors
+   per object) does not overlap stock's image: V16's ends at `0xA9000`, V15's at `0x93000` (felucca-bsp
+   `tools/fm1_rescue.py`, `docs/FLASH.md`), and the updater writes only the application window below
+   `0x97000` and its own update records (`0xE0000..`). The settings and patterns RUN4 CTL keeps are not part of any
+   M-VAVE package and are gone after the way back: take the USB backup first.
 
 ## Licence
 

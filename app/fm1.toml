@@ -26,6 +26,10 @@ tagline = "RUN4 controller, FM synth, ambient and dub techno machines"
 description = "Four modes. RUN4 mode makes the M-VAVE FM-1 a hardware controller for the iOS app RUN4 over USB or Bluetooth MIDI: the app draws its pages and lights and can play its FM engine. Synth mode is a six-operator FM synth with effects, arpeggiator, morph, MIDI learn and a step sequencer. AMB mode is AMB-1's generative ambient garden: pads, bells on tape loops, bass, pulse, tape echo, plate. DUB mode is DUB-1's generative dub techno: chord stabs into a tape echo, pings, sub bass, a ducking kick; Filter, Dub, Energy, Space, dub hold, effects grid. Hold a button for help. Everything backs up over USB."
 tags = ["controller", "synth", "fm", "sequencer", "midi", "ambient", "generative"]
 install = "https://todo-owner.example/run4-ctl/install/"   # TODO-OWNER: where the web installer will be published
+# Installing and the way back (README, docs/MANUAL.md "Install"): the web installer, base/tools/fm1_install.py, or the RUN4 app's
+# Settings > MIDI > FM-1 Firmware (tools/ios/, MPL-2.0). M-VAVE's V15 goes back on a unit that never ran V16 only (a V16 boot head
+# makes the FM-1 refuse V15; then V16 through M-VAVE's M-UPGRADE). A unit that shipped with V16 installs RUN4 CTL normally. This
+# firmware's data area (0xC8000..0xE0000, app.h APP_STORE_MAP) does not overlap stock's image (V16 ends at 0xA9000, V15 at 0x93000).
 repo = "https://todo-owner.example/run4-ctl"              # TODO-OWNER: the public source repository
 site = "https://todo-owner.example/run4-ctl/"             # TODO-OWNER: the project site
 screenshot = "docs/img/screen.png"

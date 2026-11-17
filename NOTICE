@@ -39,6 +39,12 @@ Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Fel
             trigger's hysteresis, the slow release of the scale, the strip-wise sending and the other views are new.
   The DX7 voice and bank formats are Yamaha's; no factory ROM data of any instrument is included.
 
+The RUN4 app's FM-1 installer (tools/ios/FM1Package.swift, FM1Installer.swift, test/FakeFM1.swift) is a Swift port of
+fm1-base's tools/fm1_install.py, fm1_backup.py, fm1ports.py and fm1pkg_make.py and of fm1-base's tests/install_test.py
+simulated FM-1, following felucca-bsp's chip/ota.c. MPL-2.0, file by file (LICENSES/MPL-2.0.txt), headers kept:
+Copyright (C) 2026 Charles Vestal; Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hugelton Instruments. Published here so
+the source goes with the firmware it installs; tools/ios/README.md.
+
 Ideas and rules from Mutable Dreams (version 2.1), the FM-1 firmware by Kid Bunka,
 https://github.com/kidbee85-beep/mutable-dreams (its own files: MIT OR GPL-3.0-only, used here under GPL-3.0-only;
 no Mutable Instruments code is used). No file of it is copied; these follow its design and are new code:
