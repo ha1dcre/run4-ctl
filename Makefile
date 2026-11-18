@@ -70,4 +70,13 @@ tools:
 host:
 	$(PY) base/tools/build.py app --host
 
-.PHONY: test unit fuzz synth amb dub tape usblevel sim tools host audio
+# the render's cost per 256-frame block in instructions (tools/cycles.py: each mode's engine built for a Cortex-M4F
+# with arm-none-eabi-gcc and counted in Unicorn); fails when a Synth mode block is over 80 % of the budget at the cost
+# model's 3 cycles an instruction, or the model (src/synth.c SYN_CM_*) estimated less than was measured. Needs
+# arm-none-eabi-gcc and a python with unicorn, capstone and pyelftools (CYC_PY); not part of `make test`
+CYC_PY ?= python3
+cycles:
+	$(CYC_PY) tools/cycles.py synth --check
+	$(CYC_PY) tools/cycles.py dub amb --quick
+
+.PHONY: test unit fuzz synth amb dub tape usblevel sim tools host audio cycles
