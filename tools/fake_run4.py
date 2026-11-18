@@ -22,7 +22,8 @@ CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05, LIST_PICK=0x
            MODES=0x0D, MODE=0x0E, DESC_HEAD=0x0F, DESC_PAGE=0x10, DESC_PARAM=0x11, DESC_LABELS=0x12,      # 1.4
            DESC_END=0x13, PVAL=0x14, LSTATE=0x15, LM_ERR=0x16,
            MODES_REQ=0x54, MODE_SET=0x55, DESC_REQ=0x56, VALS_REQ=0x57, PSET=0x58,
-           LVIEW=0x17, LVIEW_SET=0x59)                                                                    # 1.5
+           LVIEW=0x17, LVIEW_SET=0x59,                                                                    # 1.5
+           SCENE_PICK=0x1B, SCENES=0x5C, SCENE_STATE=0x5D)                                                # 1.6
 NONE = 127                             # protocol 1.2: no cursor
 KIND = dict(empty=0, uni=1, bi=2, enum=3, toggle=4)
 LED = dict(off=0, dim=1, on=2, blink=3)
@@ -111,6 +112,21 @@ def list_frame(title, rgb, total, first, sel, items):
     for it in items:
         p += string(it)
     return frame("LIST", p)
+
+
+def scenes(total, first, names):
+    """protocol 1.6 SCENES: the count, and the short names first .. first+len-1 (at most 16, 8 characters each)"""
+    assert len(names) <= 16 and first + len(names) <= total <= 128
+    p = v14(total) + [first, len(names)]
+    for n in names:
+        assert len(n) <= 8
+        p += string(n)
+    return frame("SCENES", p)
+
+
+def scene_state(active, queued):
+    """protocol 1.6 SCENE_STATE: None = no scene (16383)"""
+    return frame("SCENE_STATE", v14(16383 if active is None else active) + v14(16383 if queued is None else queued))
 
 
 def value(slot_i, v, text, flags=None):
@@ -817,7 +833,16 @@ def v14_table():
 def expand(name):
     """a scenario with lines '@name@' replaced by 'sysex HEX'"""
     table = {
-        "ACK": frame("HELLO_ACK", [1, 1]), "ACK10": frame("HELLO_ACK", [1]),
+        "ACK": frame("HELLO_ACK", [1, 1]), "ACK10": frame("HELLO_ACK", [1]), "ACK16": frame("HELLO_ACK", [1, 6]),
+        # 1.6: 40 scenes (3 banks), their names a bank at a time; the active and the queued scene
+        "SCN_B0": scenes(40, 0, ["INTRO", "", "VERSE A", "VERSE B", "CHORUS", "", "BRIDGE", "BREAK", "DROP", "", "OUTRO", "", "", "", "", "LAST 1"]),
+        "SCN_B1": scenes(40, 16, ["B2-%d" % i for i in range(1, 17)]),
+        "SCN_B2": scenes(40, 32, ["B3-%d" % i for i in range(1, 9)]),
+        "SCN_ZERO": scenes(0, 0, []), "SCN_ONE": scenes(1, 0, ["ONLY"]), "SCN_16": scenes(16, 0, ["S%d" % i for i in range(1, 17)]),
+        "SCN_SHRINK": scenes(10, 0, []),
+        "SCN_BAD": frame("SCENES", v14(20) + [16, 5, 0, 0, 0, 0, 0]),                    # a window past the count
+        "SCN_ST_0": scene_state(0, None), "SCN_ST_3": scene_state(3, None), "SCN_ST_3_Q20": scene_state(3, 20),
+        "SCN_ST_20": scene_state(20, None), "SCN_ST_NONE": scene_state(None, None), "SCN_ST_BAD": frame("SCENE_STATE", v14(300) + v14(0)),
         "LIST": list_frame("MODE", (127, 70, 20), 5, 0, 1, ["TAPE", "POLY", "DISC", "PERFORM", "T\u00d3LF"]),
         "LIST_LONG": list_frame("KITS", (30, 105, 100), 40, 0, 6, ["KIT %02d" % i for i in range(7)]),
         "LIST_LONG2": list_frame("KITS", (30, 105, 100), 40, 7, 7, ["KIT %02d" % i for i in range(7, 14)]),
@@ -828,8 +853,8 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 9, 0, 5]), "SYNC": frame("SYNC_REQ"),
-        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 5]),
+        "HELLO": frame("HELLO", [1, 0, 9, 0, 6]), "SYNC": frame("SYNC_REQ"),
+        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 6]),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -846,6 +871,8 @@ def expand(name):
     for i in range(40):
         for a in range(3):
             table["PICK%d_%d" % (i, a)] = frame("LIST_PICK", [i, a])
+    for i in range(128):
+        table["SPICK%d" % i] = frame("SCENE_PICK", [i])
     for e in range(7):
         for d in (1, -1, 3, 5, 63, -63, -37):
             table["ENC%d_%+d" % (e, d)] = frame("ENC", [e, 0x40 + d])
@@ -879,7 +906,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 5]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 6]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

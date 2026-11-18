@@ -1,0 +1,175 @@
+# Protocol 1.6: the scene page. SEL + SEQ opens it once a 1.6 host has sent scenes; the white keys 1-16 recall scenes of the
+# bank (SCENE_PICK), OCT- / OCT+ change the bank, a page button leaves; the keys' lights show active / queued / present.
+# Without scenes (or a host below 1.6) SEL + SEQ goes to the host as it always did.
+@ACK@
+wait 100
+expect host_minor 1
+sysex_out
+press SEL
+press SEQ
+wait 60
+expect scn 0
+expect btn_dn9 1
+release SEQ
+release SEL
+wait 60
+sysex_out
+# a 1.6 host that has sent no scenes yet: still the old way
+@ACK16@
+wait 100
+expect host_minor 6
+sysex_out
+press SEL
+press SEQ
+wait 60
+expect scn 0
+expect btn_dn9 2
+release SEQ
+release SEL
+wait 60
+# the scenes: 40 of them, the first bank's names, the active one
+@SCN_B0@
+@SCN_B1@
+@SCN_B2@
+@SCN_ST_3@
+wait 60
+expect scn_total 40
+expect scn_active 3
+expect scn_queued -1
+sysex_out
+press SEL
+wait 40
+press SEQ
+wait 60
+expect scn 1
+expect scn_bank 0
+shot scenes_bank1.png
+# the press stayed local: no BTN for SEQ went out (SEL did)
+expect btn_dn9 2
+release SEQ
+release SEL
+wait 60
+expect scn 1
+# the active scene's white key is on, the other 15 dim: 16 white keys 0 2 4 6 7 9 11 12 14 16 18 19 21 23 24 26
+expect scn_lit 64
+expect scn_dim 95246997
+# no note plays while it is open: a black key and a white key
+key b0 down 100 0
+wait 40
+key b0 up
+wait 40
+expect notes_on 0
+# white key 7 (the 7th, key 11... = scene 7 BRIDGE): SCENE_PICK 6 goes out, and it blinks queued
+sysex_out
+key w6 down 100 0
+wait 60
+expect notes_on 0
+expect scn_queued 6
+expect_sysex @SPICK6@
+key w6 up
+wait 40
+shot scenes_queued.png
+# the host lands it: active 6, no queue
+sysex_out
+@SCN_ST_0@
+wait 40
+expect scn_queued -1
+expect scn_active 0
+# a queued scene the host never confirms stops blinking after 4 s
+key w2 down 100 0
+wait 60
+expect scn_queued 2
+key w2 up
+wait 4200
+expect scn_queued -1
+# OCT+ changes the bank (the octave stays), twice to the last, a third stays; OCT- back
+sysex_out
+tap OCT+
+wait 60
+expect scn_bank 1
+tap OCT+
+wait 60
+expect scn_bank 2
+tap OCT+
+wait 60
+expect scn_bank 2
+shot scenes_bank3.png
+# bank 3 holds scenes 33..40: the first 8 white keys exist, the ninth does not (scene 41: no pick, the queue stays)
+key w0 down 100 0
+wait 40
+key w0 up
+wait 40
+expect_sysex @SPICK32@
+key w7 down 100 0
+wait 40
+key w7 up
+wait 40
+expect scn_queued 39
+expect_sysex @SPICK39@
+sysex_out
+key w8 down 100 0
+wait 40
+key w8 up
+wait 40
+expect scn_queued 39
+tap OCT-
+wait 60
+expect scn_bank 1
+@SCN_ST_20@
+wait 60
+expect scn_active 20
+# held alone for a second, OCT- shows its card (SCENES) and has changed the bank, as it does; letting go closes it
+press OCT-
+wait 1200
+expect card 13
+expect scn_bank 0
+shot scenes_card.png
+release OCT-
+wait 100
+expect card 0
+# neither OCT- nor OCT+ reached the host
+expect btn_dn12 0
+expect btn_dn13 0
+# a page button leaves, and is not sent; the keys play again
+tap ENV
+wait 60
+expect scn 0
+expect btn_dn2 0
+key w0 down 100 0
+wait 40
+expect notes_on 1
+key w0 up
+wait 40
+# opens again on the active scene's bank (20 -> bank 2 of 3, index 1)
+press SEL
+press SEQ
+wait 60
+release SEQ
+release SEL
+expect scn 1
+expect scn_bank 1
+# SEL + SEQ again leaves
+press SEL
+press SEQ
+wait 60
+release SEQ
+release SEL
+expect scn 0
+# SEL + HOME from the page still switches the mode (the page is gone)
+press SEL
+press SEQ
+wait 60
+release SEQ
+release SEL
+expect scn 1
+press SEL
+wait 20
+press HOME
+wait 300
+release HOME
+release SEL
+expect scn 0
+expect mode 1
+# the scene page's RAM: names 128 x 9 B and a few bytes of state, in .bss, no pool
+expect scn_ram <1200
+expect scn_ram >1100

@@ -415,6 +415,26 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
         if (!mode_id_ok(m->u.lview.mode))
             w.bad = 1;
         break;
+    case R4P_SCENE_PICK:
+        w8(&w, m->u.b1.v);
+        if (m->u.b1.v >= R4P_SCENE_MAX)
+            w.bad = 1;
+        break;
+    case R4P_SCENES: {
+        const r4p_scenes_t *c = &m->u.scenes;
+        w14(&w, c->total); w8(&w, c->first); w8(&w, c->n);
+        if (c->total > R4P_SCENE_MAX || c->n > R4P_SCENE_ROWS || (unsigned)c->first + c->n > c->total)
+            w.bad = 1;
+        for (i = 0; i < c->n && i < R4P_SCENE_ROWS; i++)
+            wstr_n(&w, c->name[i], R4P_SCENE_NAME);
+        break;
+    }
+    case R4P_SCENE_STATE:
+        w14(&w, m->u.scene_state.active); w14(&w, m->u.scene_state.queued);
+        if ((m->u.scene_state.active >= R4P_SCENE_MAX && m->u.scene_state.active != R4P_SCENE_NONE) ||
+            (m->u.scene_state.queued >= R4P_SCENE_MAX && m->u.scene_state.queued != R4P_SCENE_NONE))
+            w.bad = 1;
+        break;
     default:
         return 0;
     }
@@ -869,6 +889,28 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
         if (!mode_id_ok(out->u.lview.mode))
             r.bad = 1;
         break;
+    case R4P_SCENE_PICK:
+        out->u.b1.v = (uint8_t)r8(&r);
+        if (out->u.b1.v >= R4P_SCENE_MAX)
+            r.bad = 1;
+        break;
+    case R4P_SCENES: {
+        r4p_scenes_t *c = &out->u.scenes;
+        for (i = 0; i < sizeof *c; i++)
+            ((uint8_t *)c)[i] = 0;
+        c->total = (uint16_t)r14(&r); c->first = (uint8_t)r8(&r); c->n = (uint8_t)r8(&r);
+        if (c->total > R4P_SCENE_MAX || c->n > R4P_SCENE_ROWS || (unsigned)c->first + c->n > c->total)
+            r.bad = 1;
+        for (i = 0; i < c->n && !r.bad; i++)
+            rstr_n(&r, c->name[i], R4P_SCENE_NAME);
+        break;
+    }
+    case R4P_SCENE_STATE:
+        out->u.scene_state.active = (uint16_t)r14(&r); out->u.scene_state.queued = (uint16_t)r14(&r);
+        if ((out->u.scene_state.active >= R4P_SCENE_MAX && out->u.scene_state.active != R4P_SCENE_NONE) ||
+            (out->u.scene_state.queued >= R4P_SCENE_MAX && out->u.scene_state.queued != R4P_SCENE_NONE))
+            r.bad = 1;
+        break;
     default:
         return -1;
     }
@@ -888,6 +930,12 @@ size_t r4p_hello(uint8_t *b, size_t c, uint8_t ma, uint8_t mi, uint8_t mode)
     r4p_msg_t m;
     m.cmd = R4P_HELLO; m.u.hello.proto = R4P_VER; m.u.hello.fw_major = ma; m.u.hello.fw_minor = mi; m.u.hello.mode = mode;
     m.u.hello.minor = R4P_MINOR;
+    return r4p_encode(b, c, &m);
+}
+size_t r4p_scene_pick(uint8_t *b, size_t c, uint8_t index)
+{
+    r4p_msg_t m;
+    m.cmd = R4P_SCENE_PICK; m.u.b1.v = index;
     return r4p_encode(b, c, &m);
 }
 size_t r4p_btn(uint8_t *b, size_t c, uint8_t id, uint8_t down)

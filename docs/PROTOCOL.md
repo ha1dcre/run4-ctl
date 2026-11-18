@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!-- Copyright (c) 2026 Eugen Schott -->
 
-# RUN4 CTL protocol v1 (minor 5)
+# RUN4 CTL protocol v1 (minor 6)
 
 This document and the reference codec (`src/r4p.h`, `src/r4p.c`) are under the MIT licence (`LICENSE-MIT`), so any
 firmware or device can implement RUN4 CTL; the rest of RUN4 CTL stays GPL-3.0. See "Implementing RUN4 CTL in your own
@@ -63,6 +63,7 @@ cross-check it.
 | 0x15 | LSTATE | `mode, flags, n, n x text(str)` - 1.4 |
 | 0x16 | LM_ERR | `mode, code, id14` - 1.4 |
 | 0x17 | LVIEW | `mode, page, n, n x id14` (n 0..4) - 1.5, "The local mode's page" |
+| 0x1B | SCENE_PICK | `scene` (0..127) - 1.6, "Protocol 1.6: the scene page" |
 
 Button ids follow fm1-base `plat.h`: 0 FX, 1 SEL, 2 ENV, 3 LFO, 4 EDIT, 5 GLO, 6 HOME, 7 SAVE, 8 ARP, 9 SEQ, 10 PLAY,
 11 REC, 12 OCT-, 13 OCT+. Encoder ids: 0 SELECT, 1 ALGO, 2 PRESETS, 3..6 K1..K4.
@@ -114,6 +115,8 @@ while a key is held leaves no stuck note.
 | 0x57 | VALS_REQ | `mode` - 1.4 |
 | 0x58 | PSET | `mode, n x (id14, value s14)`, n 1..16 - 1.4 |
 | 0x59 | LVIEW_SET | `mode, page` - 1.5 |
+| 0x5C | SCENES | `total14, first, n, n x name(str)` (n 0..16, names of at most 8 characters) - 1.6 |
+| 0x5D | SCENE_STATE | `active14, queued14` (a scene 0..127, or 16383 = none) - 1.6 |
 
 Protocol 1.2 adds optional trailers (see "Protocol 1.2: where you are"): PAGE may end with
 `cursor item_idx14 item_count14 path(str)`, VALUE with `flags`.
@@ -965,6 +968,57 @@ sub-page, or on the sub-page it shows when the device is on that page already.
 
 Sizes: LVIEW is 9 to 17 bytes (F0 and F7 included), LVIEW_SET 8.
 
+## Protocol 1.6: the scene page
+
+RUN4's Sets (the app's scenes, up to 128) as a page of the FM-1: a grid of 16 scene numbers with short names, the white
+keys 1..16 recalling the scene they stand for. Backwards compatible: `proto_ver` stays 1, the firmware's HELLO says
+minor 6, and the host never sends SCENES or SCENE_STATE to a device that said a lower minor. A device that does not
+know the frames ignores them (a frame of ours it cannot parse is dropped and counted); a host that does not know
+SCENE_PICK ignores it. Nothing else changes: until SCENES arrives with `total` above 0 the FM-1 behaves exactly as before.
+
+* **SCENES** (host to device): `total14` the number of scenes the host offers (0..128; 0 = none, the page is closed and
+  not offered), `first` and `n` the names that follow (`n` 0..16, `first + n <= total`), each a `str` of at most 8
+  characters (Latin-1, as everywhere); an empty name shows the number alone. One frame is one bank of 16, so the whole
+  list is 8 frames at most. `total` is in every frame; the device keeps the names it has
+  and drops those at or above `total`. A frame with `n` 0 changes the count only. Bluetooth: one frame at a time, spaced
+  (see "The modes, and Bluetooth"). The names are the host's short forms; the device never edits them.
+* **SCENE_STATE** (host to device): `active14` the scene that is playing and `queued14` the one the host will switch to,
+  each 0..127 or 16383 for none. Sent after SCENES (a full sync, after SYNC_REQ) and at every change; a queued scene
+  that the host reports as active is reported with `queued` 16383. Both are the host's truth: the device only
+  anticipates (below).
+* **SCENE_PICK** (device to host): `scene` 0..127, the white key pressed. The host recalls that scene by its own rules
+  (RUN4 launches it as its own Set recall does; the FM-1 adds no quantisation, no timing of its own) and answers with
+  SCENE_STATE. A pick of a scene that is not below `total` is never sent. The device never sends a pick in any other
+  situation; nothing else is sent while the page is open that is not sent otherwise.
+
+**The page on the device** (firmware-local, like SETUP). **SEL + SEQ** opens it in RUN4 mode, but only when the host's
+HELLO_ACK said minor 6 or more and SCENES gave `total` above 0 (otherwise SEL + SEQ goes to the host as ever, as BTN).
+The press of SEQ stays local; the SEL press was already sent. It opens on the bank of the active scene. The 16 **white
+keys**, left to right, are scenes `bank * 16 + 1 .. bank * 16 + 16` (a key without a scene does nothing; no key plays a
+note while the page is open). **OCT-** / **OCT+** (without SHIFT) change the bank, not the octave, and stay local (they
+stop at the first and the last bank). Any page button (HOME ENV LFO FX EDIT GLO ARP SEQ) leaves and is not sent; SEL +
+GLO (SETUP) and SEL + HOME (the next mode) leave and then do what they always do. PLAY, REC and SAVE are sent as BTN as
+on any page. A host LIST, a new HELLO_ACK, a lost link or a mode switch close the page.
+
+The display: the header "SCENES" and "BANK n/N" in the accent, 4 x 4 cells with the scene's number (large) and its
+name; the active scene filled, a queued one with a blinking frame; empty cells where the bank has no scene. The key
+LEDs: the active scene's key on, the queued one blinking, the other scenes of the bank dim, the rest off (the host's
+key LEDs are not shown meanwhile). The device marks a scene it just sent as queued at once and clears the mark when
+SCENE_STATE arrives, or after 4 s if none does.
+
+Bytes, an example (40 scenes, the host's picks; the FM-1 opens the page and key 7 is pressed):
+
+```
+host -> FM-1  F0 7D 52 34 5C 00 28 00 10 05 "INTRO" 00 07 "VERSE A" ... F7    SCENES total 40, first 0, 16 names
+host -> FM-1  F0 7D 52 34 5C 00 28 10 10 ... F7                                bank 2
+host -> FM-1  F0 7D 52 34 5D 00 03 7F 7F F7                                    SCENE_STATE active 3, queued none
+FM-1 -> host  F0 7D 52 34 1B 06 F7                                             SCENE_PICK 6 (scene 7)
+host -> FM-1  F0 7D 52 34 5D 00 03 00 06 F7                                    queued 6 (the host is switching)
+host -> FM-1  F0 7D 52 34 5D 00 06 7F 7F F7                                    active 6
+```
+
+SCENE_PICK is 7 bytes, SCENE_STATE 10, SCENES 10 to 154 (at most 282 with names of accented letters only, far below 640).
+
 ## Connection
 
 1. On boot, and every second until HELLO_ACK: the device sends HELLO and shows "NOT CONNECTED". The keys send notes
@@ -990,6 +1044,8 @@ Sizes: LVIEW is 9 to 17 bytes (F0 and F7 included), LVIEW_SET 8.
   note it started with. MASTER still works while the page is open. The curve values are first guesses and need tuning
   on the device. SELECT or PRESETS turn to its second sub-page, VOICE BACKUP (protocol 1.3, "Patch backup"): K1
   BACKUP, K2 RESTORE, K3 shows how many user voices are stored; SAVE carries out the armed action there.
+* **Scene page** (protocol 1.6, local like SETUP): SEL + SEQ, in RUN4 mode with a host that sent scenes; the white keys
+  recall scenes 1..16 of the bank, OCT- / OCT+ the bank (see "Protocol 1.6: the scene page").
 * Everything else is forwarded as BTN / ENC / POT.
 * The lights are exactly what LEDS says; with no host, held keys light themselves.
 
@@ -1035,8 +1091,9 @@ the USB-only package. **Not verified on a device**: the simulator models the lin
 `proto_ver` is 1. A host should reject a HELLO with a `proto_ver` it does not know; unknown commands are ignored by
 the device. Minors so far: 1.0 (no minor byte), 1.1 (LIST, LIST_PICK), 1.2 (PAGE trailer, FOCUS, VALUE flags, the big
 value view), 1.3 (host voice, voice list, tape view, patch backup), 1.4 (local modes: list, switch, self-description,
-values, status line), 1.5 (the local mode's page: LVIEW, LVIEW_SET; the value pace 40 ms); the firmware's HELLO says
-5 (RUN4 CTL firmware 0.8 and 0.9: 0.9 adds DUB mode, id 3, with no new message). Both sides speak the lower of the two minors.
+values, status line), 1.5 (the local mode's page: LVIEW, LVIEW_SET; the value pace 40 ms), 1.6 (the scene page: SCENES,
+SCENE_STATE, SCENE_PICK); the firmware's HELLO says
+6 (5 in RUN4 CTL firmware 0.8 and 0.9: 0.9 adds DUB mode, id 3, with no new message). Both sides speak the lower of the two minors.
 
 ## Implementing RUN4 CTL in your own firmware or device
 
@@ -1086,5 +1143,5 @@ Do not put other data under `7D 52 34`, and check that your other SysEx does not
   (its port's identity) and hash. A kind, flag bit or frame the host does not know: it skips that parameter or frame
   and goes on (it does not drop the device). A malformed frame is dropped.
 * The host voice is used only after an HV_STATE answered HV_ON (no HV_STATE within a second: no host voice).
-* The host never sends 1.5 frames (LVIEW_SET) to a device that said a minor below 5, 1.4 frames below 4, nor 1.3
+* The host never sends 1.6 frames (SCENES, SCENE_STATE) to a device that said a minor below 6, 1.5 frames (LVIEW_SET) to a device that said a minor below 5, 1.4 frames below 4, nor 1.3
   frames below 3.

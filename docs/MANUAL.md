@@ -41,6 +41,13 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
   waveform with the loop region lit, the playhead (red while recording) and five level meters (T1 to T4 and the master,
   the focused track's in amber, a red cap when one clipped); the page's four values sit in a row under it, as in Synth
   mode. Turning a knob still shows its value large for a moment.
+* **Scene page** (with a RUN4 that speaks protocol 1.6). RUN4's Sets as a grid: SEL + SEQ opens it,
+  the 16 white keys recall Sets 1 to 16 of the bank, OCT- and OCT+ change the bank (16 Sets each, up to 128). The header
+  says BANK n/N, each cell the Set's number and its name; the active Set is filled, the one you just picked blinks
+  until RUN4 has switched. The white keys light the same way (active on, queued blinking, the other Sets dim) and play
+  no notes meanwhile. RUN4 switches the Set exactly as its own Sets menu does; the FM-1 adds no timing. Any page button
+  leaves (SEL + SEQ again too); PLAY, REC and SAVE work as ever. Without a RUN4 that offers Sets, SEL + SEQ does what
+  it always did (RUN4 sees it).
 * **LEDs** show what RUN4 tells them to. Without the app, a held key lights itself.
 * Keys still play without the app. If the app is not there, the screen says NOT CONNECTED and the notes go on.
 
@@ -543,7 +550,7 @@ The FM-1's controls keep the same meaning on every page. The **fixed layer**:
 | PLAY, REC | transport |
 | SAVE | Undo |
 | OCT-, OCT+ | shift the keys by an octave (local); also sent to RUN4 |
-| SEL | SHIFT: hold it for the second function of the other buttons |
+| SEL | SHIFT: hold it for the second function of the other buttons (SEL + HOME the next mode, SEL + GLO SETUP, SEL + SEQ the scene page) |
 
 The **page buttons** open the page of the same name: HOME, ENV, LFO, FX, EDIT, GLO, ARP, SEQ. What each page shows is decided
 by RUN4 and by the track you are on. Press HOME twice quickly for RUN4's mode list (Tape, Poly, Disc, Perform, TOLF): SELECT

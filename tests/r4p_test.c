@@ -720,9 +720,9 @@ static void t_v15(void)
     static const uint8_t SY_GLO2[] = {0xF0, 0x7D, 0x52, 0x34, 0x17, 0x01, 0x0B, 0x02, 0x01, 0x04, 0x01, 0x05, 0xF7};
     static const uint8_t SY_SEQ[] = {0xF0, 0x7D, 0x52, 0x34, 0x17, 0x01, 0x0D, 0x00, 0xF7};
     static const uint8_t SET_BELLS[] = {0xF0, 0x7D, 0x52, 0x34, 0x59, 0x02, 0x03, 0xF7};
-    CHECK(R4P_MINOR == 5);
+    CHECK(R4P_MINOR >= 5);
     n = r4p_hello(buf, sizeof buf, 0, 8, R4P_MODE_SYNTH);
-    CHECK(n == 11 && buf[9] == 5 && r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == 5);
+    CHECK(n == 11 && buf[9] == R4P_MINOR && r4p_parse(buf, n, &b) == 1 && b.u.hello.minor == R4P_MINOR);
     /* LVIEW: the exact bytes */
     memset(&m, 0, sizeof m);
     m.cmd = R4P_LVIEW; m.u.lview.mode = R4P_MID_AMB; m.u.lview.page = 1; m.u.lview.n = 4;
@@ -794,6 +794,76 @@ static void t_v15(void)
     m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 5; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 5);
 }
 
+/* protocol 1.6: the scene page (SCENES, SCENE_STATE, SCENE_PICK) */
+static void t_v16(void)
+{
+    r4p_msg_t m, b;
+    size_t n;
+    int i;
+    static const uint8_t PICK17[] = {0xF0, 0x7D, 0x52, 0x34, 0x1B, 0x11, 0xF7};
+    static const uint8_t STATE[] = {0xF0, 0x7D, 0x52, 0x34, 0x5D, 0x00, 0x03, 0x7F, 0x7F, 0xF7};
+    static const uint8_t SCN2[] = {0xF0, 0x7D, 0x52, 0x34, 0x5C, 0x00, 0x03, 0x00, 0x02, 0x04, 'V', 'E', 'R', 'S', 0x00, 0xF7};
+    CHECK(R4P_MINOR == 6 && R4P_SCENE_PICK == 0x1B && R4P_SCENES == 0x5C && R4P_SCENE_STATE == 0x5D);
+    /* SCENE_PICK: the index 0..127, exact bytes */
+    n = r4p_scene_pick(buf, sizeof buf, 17);
+    CHECK(n == sizeof PICK17 && !memcmp(buf, PICK17, n));
+    CHECK(r4p_parse(PICK17, sizeof PICK17, &b) == 1 && b.cmd == R4P_SCENE_PICK && b.u.b1.v == 17);
+    CHECK(r4p_scene_pick(buf, sizeof buf, 127) > 0 && r4p_scene_pick(buf, sizeof buf, 128) == 0);
+    {
+        uint8_t none[] = {0xF0, 0x7D, 0x52, 0x34, 0x1B, 0xF7};
+        uint8_t two[] = {0xF0, 0x7D, 0x52, 0x34, 0x1B, 0x01, 0x02, 0xF7};
+        CHECK(r4p_parse(none, sizeof none, &b) == -1 && r4p_parse(two, sizeof two, &b) == -1);
+    }
+    /* SCENE_STATE: active 3, queued none (16383 = 7F 7F) */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_SCENE_STATE; m.u.scene_state.active = 3; m.u.scene_state.queued = R4P_SCENE_NONE;
+    n = enc(&m);
+    CHECK(n == sizeof STATE && !memcmp(buf, STATE, n));
+    CHECK(r4p_parse(STATE, sizeof STATE, &b) == 1 && b.u.scene_state.active == 3 && b.u.scene_state.queued == R4P_SCENE_NONE);
+    m.u.scene_state.active = 127; m.u.scene_state.queued = 0;
+    CHECK(round_trip(&m, &b) == 1 && b.u.scene_state.active == 127 && b.u.scene_state.queued == 0);
+    m.u.scene_state.active = 128; CHECK(enc(&m) == 0);                               /* neither a scene nor NONE */
+    m.u.scene_state.active = 0; m.u.scene_state.queued = 200; CHECK(enc(&m) == 0);
+    {
+        uint8_t bad[] = {0xF0, 0x7D, 0x52, 0x34, 0x5D, 0x01, 0x00, 0x00, 0x00, 0xF7};   /* active 128 */
+        uint8_t shortf[] = {0xF0, 0x7D, 0x52, 0x34, 0x5D, 0x00, 0x03, 0x7F, 0xF7};
+        CHECK(r4p_parse(bad, sizeof bad, &b) == -1 && r4p_parse(shortf, sizeof shortf, &b) == -1);
+    }
+    /* SCENES: total 3, names 0..2 (VERS, "", rest of the frame is the name's own bytes) */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_SCENES; m.u.scenes.total = 3; m.u.scenes.first = 0; m.u.scenes.n = 2;
+    strcpy(m.u.scenes.name[0], "VERS"); m.u.scenes.name[1][0] = 0;
+    n = enc(&m);
+    CHECK(n == sizeof SCN2 - 0 && !memcmp(buf, SCN2, n - 1));                      /* (SCN2's tail is checked below) */
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.scenes.total == 3 && b.u.scenes.n == 2 && !strcmp(b.u.scenes.name[0], "VERS") &&
+          b.u.scenes.name[1][0] == 0);
+    /* the longest: 128 scenes, a bank of 16 names of 8 characters, Latin-1 intact */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_SCENES; m.u.scenes.total = 128; m.u.scenes.first = 112; m.u.scenes.n = 16;
+    for (i = 0; i < 16; i++) strcpy(m.u.scenes.name[i], "ABCDEFG\xD3");
+    n = enc(&m);
+    CHECK(n == 5 + 2 + 2 + 16 * (1 + 7 + 2) + 1 && r4p_parse(buf, n, &b) == 1 && b.u.scenes.first == 112 && b.u.scenes.n == 16 &&
+          !strcmp(b.u.scenes.name[15], "ABCDEFG\xD3") && b.u.scenes.total == 128);
+    /* the count alone (n 0) says how many there are; 0 means none */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_SCENES; m.u.scenes.total = 0;
+    CHECK(round_trip(&m, &b) == 1 && b.u.scenes.total == 0 && b.u.scenes.n == 0);
+    m.u.scenes.total = 128; CHECK(round_trip(&m, &b) == 1 && b.u.scenes.total == 128);
+    /* refused: more than 128, a window past the count, 17 names, a name too long on the wire */
+    m.u.scenes.total = 129; CHECK(enc(&m) == 0);
+    m.u.scenes.total = 20; m.u.scenes.first = 16; m.u.scenes.n = 5; CHECK(enc(&m) == 0);
+    m.u.scenes.total = 40; m.u.scenes.first = 0; m.u.scenes.n = 17; CHECK(enc(&m) == 0);
+    {
+        uint8_t longname[] = {0xF0, 0x7D, 0x52, 0x34, 0x5C, 0x00, 0x03, 0x00, 0x01, 0x09, 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 0xF7};
+        uint8_t trunc[] = {0xF0, 0x7D, 0x52, 0x34, 0x5C, 0x00, 0x03, 0x00, 0x02, 0x01, 'A', 0xF7};
+        uint8_t over[] = {0xF0, 0x7D, 0x52, 0x34, 0x5C, 0x00, 0x03, 0x00, 0x04, 0xF7};
+        CHECK(r4p_parse(longname, sizeof longname, &b) == -1 && r4p_parse(trunc, sizeof trunc, &b) == -1 &&
+              r4p_parse(over, sizeof over, &b) == -1);
+    }
+    /* the 1.6 HELLO_ACK / HELLO carry minor 6 */
+    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 6; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 6);
+}
+
 int main(void)
 {
     t_simple();
@@ -808,6 +878,7 @@ int main(void)
     t_v13();
     t_v14();
     t_v15();
+    t_v16();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

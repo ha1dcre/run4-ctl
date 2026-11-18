@@ -8,6 +8,7 @@
 #include "synth.c"
 #include "synth_ui.c"
 #include "tape_ui.c"
+#include "scenes.c"
 
 #define FW_MAJOR 0
 #define FW_MINOR 9
@@ -55,7 +56,7 @@ static struct {
     int8_t octave;                       /* -3 .. +3, local */
     r4p_enc_acc_t enc;
     uint16_t txq[TXQ_N];                 /* events not yet sent, oldest first (a stalled host): BTN (id << 1) | down,
-                                          * or LIST_PICK 0x8000 | action << 8 | index */
+                                          * LIST_PICK 0x8000 | action << 8 | index, or SCENE_PICK 0x4000 | scene */
     uint8_t host_minor;                  /* the host's protocol minor from its HELLO_ACK (0 = 1.0: no LIST) */
     uint8_t txq_n;
     uint8_t want_sync, want_pot;         /* owed after a HELLO_ACK */
@@ -67,6 +68,7 @@ static struct {
     uint32_t blink_at;
     uint32_t tx_deferred;                /* frames that found no room and waited (host-simulator check) */
     uint32_t notes_on, notes_off, frames_sent, frames_in, frames_bad;   /* host-simulator checks */
+    uint8_t btn_dn[14];                  /* BTN presses sent per button (host-simulator check; saturates) */
     /* protocol 1.3: answers owed to the host (sent behind the buttons, as there is room) */
     uint8_t want_hvstate;                /* HV_STATE */
     uint8_t names_next;                  /* the next VOICE_NAMES frame's first voice; 255 = none owed */
@@ -239,6 +241,8 @@ static void setup_open(int on)
 {
     if (on == ui.setup)
         return;
+    if (on)
+        scn_close();
     ui.setup = (uint8_t)on;
     if (bk.st == BK_ARMED || bk.st == BK_CONFIRM)    /* an armed BACKUP or a restore not yet written is forgotten */
         bk.st = BK_IDLE;
@@ -413,9 +417,12 @@ static void txq_flush(void)
     while (ctl.txq_n) {
         uint16_t e = ctl.txq[0];
         size_t n = (e & 0x8000u) ? r4p_list_pick(f, sizeof f, (uint8_t)(e & 0x7Fu), (uint8_t)((e >> 8) & 3u))
-                                 : r4p_btn(f, sizeof f, (uint8_t)(e >> 1), e & 1u);
+                 : (e & SCN_PICK_EVT) ? r4p_scene_pick(f, sizeof f, (uint8_t)(e & 0x7Fu))
+                                      : r4p_btn(f, sizeof f, (uint8_t)(e >> 1), e & 1u);
         if (!send_frame(f, n))
             return;
+        if (!(e & 0xC000u) && (e & 1u) && (e >> 1) < 14u && ctl.btn_dn[e >> 1] < 255u)
+            ctl.btn_dn[e >> 1]++;
         ctl.txq_n--;
         memmove(ctl.txq, ctl.txq + 1, ctl.txq_n * sizeof ctl.txq[0]);
     }
@@ -853,6 +860,7 @@ static int synth_step_rec(void);
  *   - the press acted as always (a page button opened its page first: the card explains that page). */
 static struct { uint8_t arm, shown, gone; uint32_t at, keys; } hc;
 static uint8_t hc_setup;                                 /* the button went down on the SETUP page */
+static uint8_t hc_scn;                                   /* ... or on the scene page */
 static uint8_t hc_turned;                                /* an encoder moved this frame */
 static int enc_get(int k)                                /* plat_enc, seen by the cards */
 {
@@ -998,6 +1006,7 @@ static void mode_switch(uint8_t to)
     db_boot_flag(to == MODE_DUB);
     if (bk_hold) ctl.setup_owed = 1; else plat_store_save(OBJ_SETUP, &setup, sizeof setup);
     ui.setup = 0;
+    ui.scn = 0;
     ui.list_open = 0;
     ui_connect(0);                                 /* a new HELLO, with the new mode, until the host answers */
     ctl.hello_at = plat_ms() - HELLO_MS;
@@ -1649,6 +1658,7 @@ static void input(void)
             hc.arm = (uint8_t)(k + 1u);                /* alone: its card in a second, if nothing else happens */
             hc.at = now;
             hc_setup = ui.setup;
+            hc_scn = ui.scn;
         }
         if (ctl.suppress & bit) {                      /* SETUP's: stays local until released */
             if (!(btn & bit)) ctl.suppress &= ~bit;
@@ -1663,6 +1673,20 @@ static void input(void)
                     list_pick(R4P_PICK_CANCEL);
                 continue;
             }
+            if (ui.scn) {                              /* 1.6: the scene page: OCT- / OCT+ the bank, a page button leaves */
+                if (!shift && (k == B_OCTDN || k == B_OCTUP)) {
+                    ctl.suppress |= bit;
+                    scn_bank(k == B_OCTUP ? 1 : -1);
+                    continue;
+                }
+                if (k == B_FX || k == B_ENV || k == B_LFO || k == B_EDIT || k == B_GLO || k == B_HOME || k == B_ARP || k == B_SEQ) {
+                    scn_close();
+                    if (!(shift && (k == B_GLO || k == B_HOME))) {   /* (SEL + GLO / HOME go on: SETUP, the next mode) */
+                        ctl.suppress |= bit;
+                        continue;
+                    }
+                }
+            }
             if (shift && k == B_GLO && !ui.setup) {    /* SEL + GLO opens the SETUP page; the press stays local */
                 setup_open(1);
                 ctl.suppress |= bit;
@@ -1674,6 +1698,12 @@ static void input(void)
                     setup_open(0);
                 else if (k == B_SAVE)
                     setup_save_press();
+                continue;
+            }
+            if (shift && k == B_SEQ && mode == MODE_RUN4 && ui.connected && ctl.host_minor >= 6 && scn_ready() &&
+                !ui.list_open) {                       /* SEL + SEQ: the scene page (1.6), only for a host that sent scenes */
+                ctl.suppress |= bit;
+                scn_open();
                 continue;
             }
             if (shift && k == B_HOME) {                /* SEL + HOME: the next mode, round: RUN4, SYNTH, AMB, DUB */
@@ -1741,6 +1771,10 @@ static void input(void)
     if (mode == MODE_DUB) {
         db_frame(keys, btn, now);
         return;
+    }
+    if (ui.scn) {                                      /* 1.6: the scene page takes the keys (none plays a note) */
+        scn_keys(keys);
+        keys = 0;
     }
     keys_poll(keys);
 
@@ -1863,11 +1897,13 @@ static void lights(void)
         if (s == R4P_LED_ON || (s == R4P_LED_BLINK && ctl.blink)) lb |= 1u << i;
         else if (s == R4P_LED_DIM) db |= 1u << i;
     }
-    for (i = 0; i < NKEYS && mode == MODE_RUN4; i++) {
+    for (i = 0; i < NKEYS && mode == MODE_RUN4 && !ui.scn; i++) {
         uint8_t s = ctl.leds.key[i];
         if (s == R4P_LED_ON || (s == R4P_LED_BLINK && ctl.blink)) lk |= 1u << i;
         else if (s == R4P_LED_DIM) dk |= 1u << i;
     }
+    if (ui.scn && mode == MODE_RUN4)
+        scn_lights(&lk, &dk, ctl.blink);               /* 1.6: the scene page's keys */
     if (mode == MODE_SYNTH)
         synth_lights(&lb, &lk, &db, &dk);
     else if (mode == MODE_AMB)
@@ -1916,7 +1952,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
             syn.bpm10 = m.u.status.bpm10;
         /* fallthrough */
     case R4P_PAGE: case R4P_VALUE: case R4P_TOAST: case R4P_LIST: case R4P_FOCUS:
-    case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS:
+    case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS: case R4P_SCENES: case R4P_SCENE_STATE:
         if (ui.connected && mode == MODE_RUN4)                              /* (frames before the ack are the previous session's) */
             ui_apply(&m);
         break;
@@ -2396,6 +2432,18 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "syn_arp")) *got = syn.arp_on;
     else if (!strcmp(what, "list")) *got = ui.list_open ? ui.list.sel + 1 : 0;
     else if (!strcmp(what, "host_minor")) *got = ctl.host_minor;
+    else if (!strncmp(what, "btn_dn", 6) && what[6]) *got = ctl.btn_dn[atoi(what + 6) % 14];   /* BTN presses sent (btn_dn9 = SEQ) */
+    else if (!strcmp(what, "scn")) *got = ui.scn;                           /* the scene page is open (1.6) */
+    else if (!strcmp(what, "scn_bank")) *got = scn.bank;
+    else if (!strcmp(what, "scn_ram")) *got = (int)sizeof scn;              /* the scene page's .bss, bytes */
+    else if (!strcmp(what, "scn_total")) *got = scn.total;
+    else if (!strcmp(what, "scn_active")) *got = scn.active == SCN_NONE ? -1 : scn.active;
+    else if (!strcmp(what, "scn_queued")) *got = scn.queued == SCN_NONE ? -1 : scn.queued;
+    else if (!strcmp(what, "scn_lit") || !strcmp(what, "scn_dim")) {        /* the key lights (a mask of the keys; the blink on) */
+        uint32_t lk = 0, dk = 0;
+        scn_lights(&lk, &dk, 1);
+        *got = (int)(what[4] == 'l' ? lk : dk);
+    }
     else if (!strcmp(what, "scope_frames")) *got = (int)sy.frames;         /* Synth mode's live frames drawn */
     else if (!strcmp(what, "scope_skipped")) *got = (int)sy.skipped;       /* ... with nothing to send (idle line) */
     else if (!strcmp(what, "scope_bpf")) *got = sy.frames ? (int)(sy.bytes / sy.frames) : 0;   /* bytes a frame */

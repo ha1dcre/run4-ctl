@@ -25,6 +25,14 @@ static int help_lines(uint32_t b, const char *l[HELP_LINES], const char **tag)
         else { L("LEAVES THE SETUP PAGE"); L("SELECT: ITS FOUR SUB-PAGES"); }
         return n;
     }
+    if (hc_scn && b != B_SEL) {               /* pressed on the scene page (1.6) */
+        *tag = "SCENES";
+        if (b == B_OCTDN) { L("PREVIOUS BANK OF 16"); L("SCENES (NOT THE OCTAVE)"); }
+        else if (b == B_OCTUP) { L("NEXT BANK OF 16"); L("SCENES (NOT THE OCTAVE)"); }
+        else if (b == B_PLAY || b == B_REC || b == B_SAVE) { L("AS EVER: RUN4'S"); L(b == B_PLAY ? "PLAY" : b == B_REC ? "REC" : "UNDO"); }
+        else { L("LEAVES THE SCENE PAGE"); L("WHITE KEYS 1-16 RECALL A"); L("SCENE OF THE BANK"); }
+        return n;
+    }
 #if R4_AMB
     if (mode == MODE_AMB) {
         *tag = "AMB";
@@ -113,8 +121,8 @@ static int help_lines(uint32_t b, const char *l[HELP_LINES], const char **tag)
     case B_SAVE: L("RUN4'S UNDO"); break;
     case B_OCTDN: L("THE KEYS AN OCTAVE DOWN"); L("(RUN4 IS TOLD TOO)"); break;
     case B_OCTUP: L("THE KEYS AN OCTAVE UP"); L("(RUN4 IS TOLD TOO)"); break;
-    case B_SEL: L("SHIFT: RUN4'S SECOND"); L("FUNCTIONS"); L("SEL+HOME: NEXT MODE (SYNTH)"); L("SEL+GLO: SETUP"); break;
-    default: L("OPENS RUN4'S PAGE OF"); L("THIS NAME; RUN4 DECIDES"); L("WHAT IT SHOWS"); break;
+    case B_SEL: L("SHIFT: RUN4'S SECOND"); L("FUNCTIONS"); L("SEL+HOME: NEXT MODE (SYNTH)"); L("SEL+GLO: SETUP"); L("SEL+SEQ: SCENES"); break;
+    default: L("OPENS RUN4'S PAGE OF"); L("THIS NAME; RUN4 DECIDES"); L("WHAT IT SHOWS"); if (b == B_SEQ) L("SEL+SEQ: SCENES"); break;
     }
     return n;
 #undef L

@@ -35,6 +35,7 @@ typedef struct {
     uint8_t amb;                    /* AMB mode, 1 (amb_ui.c draws the header and the band), or DUB mode, 2 (dub_ui.c) */
     uint8_t card;                   /* a help card is up: its button + 1 (app.c, help.c) */
     uint8_t list_open;              /* a host LIST is shown (protocol 1.1) */
+    uint8_t scn;                    /* the scene page is open (protocol 1.6, scenes.c) */
     r4p_list_t list;
     r4p_page_t setup_page;          /* what it shows (app.c fills it) */
     /* protocol 1.2 (a host that said minor 2): the big value view */
@@ -49,6 +50,11 @@ static void tv_reset(void);                 /* tape_ui.c: the tape view (protoco
 static int tv_layout(void);
 static void tv_draw(uint32_t now);
 static void tv_apply(const r4p_msg_t *m);
+static void scn_reset(void);                /* scenes.c: the scene page (protocol 1.6) */
+static void scn_draw(void);
+static void scn_tick(uint32_t now);
+static void scn_apply(const r4p_msg_t *m);
+static void scn_close(void);
 
 static void ui_reset_page(void)
 {
@@ -70,6 +76,7 @@ static void ui_connect(int on)
     }
     ui_reset_page();
     ui.list_open = 0;
+    scn_reset();
     ui.big1 = ui.touch1 = 0;
     memset(&ui.st, 0, sizeof ui.st);
     tv_reset();                                     /* (1.3: the host sends the tape view again after its SYNC_REQ) */
@@ -480,6 +487,16 @@ static void ui_draw(void)
         ui.dirty = 0;
         return;
     }
+    if (ui.scn && ui.connected && !ui.local && !ui.setup) {      /* 1.6: the scene page */
+        scn_tick(now);
+        if (ui.dirty & (D_ALL | D_TILES | D_FOOT | D_HEAD | D_TOAST)) {
+            scn_draw();
+            if (ui.toast_until)
+                draw_toast();
+        }
+        ui.dirty = 0;
+        return;
+    }
     if (!ui.connected && !ui.local && !ui.setup) {
         uint8_t ph = (uint8_t)((now / 500u) & 3u);
         if (ph != ui.dots) {
@@ -551,6 +568,8 @@ static void ui_apply(const r4p_msg_t *m)
     case R4P_LIST:                                             /* total 0 closes the list */
         ui.list = m->u.list;
         ui.list_open = m->u.list.total > 0;
+        if (ui.list_open)
+            scn_close();                                       /* (1.6: a host list takes the screen) */
         ui.dirty = D_ALL;
         break;
     case R4P_PAGE:
@@ -601,6 +620,9 @@ static void ui_apply(const r4p_msg_t *m)
         break;
     case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS:   /* 1.3 */
         tv_apply(m);
+        break;
+    case R4P_SCENES: case R4P_SCENE_STATE:                     /* 1.6 */
+        scn_apply(m);
         break;
     default:
         break;
