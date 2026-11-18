@@ -296,6 +296,8 @@ typedef struct {
     uint8_t held;                            /* kept sounding by the sustain pedal after its key came up */
     uint8_t at;                              /* its key's pressure (poly aftertouch), 0..127 */
     uint8_t ofs;                             /* it started this many frames into a sub-block: its output that much later */
+    uint8_t fade;                            /* stolen or shed: SYN_FADE sub-blocks down to silence, then free (0: none) */
+    uint8_t pend, pend_note, pend_vel;       /* a note that takes this voice once its fade is done (pend: 1) */
     uint32_t age;
     int32_t carry[FM6_N];                    /* (ofs > 0) the last ofs frames of its sub-block, for the next one */
 } syn_voice_t;
@@ -360,7 +362,9 @@ static int32_t syn_lock_base(uint32_t id)     /* the base value a lock overrides
 static volatile uint8_t syn_shed;            /* the overload guard's step now, 0 = everything (below: syn_shed_calm) */
 static volatile uint8_t syn_arena_mine = 1;  /* Synth mode / the host voice own the mode arena (not AMB mode) */
 /* the effects' amounts for one block, the locks on top (the render sets it once a block) */
-static struct { int32_t drive, chorus, dly_mix, dly_div, dly_fb, rev_mix, rev_size; } fxv;
+static struct { int32_t drive, chorus, dly_mix, dly_div, dly_fb, rev_mix, rev_size; uint32_t dly_tt; } fxv;
+static uint32_t syn_step_samples(uint32_t rate);
+static const uint8_t DLY_DIV16[6];
 static void syn_fxv(void)
 {
     fxv.drive = syn_lkv(LK_DRIVE, syn.drive);
@@ -372,6 +376,10 @@ static void syn_fxv(void)
     fxv.rev_size = syn_lkv(LK_REVSIZE, syn.rev_size);
     if (syn_shed >= 3u)                      /* (the overload guard's third step) */
         fxv.chorus = fxv.dly_mix = 0;
+    if (fxv.dly_mix) {                       /* the delay's time (a divide: once a sub-block, not each frame) */
+        uint32_t tn = syn_step_samples(1) * DLY_DIV16[(uint32_t)fxv.dly_div % 6u];
+        fxv.dly_tt = tn > R4_SYN_DLY_N - 1u ? R4_SYN_DLY_N - 1u : tn;
+    }
 }
 
 /* the morph's snapshot (0 = A, 1 = B) of a setting set's values now */
@@ -428,6 +436,8 @@ static void syn_morph(uint32_t n)
     syn_mo.mask = m;
 }
 
+static uint32_t syn_cm_voice(const uint8_t *p);
+static uint32_t syn_cm_vcost;                /* (the cost model, below) */
 static void syn_sync(void)                   /* the patch, with the macros; once per block when something changed */
 {
     uint8_t *p = syn_eff;
@@ -453,6 +463,7 @@ static void syn_sync(void)                   /* the patch, with the macros; once
             op[FP_R1 + j] = (uint8_t)syn_clamp(op[FP_R1 + j] + meg, 0, 99);        /* env speed: all operators */
     }
     fm6_lfo_reset(&syn_lfo, p);
+    syn_cm_vcost = syn_cm_voice(p);
     syn_dirty = 0;
 }
 
@@ -463,23 +474,140 @@ static void syn_voice_off(syn_voice_t *v)
     v->held = 0;
 }
 static uint32_t syn_vmax(void);
-static syn_voice_t *syn_alloc(void)          /* a free voice, else the oldest released one, else the oldest (of syn_vmax) */
+/* ------------------------------------------------------- the cost model --- */
+/* The render's cost, so that a chord cannot take the audio interrupt past its time (the overload guard below only
+ * answers a block that was already late, and the voices it stops are cut). In instructions of a 256-frame block, as
+ * tools/cycles.py measures them (tests/cycles/cyc_bench.c: this engine built for a Cortex-M4F at -O2 and counted in an
+ * emulator; its voices' loops come within ~15 % of the FM-1's own pi32v2 build, CI's disassembly: fm6_op_run 17
+ * instructions a frame there, 19.5 here). Each constant is the measurement rounded up. The FM-1 takes more than one
+ * cycle an instruction (the flash's cache, its waits, the multiplier, the interrupts in between): syn_cm_k, cycles per
+ * instruction in 1/256, starts at SYN_CM_K0 (what the owner's FM-1 showed: eight TINE EP voices with the plate went
+ * past the block, DUB mode's busiest blocks reached 90 %) and follows the render's own measured time (syn_cm_seen,
+ * app.c). A new voice starts only while the block's estimate stays under 80 % of the budget (SYN_CM_ADMIT); past 95 %
+ * (SYN_CM_FORCE: the measured cost grew, the effects came on) a sounding voice fades out, one a sub-block. */
+#define SYN_CM_BUDGET 2089795u               /* cycles a block: 256 frames at 44.1 kHz, 360 MHz */
+#define SYN_CM_BASE 24000u                   /* the render without a voice or an effect */
+#define SYN_CM_VOICE 15500u                  /* a voice besides its operators: envelopes, pitch, DC blocker, mix, done */
+#define SYN_CM_OP 5100u                      /* an operator over the block (fm6_op_run) */
+#define SYN_CM_OPFB 7000u                    /* the feedback operator (fm6_op_fb) */
+#define SYN_CM_NOTE 1500u                    /* a note started (its envelopes and pitches set up) */
+#define SYN_CM_ROOM 4u                       /* notes a block may still start past the cap's check (owed by fades) */
+#define SYN_CM_DRIVE 31000u
+#define SYN_CM_CHORUS 17000u
+#define SYN_CM_DELAY 22000u
+#define SYN_CM_PLATE 187000u                 /* the plate reverb */
+#define SYN_CM_PLATE_LT 158000u              /* the plate without its input diffusers (the guard's step 1) */
+#define SYN_CM_K0 768u                       /* 3.0 cycles an instruction (above) */
+#define SYN_CM_KMIN 512u                     /* 2.0 */
+#define SYN_CM_KMAX 1536u                    /* 6.0 */
+#define SYN_CM_ADMIT 205u                    /* 80 % of the budget, in 1/256 */
+#define SYN_CM_FORCE 243u                    /* 95 % */
+#define SYN_FADE 2u                          /* a stolen or shed voice's fade, sub-blocks: 1.45 ms */
+static uint32_t syn_cm_k = SYN_CM_K0;
+static uint32_t syn_cm_vcost = SYN_CM_VOICE + 5u * SYN_CM_OP + SYN_CM_OPFB;   /* a voice of the patch (syn_sync) */
+static uint32_t syn_cm_used;                 /* the estimate of what the last render call ran (syn_cm_seen) */
+static uint32_t syn_cm_notes;                /* notes started in this render call (their set-up counts against the cap) */
+static uint32_t syn_cm_fixed(void);          /* the effects on now (below the effects) */
+/* a voice of patch p (the effects' macros applied) at its heaviest: every operator that can sound renders */
+static uint32_t syn_cm_voice(const uint8_t *p)
 {
-    uint32_t i, vm = syn_vmax();
+    uint32_t alg = p[FP_ALG] & 31u, car = fm6_carriers(alg), k, c = SYN_CM_VOICE;
+    int mods_up = syn.bright > 0 || syn.at_depth > 0 || (syn_lk.mask | syn_mo.mask) != 0;
+    for (k = 0; k < 6u; k++) {
+        const uint8_t *op = p + k * FP_OP;
+        int silent = !op[FP_OL] && !op[FP_LD] && !op[FP_RD] && ((car >> k) & 1u || !mods_up);
+        if (silent)
+            continue;
+        c += (FM6_ALG[alg][k] & 0xc0u) == 0xc0u && p[FP_FB] ? SYN_CM_OPFB : SYN_CM_OP;
+    }
+    return c;
+}
+/* the voices that fit beside the effects under share/256 of the budget (at least one) */
+static uint32_t syn_cm_fit(uint32_t share)
+{
+    uint32_t lim = SYN_CM_BUDGET / 256u * share / syn_cm_k * 256u, n,
+             fixed = syn_cm_fixed() + (syn_cm_notes + (share == SYN_CM_ADMIT ? SYN_CM_ROOM : 0u)) * SYN_CM_NOTE;
+    n = lim > fixed + syn_cm_vcost ? (lim - fixed) / syn_cm_vcost : 1u;
+    return n < 1u ? 1u : n;
+}
+static uint32_t syn_cap(void)                /* the voices a new note may make: the guard's and the model's */
+{
+    uint32_t m = syn_cm_fit(SYN_CM_ADMIT), v = syn_vmax();   /* (fit: with room for the set-up of SYN_CM_ROOM notes
+                                              * more in the block, the ones a fade owes) */
+    return m < v ? m : v;
+}
+/* the render's measured time for its last call (app.c, Synth mode): cycles against what it estimated it ran. Rises at
+ * once by a quarter of the way, falls slowly (a sixty-fourth): an interrupt in between only makes it careful */
+static void syn_cm_seen(uint32_t cycles)
+{
+    uint32_t used = syn_cm_used, r;
+    if (used < SYN_CM_BUDGET / 16u || !cycles)   /* (too little run to tell the overhead from the voices) */
+        return;
+    r = cycles >= 0x00FFFFFFu ? SYN_CM_KMAX : cycles * 256u / used;
+    r = r < SYN_CM_KMIN ? SYN_CM_KMIN : r > SYN_CM_KMAX ? SYN_CM_KMAX : r;
+    if (r > syn_cm_k)
+        syn_cm_k += (r - syn_cm_k + 3u) / 4u;
+    else
+        syn_cm_k -= (syn_cm_k - r) / 64u;
+}
+static uint32_t syn_sounding(void)           /* the voices live and not fading */
+{
+    uint32_t i, c = 0;
+    for (i = 0; i < SYN_VOICES; i++)
+        c += syn_v[i].n.live && !syn_v[i].fade;
+    return c;
+}
+/* the voice to give up: a released one before a held one, the oldest; one already fading or owed a note not again */
+static syn_voice_t *syn_victim(void)
+{
     syn_voice_t *best = 0;
-    for (i = 0; i < vm; i++)
-        if (!syn_v[i].n.live)
-            return &syn_v[i];
-    for (i = 0; i < vm; i++)
-        if (!syn_v[i].key && !syn_v[i].held && (!best || syn_v[i].age < best->age))
-            best = &syn_v[i];
-    if (best)
-        return best;
-    best = &syn_v[0];
-    for (i = 1; i < vm; i++)
-        if (syn_v[i].age < best->age)
-            best = &syn_v[i];
+    uint32_t i, pass;
+    for (pass = 0; pass < 2u && !best; pass++)
+        for (i = 0; i < SYN_VOICES; i++) {
+            syn_voice_t *v = &syn_v[i];
+            if (!v->n.live || v->fade || (!pass && (v->key || v->held)))
+                continue;
+            if (!best || v->age < best->age)
+                best = v;
+        }
     return best;
+}
+static void syn_fade_out(syn_voice_t *v)
+{
+    v->fade = SYN_FADE;
+    v->key = v->held = 0;
+}
+static void syn_start(syn_voice_t *v, uint8_t note, uint8_t vel, uint32_t ofs, int retrig);
+/* a voice for a new note (the same note's own is taken before): a free one while the voices rendering (the fading
+ * ones too) stay under the cap, else the oldest released one fades and the note takes its place once the fade is done
+ * (1.45 ms later) */
+static syn_voice_t *syn_alloc(uint8_t note, uint8_t vel)
+{
+    uint32_t i, n = 0;
+    syn_voice_t *v, *free_v = 0;
+    for (i = 0; i < SYN_VOICES; i++) {
+        if (!syn_v[i].n.live) {
+            if (!free_v)
+                free_v = &syn_v[i];
+        } else {
+            n++;
+        }
+    }
+    if (free_v && n < syn_cap())
+        return free_v;
+    v = syn_victim();
+    if (!v) {                                /* every voice fading already: the oldest owes the note */
+        for (i = 0; i < SYN_VOICES; i++)
+            if (syn_v[i].n.live && (!v || syn_v[i].age < v->age))
+                v = &syn_v[i];
+        if (!v)
+            return free_v;
+    }
+    syn_fade_out(v);
+    v->pend = 1;
+    v->pend_note = note;
+    v->pend_vel = vel;
+    return 0;
 }
 static int32_t syn_vel(int32_t vel)
 {
@@ -490,29 +618,45 @@ static uint8_t syn_ev_ofs;                    /* a placed note-on's frame in the
 static void syn_note_on_now(uint8_t note, uint8_t vel)
 {
     syn_voice_t *v;
-    uint32_t i, k;
-    int32_t t;
+    uint32_t i;
     if (syn_dirty)
         syn_sync();
     for (i = 0; i < SYN_VOICES; i++)            /* the same note again: retrigger its voice */
         if (syn_v[i].n.live && syn_v[i].note == note && syn_v[i].key)
             break;
-    v = i < SYN_VOICES ? &syn_v[i] : syn_alloc();
+    if (i < SYN_VOICES) {
+        syn_start(&syn_v[i], note, vel, syn_ev_ofs, 1);
+        return;
+    }
+    for (i = 0; i < SYN_VOICES; i++)            /* (a note owed a fading voice and played again: once is enough) */
+        if (syn_v[i].pend && syn_v[i].pend_note == note)
+            syn_v[i].pend = 0;
+    v = syn_alloc(note, vel);
+    if (v)
+        syn_start(v, note, vel, syn_ev_ofs, 0);
+}
+/* the note in voice v (free, or its own note's again: retrig), its output ofs frames into the sub-block */
+static void syn_start(syn_voice_t *v, uint8_t note, uint8_t vel, uint32_t ofs, int retrig)
+{
+    uint32_t k;
+    int32_t t;
     if (!v->n.live)                             /* (sample-accurate starts: what it still owes from before, or nothing) */
         memset(v->carry, 0, sizeof v->carry);
     else
         for (k = v->ofs; k < FM6_N; k++)
             v->carry[k] = 0;
-    v->ofs = syn_ev_ofs;
+    v->ofs = (uint8_t)ofs;
     t = (int32_t)note + syn.transpose + syn_eff[FP_TRNSP] - 24;
-    fm6_note_init(&v->n, syn_eff, t, syn_vel(vel), i == SYN_VOICES && !v->n.live);
-    if (i == SYN_VOICES && v->n.live)           /* stolen: start from silence, not from the old note's phases */
-        fm6_note_init(&v->n, syn_eff, t, syn_vel(vel), 1);
+    fm6_note_init(&v->n, syn_eff, t, syn_vel(vel), !retrig);   /* (a new voice from silence; its own note keeps going) */
     v->note = note;
     v->key = 1;
     v->held = 0;
     v->at = 0;
+    v->fade = 0;
+    v->pend = 0;
     v->age = ++syn_age;
+    syn_cm_used += SYN_CM_NOTE;
+    syn_cm_notes++;
     fm6_lfo_key(&syn_lfo);
 }
 static void syn_note_off_now(uint8_t note)
@@ -520,6 +664,8 @@ static void syn_note_off_now(uint8_t note)
     uint32_t i;
     for (i = 0; i < SYN_VOICES; i++) {
         syn_voice_t *v = &syn_v[i];
+        if (v->pend && v->pend_note == note)    /* let go before its voice was free: it starts held, or not at all */
+            v->pend = syn_sustain ? 2u : 0u;
         if (v->n.live && v->key && v->note == note) {
             if (syn_sustain) {
                 v->key = 0;
@@ -533,18 +679,23 @@ static void syn_note_off_now(uint8_t note)
 static void syn_all_off_now(void)
 {
     uint32_t i;
-    for (i = 0; i < SYN_VOICES; i++)
+    for (i = 0; i < SYN_VOICES; i++) {
+        syn_v[i].pend = 0;
         if (syn_v[i].n.live)
             syn_voice_off(&syn_v[i]);
+    }
 }
 static void syn_sustain_now(uint8_t on)
 {
     uint32_t i;
     syn_sustain = on;
     if (!on)
-        for (i = 0; i < SYN_VOICES; i++)
+        for (i = 0; i < SYN_VOICES; i++) {
+            if (syn_v[i].pend == 2u)
+                syn_v[i].pend = 0;
             if (syn_v[i].n.live && syn_v[i].held)
                 syn_voice_off(&syn_v[i]);
+        }
 }
 
 /* ---------------------------------------------------------- event ring --- */
@@ -685,12 +836,18 @@ static void syn_seq_start(int run) { sq_start(run); }
 /* --------------------------------------------------------- overload guard --- */
 /* When a render runs late (fm1-base calls app_overload when a block took over 90 % of its time: device/main_fm1.c), the
  * sound sheds load a step at a time: 1 the plate without its input diffusers, 2 six voices, 3 no chorus and no delay, 4
- * four voices. A step comes back after SHED_CALM_MS of renders under SHED_CALM_PM of their time (hysteresis: well
- * below where it triggered); the effects' lines start from silence again. The render's own time is measured by the
- * app (app.c app_render) and handed to syn_shed_calm. Audio context; the main loop only reads syn_shed. */
+ * four voices; a render over SHED_EARLY_PM of its time sheds a step as well, quietly. A step comes back after
+ * SHED_CALM_MS of renders under SHED_CALM_PM of their time (hysteresis: well below where it triggered); the effects'
+ * lines start from silence again, the voices over a step's number fade out (the render, one a sub-block). The render's
+ * own time is measured by the app (app.c app_render) and handed to syn_shed_calm. Audio context; the main loop only
+ * reads syn_shed. */
 #define SHED_MAX 4u
 #define SHED_CALM_MS 3000u
-#define SHED_CALM_PM 500u                    /* 50 % of a block's time */
+#define SHED_CALM_PM 600u                    /* 60 % of a block's time (firmware 0.9.2: was 50 %; the early step below
+                                              * must not keep a normal load's peaks on step 1 for good) */
+#define SHED_EARLY_PM 850u                   /* a render over 85 % of its own time sheds a step too, before it is late
+                                              * (USB audio and the interrupts take the rest); only a late one, fm1-base's
+                                              * app_overload at 90 % of the whole half, says CPU HIGH */
 static volatile uint8_t syn_shed_hit;        /* app_overload: a late render since the last block */
 static uint32_t syn_shed_calm_smp, syn_shed_peak;
 static uint32_t syn_vmax(void) { return syn_shed >= 4u ? 4u : syn_shed >= 2u ? 6u : 8u; }
@@ -708,6 +865,14 @@ static void syn_shed_calm(uint32_t n, uint32_t load_pm)
                 syn_shed_peak = syn_shed;
             syn_shed_step();
         }
+        return;
+    }
+    if (load_pm >= SHED_EARLY_PM && syn_shed < SHED_MAX) {
+        syn_shed_calm_smp = 0;
+        syn_shed++;
+        if (syn_shed > syn_shed_peak)
+            syn_shed_peak = syn_shed;
+        syn_shed_step();
         return;
     }
     if (!syn_shed)
@@ -801,8 +966,7 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
         r = x + r4_muldiv_s32(b - x, fxv.chorus, 200);
     }
     if (fxv.dly_mix) {                         /* a ping-pong: L feeds R, R feeds L */
-        uint32_t div16 = DLY_DIV16[(uint32_t)fxv.dly_div % 6u], tn = syn_step_samples(1) * div16 / 1u;
-        uint32_t tt = tn > DLY_N - 1u ? DLY_N - 1u : tn;
+        uint32_t tt = fxv.dly_tt;            /* (syn_fxv) */
         int32_t xl = fx_dly[0][(fx_st.dw - tt) % DLY_N], xr = fx_dly[1][(fx_st.dw - tt) % DLY_N];
         int32_t dl = xl << 8, dr = xr << 8;
         int32_t fb = fxv.dly_fb * 640 / 100;   /* up to 0.62 */
@@ -818,18 +982,35 @@ static void fx_run(int32_t in, int32_t *outl, int32_t *outr, int32_t *dry)
     *outr = r;
 }
 
-/* a shed step taken or given back (audio context): voices over the limit stop; effects coming back start silent */
+/* a shed step taken or given back (audio context): voices over the limit fade out (the render, one a sub-block);
+ * effects coming back start silent */
 static void syn_shed_step(void)
 {
-    uint32_t i, vm = syn_vmax();
-    for (i = vm; i < SYN_VOICES; i++)
-        syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0;
+    static uint8_t was;
     if (syn_shed == 0u && fx_st.rev_was)    /* the plate's diffusers come back: from silence (no stale echoes) */
         fx_st.rev_was = 0;
-    if (syn_shed == 2u && syn_arena_mine) { /* (from 3: the chorus and the delay come back; not while AMB owns the arena) */
+    if (syn_shed == 2u && was == 3u && syn_arena_mine) {   /* (from 3: the chorus and the delay come back; not while AMB
+                                             * owns the arena. Not on the way up from 1: they still sound then, and an
+                                             * overloaded block is no place for 66 KB of stores) */
         memset(fx_dly, 0, FX_DLY_BYTES);
         memset(fx_cho, 0, FX_CHO_BYTES);
     }
+    was = syn_shed;
+}
+
+/* the effects' and the render's own cost (the cost model, above), as syn_fxv set them for this block */
+static uint32_t syn_cm_fixed(void)
+{
+    uint32_t c = SYN_CM_BASE;
+    if (fxv.drive)
+        c += SYN_CM_DRIVE;
+    if (fxv.chorus)
+        c += SYN_CM_CHORUS;
+    if (fxv.dly_mix)
+        c += SYN_CM_DELAY;
+    if (fxv.rev_mix)
+        c += syn_shed >= 1u ? SYN_CM_PLATE_LT : SYN_CM_PLATE;
+    return c;
 }
 
 /* ---------------------------------------------------------- the render --- */
@@ -892,7 +1073,7 @@ static void syn_apply_event(const syn_ev_t *e)
     case 6: {
         uint32_t i;
         for (i = 0; i < SYN_VOICES; i++)
-            syn_v[i].n.live = 0;
+            syn_v[i].n.live = 0, syn_v[i].fade = syn_v[i].pend = 0;
         syn_arp_clear();
         syn_sq.arp_note_on = 255;
         sq.n_notes = 0;
@@ -963,6 +1144,23 @@ static volatile uint32_t syn_scope_w;
 /* n frames (a multiple of 32) of the synth into lr[2 * n] (24-bit range, master 0..4096 = 0..1) */
 static uint32_t syn_active_voices;
 static volatile uint8_t syn_hold;            /* the main loop swaps the settings (syn_swap): the render stays silent */
+/* a voice done (rung out, or its fade over): free, or the note it owes starts in it (from the next sub-block), if the
+ * cap still has room for it (a burst of notes struck at once keeps the last ones the cap allows) */
+static void syn_voice_end(syn_voice_t *v)
+{
+    v->n.live = 0;
+    v->fade = 0;
+    if (v->pend && syn_sounding() >= syn_cap())
+        v->pend = 0;
+    if (v->pend) {
+        uint8_t held = v->pend == 2u;
+        syn_start(v, v->pend_note, v->pend_vel, 0, 0);
+        if (held) {                          /* (its key came up meanwhile, the pedal down: as if it had sounded) */
+            v->key = 0;
+            v->held = 1;
+        }
+    }
+}
 static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t b, i, k;
@@ -970,6 +1168,8 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         memset(lr, 0, 2u * n * sizeof lr[0]);
         return;
     }
+    syn_cm_notes = syn_cm_used = 0;
+    syn_fxv();                               /* (the effects as they are now: the notes below take the cap from them) */
     while (syn_evt != syn_evh) {
         syn_apply_event(&syn_ev[syn_evt]);
         syn_evt = (uint8_t)((syn_evt + 1u) % SYN_EVQ);
@@ -977,7 +1177,7 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
     syn_morph(n);
     for (b = 0; b + FM6_N <= n; b += FM6_N) {
         int32_t mix[FM6_N], bus[FM6_N], lfo_v, lfo_d, lf_fine = syn.tune * 2366 / 1000, fb;
-        uint32_t live = 0;
+        uint32_t live = 0, computed = 0;
         syn_timed_due(b, b + FM6_N);
         if (syn_dirty)
             syn_sync();
@@ -987,6 +1187,15 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         lfo_d = fm6_lfo_delay(&syn_lfo);
         fb = syn_eff[FP_FB];
         memset(mix, 0, sizeof mix);
+        {   /* the cost model's ceiling (95 %) and the guard's voices: one voice over them fades out a sub-block */
+            uint32_t lim = syn_cm_fit(SYN_CM_FORCE), vm = syn_vmax();
+            if (syn_sounding() > (vm < lim ? vm : lim)) {
+                syn_voice_t *x = syn_victim();
+                if (x)
+                    syn_fade_out(x);
+            }
+        }
+        fm6_n_op = fm6_n_fb = 0;
         for (k = 0; k < SYN_VOICES; k++) {
             syn_voice_t *v = &syn_v[k];
             int32_t lf, lvl = syn_clamp(syn_lkv(LK_BRIGHT, syn.bright), -64, 63) * 24;
@@ -995,9 +1204,10 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             if (syn.at_depth)                /* pressure opens the modulators: up to at_depth BRIGHT steps */
                 lvl += (int32_t)(v->at > syn_chan_at ? v->at : syn_chan_at) * syn_clamp(syn.at_depth, 0, 63) * 24 / 127;
             lf = fm6_note_logfreq(((int32_t)v->note + syn.transpose + syn_eff[FP_TRNSP] - 24) * 16 + syn_bend, lf_fine);
+            computed++;
             if (!fm6_note_compute(&v->n, syn_eff, bus, lfo_v, lfo_d, lf, syn_eff_alg, fb, syn_dt, lvl << 16)) {
                 if (fm6_note_done(&v->n, syn_eff, syn_eff_alg) || !v->key)
-                    v->n.live = 0;
+                    syn_voice_end(v);
                 continue;
             }
             live++;
@@ -1005,6 +1215,11 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
                 int32_t x = bus[i] - v->n.dc;
                 v->n.dc += x >> 10;           /* the one-pole high-pass of eng_fm6.c: FM puts sidebands at 0 Hz */
                 bus[i] = x >> 4;
+            }
+            if (v->fade) {                    /* stolen or shed: a straight line down to silence over SYN_FADE sub-blocks */
+                int32_t g = (int32_t)(v->fade * FM6_N);
+                for (i = 0; i < FM6_N; i++)
+                    bus[i] = bus[i] * (g - (int32_t)i) / (int32_t)(SYN_FADE * FM6_N);
             }
             if (!v->ofs) {
                 for (i = 0; i < FM6_N; i++)
@@ -1018,9 +1233,13 @@ static void syn_render(int32_t *lr, uint32_t n, uint32_t master_q12)
                 for (i = 0; i < o; i++)
                     v->carry[i] = bus[FM6_N - o + i];
             }
-            if (fm6_note_done(&v->n, syn_eff, syn_eff_alg))
-                v->n.live = 0;
+            if (v->fade && !--v->fade)
+                syn_voice_end(v);
+            else if (fm6_note_done(&v->n, syn_eff, syn_eff_alg))
+                syn_voice_end(v);
         }
+        syn_cm_used += (syn_cm_fixed() + computed * SYN_CM_VOICE + fm6_n_op * SYN_CM_OP + fm6_n_fb * SYN_CM_OPFB) /
+                       (256u / FM6_N);
         syn_active_voices = live;
         if (live > syn_voices_peak)
             syn_voices_peak = live;
@@ -1094,7 +1313,7 @@ static void syn_reset_sound(void)
 {
     uint32_t i;
     for (i = 0; i < SYN_VOICES; i++)
-        syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0;
+        syn_v[i].n.live = 0, syn_v[i].key = syn_v[i].held = 0, syn_v[i].fade = syn_v[i].pend = 0;
     memset(fx_dly, 0, FX_DLY_BYTES);         /* (the arena's Synth part: AMB mode may have used it) */
     memset(fx_cho, 0, FX_CHO_BYTES);
     memset(&fx_st, 0, sizeof fx_st);

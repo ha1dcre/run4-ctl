@@ -68,8 +68,11 @@ sounds); on EDIT the **six operators** (the patch's level as a line, what the ne
 carriers underlined, the one you edit in the accent, its ratio under it); on ENV the **envelopes** (the one you edit
 bright, the stage the newest note is in lit); on LFO its **wave** with a dot where it is; on SEQ the step grid.
 
-**Sound.** Eight voices (the oldest, released one is stolen first), Dexed's FM engine (Felucca's port) with the 32 DX7
-algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo
+**Sound.** Up to eight voices (the oldest, released one is stolen first, and fades out in 1.5 ms instead of stopping
+dead). Since firmware 0.9.2 the FM-1 counts what a voice of the sound costs (its operators, the effects that are on)
+and starts a voice only while the whole stays well inside the time it has: a heavy electric piano with every effect on
+plays five or six voices at once, with the reverb alone six or seven, dry eight. Dexed's FM engine (Felucca's port)
+with the 32 DX7 algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo
 delay and reverb: since firmware 0.7 a **plate** (Jon Dattorro's, as AMB-1 has it) with three characters, ROOM (short,
 dark), PLATE (bright; a sound stored with the old SPRING gets it) and HALL (long and dark, 20 ms before it starts).
 REVERB SIZE still goes from short to long (HALL about 0.6 to 2.7 s, ROOM 0.4 to 1.5 s) and REVERB keeps its level; the
@@ -622,8 +625,9 @@ DEFAULT CCS on / off, K4 CLEAR (turn, then SAVE: that binding goes).
 makes it lighter a step at a time instead of crackling. Synth mode (and RUN4's FM-1 track): 1 the reverb without its
 input diffusion, 2 six voices, 3 no chorus and no delay, 4 four voices. AMB mode: 1 the same for its reverb, 2 three
 pad voices, 3 no hi-hats and no octave doublings of the bells, 4 two pad voices and four bells. DUB mode: 1 the same
-for its reverb, 2 no cloud, 3 four pings instead of six and no crackle, 4 one saw a chord voice. It says CPU HIGH: SOUND
-LIGHTER once; after 3 seconds of easy going a step comes back. On a normal day it never shows.
+for its reverb, 2 no cloud, 3 four pings instead of six and no crackle, 4 one saw a chord voice. A step is taken quietly
+when the sound gets close to its time (85 %); only when it actually ran late does it say CPU HIGH: SOUND LIGHTER, once.
+After 3 seconds of easy going a step comes back. On a normal day it never shows.
 
 Aftertouch is measured with the keys' own sensors. The velocity and pressure curves were set up without a device; if a
 setting feels too soft or too hard, pick another curve.

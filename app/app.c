@@ -75,6 +75,7 @@ static struct {
     uint8_t setup_owed;                  /* the SETUP object changed outside the page (a learn): saved when it may be */
     uint32_t rend_ticks, rend_frames;    /* the render's time (host simulator: expect render_permille) */
     uint32_t overloads;                  /* app_overload calls (late renders) */
+    uint32_t overloads_told;             /* ... as many as when the toast last said so */
     uint32_t redraws;                    /* app_redraw calls (the mirror) */
     int32_t stem_peak, stem_fx_peak;     /* the USB stems' (app-stems): the largest dry and effects sample sent */
     uint8_t shed_told, shed_shown;       /* the overload guard's toast said; the step the AUDIO page shows */
@@ -1819,7 +1820,8 @@ static void stem_out(uint32_t frame, const int32_t *dry, const int32_t *fxl, con
 }
 #endif
 /* the overload guard (synth.c syn_shed_*): fm1-base calls this from the audio interrupt when a render took over 90 %
- * of its time; the render sheds a step at its next block. Says so once (a toast) until it is all back */
+ * of its time; the render sheds a step at its next block. Says so once (a toast) until it is all back; a step the guard
+ * took early (a render over 85 %: SHED_EARLY_PM), with no late one, goes unsaid */
 void app_overload(void)
 {
     ctl.overloads++;
@@ -1827,8 +1829,9 @@ void app_overload(void)
 }
 static void shed_frame(void)
 {
-    if (syn_shed && !ctl.shed_told) {
+    if (syn_shed && !ctl.shed_told && ctl.overloads != ctl.overloads_told) {
         ctl.shed_told = 1;
+        ctl.overloads_told = ctl.overloads;
         ui_toast("CPU HIGH: SOUND LIGHTER", 20);
     } else if (!syn_shed) {
         ctl.shed_told = 0;
@@ -1988,9 +1991,11 @@ static void sq_send_rt(uint8_t b)                      /* the sequencer's MIDI c
     if (plat_midi_out_room(TO_LINKS))
         plat_midi_send(0x0Fu | (uint32_t)b << 8, TO_LINKS);
 }
+static uint32_t cpu_khz;                           /* plat_cpu_khz at the start (the render's cost model) */
 void app_init(void)
 {
     memset(&ctl, 0, sizeof ctl);
+    cpu_khz = plat_cpu_khz();
     memset(ctl.sounding, 255, sizeof ctl.sounding);
     memset(ctl.more_key, 255, sizeof ctl.more_key);
     ctl.pot_sent = -1;
@@ -2085,6 +2090,10 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         dt = plat_ticks24() - t0;
         ctl.rend_ticks += dt;
         ctl.rend_frames += n;
+        /* the cost model learns what an instruction costs on this FM-1 (synth.c syn_cm_seen): ticks into cycles, at
+         * the clock the start found (0 on the host and an unknown clock: the model keeps its own) */
+        if (cpu_khz)
+            syn_cm_seen(r4_udiv64_32(r4_umul64(dt, cpu_khz), PLAT_TICKS_PER_US * 1000u));
         /* the overload guard: this block's share of its time (n frames at 44.1 kHz), per mille */
         syn_shed_calm(n, r4_udiv64_32(r4_umul64(dt, 44100u), PLAT_TICKS_PER_US * 1000u * n));
         return;
