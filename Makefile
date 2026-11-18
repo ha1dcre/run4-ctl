@@ -2,7 +2,7 @@
 PY ?= .venv/bin/python
 B  := build
 
-test: unit fuzz synth amb dub sim tools
+test: unit fuzz synth amb dub tape sim tools
 
 unit: $(B)/r4p_test
 	$(B)/r4p_test
@@ -42,6 +42,14 @@ $(B)/r4p_test: tests/r4p_test.c src/r4p.c src/r4p.h
 	@mkdir -p $(B)
 	cc -std=c99 -Wall -Wextra -Wno-unused-parameter -O1 -g -fsanitize=address,undefined -o $@ tests/r4p_test.c src/r4p.c
 
+# the tape view's live frames against a screen that reads its buffer while the next is filled, as the FM-1's DMA does
+tape: $(B)/tape_view_test
+	$(B)/tape_view_test
+
+$(B)/tape_view_test: tests/tape_view_test.c src/tape_ui.c src/r4p.h
+	@mkdir -p $(B)
+	cc -std=gnu11 -O1 -g -Isrc -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -fsanitize=address,undefined -o $@ tests/tape_view_test.c
+
 sim:
 	sh tests/run_sim.sh
 
@@ -56,4 +64,4 @@ tools:
 host:
 	$(PY) base/tools/build.py app --host
 
-.PHONY: test unit fuzz synth amb dub sim tools host audio
+.PHONY: test unit fuzz synth amb dub tape sim tools host audio
