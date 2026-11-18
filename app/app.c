@@ -181,6 +181,130 @@ static void setup_fill_backup(r4p_page_t *p)         /* SETUP's second sub-page:
     strcpy(p->slot[2].text, t);
 }
 static uint32_t shed_level(void);
+/* --------------------------------------------------------- the second core --- */
+/* DUB and AMB mode run their plate reverb on the FM-1's second core (fm1.toml cpu2, cpu2_fallback; plate.h's pipe),
+ * beside the rest of the render on the first. Some FM-1s now and then misread RAM on the second core
+ * (base/docs/SECOND-CORE.md), so it is trusted only after a test under load: from the start, C2_TEST_N blocks each
+ * hand it c2_test (a pattern of words, a third of them 0 as the misreads are, read and mixed with integer and float
+ * steps, and an output written back) while the first core renders as ever with the plate itself, and each result must
+ * equal the first core's own (c2_expect). Every one right: C2_ON, the plate goes over (plate_offload), and each of
+ * its jobs ends with a canary over the pattern that must come back right too. Any wrong result, a job fm1-base gave
+ * up (a misread of its own check, a fault, a late job: it then bars the core until power-off), or a core that did not
+ * start: C2_FAILED / C2_OFF for the session, one core, the plate here (the same sound: the pipe is the same). SETUP >
+ * AUDIO shows which (2ND CORE: OFF, TEST, ON, FAILED); the simulator reads c2 / c2_fails / c2_jobs. */
+enum { C2_OFF, C2_TEST, C2_ON, C2_FAILED };
+static const char *const C2_NAME[4] = {"OFF", "TEST", "ON", "FAILED"};
+#define C2_TEST_N 256u                           /* blocks of tests (1.5 s) before the plate goes over */
+#define C2_PAT_N 512u
+static volatile uint8_t c2_state;
+static uint16_t c2_passed;
+static uint32_t c2_fails;
+static uint32_t c2_pat[C2_PAT_N] PLAT_POOL;
+static volatile uint32_t c2_res[3], c2_canary, c2_expect[3], c2_canary_ok, c2_out;
+static void (*volatile c2_fn)(uint32_t);
+/* the test: every word of the pattern read four times over, mixed (a multiply, rotates) and through a float
+ * one-pole; the hash, the float's bits and a word written back and read again (results into r) */
+static void c2_test_into(volatile uint32_t *r)
+{
+    uint32_t i, k, h = 2166136261u, w = 0;
+    float y = 0.0f;
+    for (k = 0; k < 4u; k++)
+        for (i = 0; i < C2_PAT_N; i++) {
+            uint32_t x = c2_pat[(i * 7u + k * 131u) & (C2_PAT_N - 1u)];
+            h = (h ^ x) * 16777619u;
+            h = h << 5 | h >> 27;
+            y += ((float)(int32_t)(x & 0xFFFFu) - y) * 0.03125f;
+        }
+    c2_out = h;                                  /* (a write, then the read of it) */
+    w = c2_out ^ h;
+    memcpy(&i, &y, 4);
+    r[0] = h, r[1] = i, r[2] = w;
+}
+static void c2_test(uint32_t arg) { (void)arg; c2_test_into(c2_res); }
+static uint32_t c2_canary_of(void)               /* a short one: 64 of the pattern's words, mixed */
+{
+    uint32_t i, h = 0x9E3779B9u;
+    for (i = 0; i < 64u; i++)
+        h = (h ^ c2_pat[i * 8u]) * 16777619u;
+    return h;
+}
+static void c2_wrap(uint32_t arg)                /* the plate's job, then the canary (on the second core) */
+{
+    c2_fn(arg);
+    c2_canary = c2_canary_of();
+}
+static void c2_fail(void)
+{
+    c2_fails++;
+    c2_state = C2_FAILED;
+    plate_offload(0, 0);
+}
+#if FM1B_CPU2
+static int c2_run(void (*fn)(uint32_t), uint32_t arg)
+{
+    if (c2_state != C2_ON)
+        return 0;
+    c2_fn = fn;
+    c2_canary = 0;
+    return plat_cpu2_run(c2_wrap, arg);
+}
+static int c2_wait(void)
+{
+    if (plat_cpu2_wait() != 0) {                 /* (fm1-base gave it up: the job dropped, the plate does it here) */
+        c2_fail();
+        return -1;
+    }
+    if (c2_canary != c2_canary_ok)
+        c2_fail();                               /* (its job ran, maybe wrong: this chunk's reverb; one core from now) */
+    return 0;
+}
+#endif
+static void c2_init(void)                        /* app_init: start it; the pattern and what the test must give */
+{
+    uint32_t i, r = 0x1234567u;
+    for (i = 0; i < C2_PAT_N; i++) {
+        r = r * 1664525u + 1013904223u;
+        c2_pat[i] = i % 3u == 0u ? 0u : r;       /* (a third 0: the misreads seen set bit 21 of a word that holds 0) */
+    }
+    c2_test_into(c2_expect);
+    c2_canary_ok = c2_canary_of();
+    c2_passed = 0;
+    c2_fails = 0;
+#if FM1B_CPU2
+    c2_state = plat_cpu2_set(1) == 0 ? C2_TEST : C2_OFF;
+#else
+    c2_state = C2_OFF;
+#endif
+    plate_offload(0, 0);
+}
+/* the render (audio context): while testing, a test beside each block's render (c2_check after it) */
+static int c2_testing;
+static void c2_begin(void)
+{
+#if FM1B_CPU2
+    c2_testing = 0;
+    if (c2_state != C2_TEST)
+        return;
+    c2_res[0] = c2_res[1] = c2_res[2] = 0xFFFFFFFFu;
+    c2_testing = plat_cpu2_run(c2_test, 0);
+#endif
+}
+static void c2_check(void)
+{
+#if FM1B_CPU2
+    if (!c2_testing)
+        return;
+    c2_testing = 0;
+    if (plat_cpu2_wait() != 0 || c2_res[0] != c2_expect[0] || c2_res[1] != c2_expect[1] || c2_res[2] != c2_expect[2]) {
+        c2_fail();
+        return;
+    }
+    if (++c2_passed >= C2_TEST_N) {
+        c2_state = C2_ON;
+        plate_offload(c2_run, c2_wait);
+    }
+#endif
+}
 static void setup_fill_audio(r4p_page_t *p)          /* SETUP's third sub-page: AUDIO */
 {
     char t[16], u[12];
@@ -195,6 +319,9 @@ static void setup_fill_audio(r4p_page_t *p)          /* SETUP's third sub-page: 
     p->slot[2].value = (uint16_t)(shed_level() * R4P_V14_MAX / 4u);
     if (shed_level()) { strcpy(t, "STEP "); u_int(shed_level(), u); u_cat(t, u); } else strcpy(t, "NONE");
     strcpy(p->slot[2].text, t);
+    strcpy(p->slot[3].name, "2ND CORE"); p->slot[3].kind = R4P_KIND_ENUM;   /* (what the reverb runs on: c2_*) */
+    p->slot[3].value = (uint16_t)(4 << 7 | c2_state);
+    strcpy(p->slot[3].text, C2_NAME[c2_state]);
 }
 static void setup_fill_learn(r4p_page_t *p);
 static void setup_fill(void)                          /* the SETUP page: four tiles, the same look as the host's pages */
@@ -1996,6 +2123,7 @@ void app_init(void)
 {
     memset(&ctl, 0, sizeof ctl);
     cpu_khz = plat_cpu_khz();
+    c2_init();                                         /* (the one time the second core may start: app_init) */
     memset(ctl.sounding, 255, sizeof ctl.sounding);
     memset(ctl.more_key, 255, sizeof ctl.more_key);
     ctl.pot_sent = -1;
@@ -2047,6 +2175,7 @@ void app_init(void)
     }
 #endif
 }
+static void app_render_mode(int32_t *lr, uint32_t n, uint32_t master_q12);
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 {
     uint32_t i;
@@ -2056,6 +2185,16 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         return;
     }
     midi_pump(n);
+    c2_begin();                                        /* (the second core's test, while it is tested: c2_*) */
+    app_render_mode(lr, n, master_q12);
+    c2_check();
+}
+static void app_render_mode(int32_t *lr, uint32_t n, uint32_t master_q12)
+{
+    uint32_t i;
+    syn_shed_max = (uint8_t)(mode == MODE_DUB ? 6u : 4u);   /* (the guard's steps: DUB mode has two more, dub.c) */
+    if (syn_shed > syn_shed_max)
+        syn_shed = syn_shed_max;
 #if R4_AMB
     if (mode == MODE_AMB) {                            /* AMB mode: the garden (src/amb/amb.c), the overload guard on it */
         uint32_t t0 = plat_ticks24(), dt;
@@ -2276,6 +2415,11 @@ int app_host_cmd(const char *cmd, const char *a, const char *b, const char *c, c
         }
         return 1;
     }
+    if (!strcmp(cmd, "c2_misread")) {                  /* c2_misread: from now on the second core reads one word of the
+                                                       * test pattern wrong (bit 21 of a 0, as the units that misread do) */
+        c2_pat[24] = 0x00200000u;                      /* (a 0 word, in the test and the canary) */
+        return 1;
+    }
     if (strcmp(cmd, "blesx"))
         return 0;
     p = strstr(plat_host_line, "blesx") + 5;
@@ -2429,6 +2573,9 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "set_local")) *got = setup.local;
     else if (!strcmp(what, "local_off")) *got = local_off;
     else if (!strcmp(what, "shed")) *got = syn_shed;
+    else if (!strcmp(what, "c2")) *got = c2_state;            /* the second core: 0 off, 1 test, 2 on, 3 failed */
+    else if (!strcmp(what, "c2_fails")) *got = (int)c2_fails;
+    else if (!strcmp(what, "c2_jobs")) *got = (int)plate_pipe_jobs2();
     else if (!strcmp(what, "overloads")) *got = (int)ctl.overloads;
     else if (!strcmp(what, "redraws")) *got = (int)ctl.redraws;
     else if (!strcmp(what, "usb_ch")) *got = FM1B_UAC_CH;

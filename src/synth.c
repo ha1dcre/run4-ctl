@@ -836,12 +836,13 @@ static void syn_seq_start(int run) { sq_start(run); }
 /* --------------------------------------------------------- overload guard --- */
 /* When a render runs late (fm1-base calls app_overload when a block took over 90 % of its time: device/main_fm1.c), the
  * sound sheds load a step at a time: 1 the plate without its input diffusers, 2 six voices, 3 no chorus and no delay, 4
- * four voices; a render over SHED_EARLY_PM of its time sheds a step as well, quietly. A step comes back after
+ * four voices (DUB mode has six steps: dub.c); a render over SHED_EARLY_PM of its time sheds a step as well, quietly. A step comes back after
  * SHED_CALM_MS of renders under SHED_CALM_PM of their time (hysteresis: well below where it triggered); the effects'
  * lines start from silence again, the voices over a step's number fade out (the render, one a sub-block). The render's
  * own time is measured by the app (app.c app_render) and handed to syn_shed_calm. Audio context; the main loop only
  * reads syn_shed. */
-#define SHED_MAX 4u
+#define SHED_MAX syn_shed_max
+static uint8_t syn_shed_max = 4;             /* the steps the mode has: 4 (DUB mode 6: app.c app_render) */
 #define SHED_CALM_MS 3000u
 #define SHED_CALM_PM 600u                    /* 60 % of a block's time (firmware 0.9.2: was 50 %; the early step below
                                               * must not keep a normal load's peaks on step 1 for good) */
@@ -867,12 +868,16 @@ static void syn_shed_calm(uint32_t n, uint32_t load_pm)
         }
         return;
     }
-    if (load_pm >= SHED_EARLY_PM && syn_shed < SHED_MAX) {
+    if (load_pm >= SHED_EARLY_PM && syn_shed < SHED_MAX) {   /* (a step for 85 %, one more each 5 % past it: a load
+                                              * that comes in all at once is met within a block or two) */
+        uint32_t k = 1u + (load_pm - SHED_EARLY_PM) / 50u;
         syn_shed_calm_smp = 0;
-        syn_shed++;
+        while (k-- && syn_shed < SHED_MAX) {
+            syn_shed++;
+            syn_shed_step();
+        }
         if (syn_shed > syn_shed_peak)
             syn_shed_peak = syn_shed;
-        syn_shed_step();
         return;
     }
     if (!syn_shed)

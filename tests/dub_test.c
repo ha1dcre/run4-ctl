@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include "../src/dub/dub.c"
 #include "../src/plate.c"
 
@@ -103,6 +105,90 @@ static void wav_close(void)
     wav = 0;
 }
 
+/* the plate a chunk late (plate.h's pipe, firmware 0.9.2): handed to a second core or run here, the same sound to the
+ * bit; a job the second core dropped (fm1-base gave it up) is run here, the same again. The guard's two DUB steps:
+ * 5 the chord on three voices, 6 (the plate on this core) no plate: each fades, the sound goes on, and comes back */
+static uint32_t pipe_jobs, pipe_drop;
+static int pipe_run(void (*fn)(uint32_t), uint32_t arg)
+{
+    if (!pipe_drop)
+        fn(arg);                                    /* (a second core that ran it at once) */
+    pipe_jobs++;
+    return 1;
+}
+static int pipe_wait(void) { return pipe_drop ? -1 : 0; }
+/* how: 0 here, 1 the second core, 2 it drops every job. Each from the same state: a child process of this one (the
+ * engine's state is all static: a fork is the one way to start each take from the same) */
+static uint64_t pipe_take(int how, uint32_t secs)
+{
+    int fd[2];
+    uint64_t h = 1469598103934665603ull;
+    pid_t pid;
+    if (pipe(fd) != 0 || (pid = fork()) < 0)
+        return 0;
+    if (pid == 0) {
+        static int32_t b[2 * 256];
+        uint32_t i, k;
+        close(fd[0]);
+        plate_offload(how ? pipe_run : 0, how ? pipe_wait : 0);
+        pipe_drop = how == 2;
+        pipe_jobs = 0;
+        for (i = 0; i < secs * SEC / 256u; i++) {
+            du_render(b, 256, 4096);
+            for (k = 0; k < 512u; k++)
+                h = (h ^ (uint32_t)b[k]) * 1099511628211ull;
+        }
+        if (write(fd[1], &h, sizeof h) != sizeof h || write(fd[1], &pipe_jobs, sizeof pipe_jobs) != sizeof pipe_jobs)
+            _exit(1);
+        _exit(0);
+    }
+    close(fd[1]);
+    if (read(fd[0], &h, sizeof h) != sizeof h || read(fd[0], &pipe_jobs, sizeof pipe_jobs) != sizeof pipe_jobs)
+        h = 0;
+    close(fd[0]);
+    waitpid(pid, 0, 0);
+    return h;
+}
+static void pipe_tests(void)
+{
+    uint64_t here, here2, c2, dropped, jobs;
+    du_init();
+    du_enter();
+    piece(3);
+    du_seed(77);
+    du_play(1);
+    run(SEC);                                       /* (playing: then each take from here) */
+    here = pipe_take(0, 4), here2 = pipe_take(0, 4), c2 = pipe_take(1, 4), jobs = pipe_jobs, dropped = pipe_take(2, 4);
+    printf("  plate pipe: here / on the second core (%u jobs) / every job dropped: %s\n", (unsigned)jobs,
+           here == c2 && c2 == dropped ? "the same to the bit" : "DIFFERENT");
+    CHECK(here == here2 && jobs > 100u && here == c2 && c2 == dropped);
+    du_play(0);
+}
+static void trim_tests(void)
+{
+    double r0, r5, r6, rb;
+    du_init();
+    du_enter();
+    piece(0);
+    du_play(1);
+    du_set(DP_CHORD, 100);
+    run(SEC * 4);
+    meter_reset(); run(SEC * 2); r0 = rms();
+    du_shed = 5;                                    /* three chord voices */
+    run(SEC / 2);
+    meter_reset(); run(SEC * 2); r5 = rms();
+    CHECK(pad4_g == 0.0f && bad == 0);
+    du_shed = 6;                                    /* and no plate (on this core) */
+    run(SEC / 2);
+    meter_reset(); run(SEC * 2); r6 = rms();
+    CHECK(wet_g == 0.0f && bad == 0 && r6 > 0.001);
+    du_shed = 0;
+    run(SEC);
+    meter_reset(); run(SEC * 2); rb = rms();
+    CHECK(pad4_g == 1.0f && wet_g == 1.0f && rb > 0.5 * r0 && bad == 0);
+    printf("  guard steps 5 / 6: rms %.4f -> three chord voices %.4f -> no plate %.4f -> back %.4f\n", r0, r5, r6, rb);
+    du_play(0);
+}
 int main(int argc, char **argv)
 {
     int i, k;
@@ -295,6 +381,8 @@ int main(int argc, char **argv)
         CHECK(bad == 0 && pk < 0.99 && rms() > 0.01 && hot < frames / 1000u);
         wav_close();
     }
+    pipe_tests();
+    trim_tests();
     printf("dub: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

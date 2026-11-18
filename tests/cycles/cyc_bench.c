@@ -36,6 +36,27 @@ void en_midi_out(uint32_t st, uint32_t d1, uint32_t d2) { (void)st; (void)d1; (v
 #include "../../src/plate.c"
 
 #define CYC_BLK 256u
+#if defined CYC_DUB || defined CYC_AMB
+/* the second core, as tools/cycles.py sees it: the job runs at once, between two marks it counts at; the mark at the
+ * wait tells how much the first core did meanwhile (the job beyond that is the first core's stall) */
+volatile uint32_t cyc_marks;
+__attribute__((used, noinline)) void cyc_c2_begin(void) { cyc_marks++; }
+__attribute__((used, noinline)) void cyc_c2_end(void) { cyc_marks++; }
+__attribute__((used, noinline)) void cyc_c2_waited(void) { cyc_marks++; }
+static int cyc_c2_run(void (*fn)(uint32_t), uint32_t arg)
+{
+    cyc_c2_begin();
+    fn(arg);
+    cyc_c2_end();
+    return 1;
+}
+static int cyc_c2_wait(void)
+{
+    cyc_c2_waited();
+    return 0;
+}
+static void cyc_c2(uint32_t on) { plate_offload(on ? cyc_c2_run : 0, on ? cyc_c2_wait : 0); }
+#endif
 int32_t cyc_out[2 * CYC_BLK];
 volatile uint32_t cyc_info[8];                 /* what the scene sounds now (voices, shed step), for the driver */
 
@@ -114,7 +135,7 @@ static void cyc_piece(int i)
 }
 /* id 0: piece arg, playing; id 1: macro arg>>8 to (arg & 0xFF) - 100; id 2: the effects grid mask arg; id 3: perf flags;
  * id 4: seed; id 5: dub hold (freeze) arg; id 6: next chord; id 7: shed step; id 8: parameter arg >> 16 to
- * (arg & 0xFFFF) - 32768 */
+ * (arg & 0xFFFF) - 32768; id 9: the plate on the second core (arg 1) or here (0) */
 __attribute__((used, noinline)) void cyc_scenario(uint32_t id, uint32_t arg)
 {
     switch (id) {
@@ -127,6 +148,7 @@ __attribute__((used, noinline)) void cyc_scenario(uint32_t id, uint32_t arg)
     case 6: du_next(); break;
     case 7: du_shed = (uint8_t)arg; break;
     case 8: du_set((int)(arg >> 16), (int)(arg & 0xFFFFu) - 32768); break;
+    case 9: cyc_c2(arg); break;
     default: break;
     }
 }
@@ -156,6 +178,7 @@ __attribute__((used, noinline)) void cyc_scenario(uint32_t id, uint32_t arg)
     case 6: en_next(); break;
     case 7: en_shed = (uint8_t)arg; break;
     case 8: en_set((int)(arg >> 16), (int)(arg & 0xFFFFu) - 32768); break;
+    case 9: cyc_c2(arg); break;
     default: break;
     }
 }

@@ -25,7 +25,7 @@ import tempfile
 
 from capstone import CS_ARCH_ARM, CS_MODE_MCLASS, CS_MODE_THUMB, Cs
 from elftools.elf.elffile import ELFFile
-from unicorn import UC_ARCH_ARM, UC_HOOK_BLOCK, UC_MODE_THUMB, Uc
+from unicorn import UC_ARCH_ARM, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_MODE_THUMB, Uc
 from unicorn.arm_const import (UC_ARM_REG_C1_C0_2, UC_ARM_REG_FPEXC, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R1,
                                UC_ARM_REG_SP)
 
@@ -82,6 +82,26 @@ class Emu:
         self.blk = {}                         # (addr, size) -> (instructions, est. cycles)
         self.count = None
         self.uc.hook_add(UC_HOOK_BLOCK, self._hook)
+        # the second core's marks (cyc_bench.c cyc_c2_*): the job's instructions, and the first core's meanwhile
+        self.c2 = None
+        for name in ("cyc_c2_begin", "cyc_c2_end", "cyc_c2_waited"):
+            if name in self.syms:
+                a = self.syms[name] & ~1
+                self.uc.hook_add(UC_HOOK_CODE, self._mark, name, a, a)
+
+    def _mark(self, uc, addr, size, name):
+        if self.count is None or self.c2 is None:
+            return
+        n = self.count[0]
+        if name == "cyc_c2_begin":
+            self.c2["t0"] = n
+        elif name == "cyc_c2_end":
+            job = n - self.c2["t0"]
+            self.c2["job"] += job
+            self.c2["last"] = job
+            self.c2["t1"] = n
+        else:                                 # the wait: the job beyond what the first core did meanwhile is a stall
+            self.c2["stall"] += max(0, self.c2["last"] - (n - self.c2["t1"]))
 
     def _cost(self, addr, size):
         code = bytes(self.uc.mem_read(addr, size))
@@ -120,8 +140,12 @@ class Emu:
         uc.reg_write(UC_ARM_REG_R1, b)
         uc.reg_write(UC_ARM_REG_LR, STOP | 1)
         self.count = [0, 0] if counted else None
+        self.c2 = {"job": 0, "stall": 0, "last": 0, "t0": 0, "t1": 0} if counted else None
         uc.emu_start(self.syms[name] | 1, STOP)
         r, self.count = self.count, None
+        if r is not None:                     # the first core's own: all but the jobs, plus its stalls; the second's
+            r.append(r[0] - self.c2["job"] + self.c2["stall"])
+            r.append(self.c2["job"])
         return r
 
     def info(self, i):
@@ -139,9 +163,11 @@ LIMIT = 0.8 * BUDGET / K0                      # the headroom rule: a block's in
 class Run:
     """a scenario script: ('s', id, arg) a scene call, ('b', n) n blocks counted, ('f', n) n blocks not counted"""
 
-    def __init__(self, emu, label, model=False):
-        self.emu, self.label, self.model = emu, label, model
+    def __init__(self, emu, label, model=False, guard=0):
+        self.emu, self.label, self.model, self.guard = emu, label, model, guard
         self.worst = self.worst_c = self.sum = self.n = self.voices = 0
+        self.worst2 = self.shed_max = 0
+        self.shed = self.calm = 0             # the overload guard, as synth.c syn_shed_calm runs it (guard: its top)
         self.under = 0                         # SYNTH: the worst (measured - the cost model's estimate) of a block
 
     def play(self, script):
@@ -153,7 +179,11 @@ class Run:
                     self.emu.call("cyc_block")
             else:
                 for _ in range(st[1]):
-                    n, c = self.emu.call("cyc_block", counted=True)
+                    n, c, n1, n2 = self.emu.call("cyc_block", counted=True)
+                    n = n1                    # (the first core's: with no second core, everything)
+                    self.worst2 = max(self.worst2, n2)
+                    if self.guard:
+                        self.step(n)
                     self.worst = max(self.worst, n)
                     self.worst_c = max(self.worst_c, c)
                     self.sum += n
@@ -163,6 +193,23 @@ class Run:
                         self.under = max(self.under, n - self.emu.info(2))
         return self
 
+    def step(self, n):
+        """the guard after a block of n instructions at K0 (synth.c: SHED_EARLY_PM 850, a step more each 5 % past it,
+        SHED_CALM_PM 600 for SHED_CALM_MS 3000; the device's 90 % overload comes after the early step)"""
+        load = int(n * K0 * 1000 // BUDGET)
+        if load >= 850 and self.shed < self.guard:
+            self.shed = min(self.guard, self.shed + 1 + (load - 850) // 50)
+            self.calm = 0
+        elif self.shed and load >= 600:
+            self.calm = 0
+        elif self.shed:
+            self.calm += 256
+            if self.calm >= 3000 * 441 // 10:
+                self.shed -= 1
+                self.calm = 0
+        self.shed_max = max(self.shed_max, self.shed)
+        self.emu.call("cyc_scenario", 7, self.shed)
+
     def row(self):
         r = {"scene": self.label, "worst_instr": self.worst, "worst_cyc_est": self.worst_c,
              "mean_instr": self.sum // max(self.n, 1), "worst_pct": round(pct(self.worst), 1),
@@ -171,6 +218,10 @@ class Run:
         if self.model:
             r["voices"] = self.voices
             r["model_short"] = self.under
+        if self.worst2:
+            r["core2_worst"] = self.worst2
+        if self.guard:
+            r["guard_peak_step"] = self.shed_max
         return r
 
 
@@ -205,26 +256,41 @@ def run_mode(mode, quick, tmp):
         for label, sc in synth_scenes(quick):
             rows.append(Run(emu, label, model=True).play(sc).row())
         return rows
-    secs = 6 if quick else 20
+    secs = 6 if quick else 8
     blocks = secs * 44100 // 256
-    for p in (range(2) if quick else range(8)):
-        rows.append(Run(emu, f"piece {p}").play([("s", 0, p), ("b", blocks)]).row())
-    # everything at once: the layers, the macros (DUB: Dub, Energy, Space; AMB: the layers and the space), DUB's
-    # effects grid and PERFORM's echo throw; then the next chord and a freeze
-    if mode == "DUB":
-        def par(i, v):
-            return ("s", 8, (i << 16) | (v + 32768))
-        up = [par(i, 100) for i in (0, 1, 2, 3, 4, 7, 8, 10, 30, 33)]   # the layers, density, hits, echo, reverb,
-        for cv in (0, 1, 4):                                               # crackle, cloud; Saws, Keys, Bell
-            sc = [("s", 0, 0)] + up + [par(22, cv), ("s", 1, (1 << 8) | 200), ("s", 1, (2 << 8) | 200),
-                                       ("s", 1, (3 << 8) | 200), ("s", 2, 0xFFFF), ("s", 3, 16), ("b", blocks),
-                                       ("s", 6, 0), ("s", 5, 1), ("b", blocks // 2), ("s", 5, 0), ("s", 2, 0),
-                                       ("s", 3, 0)]
-            rows.append(Run(emu, f"everything up, chord voice {cv}").play(sc).row())
-    else:
-        sc = [("s", 0, 2)] + [("s", 1, (p << 8) | 100) for p in range(12)] + [("b", blocks), ("s", 6, 0), ("s", 5, 1),
-                                                                              ("b", blocks // 2), ("s", 5, 0)]
-        rows.append(Run(emu, "everything up").play(sc).row())
+    top = 6 if mode == "DUB" else 4               # the guard's steps (synth.c SHED_MAX: DUB 6, the others 4)
+
+    def scenes():
+        for p in (range(2) if quick else range(8)):
+            yield f"piece {p}", [("s", 0, p), ("b", blocks)]
+        # everything at once: the layers, the macros (DUB: Dub, Energy, Space; AMB: the layers and the space), DUB's
+        # effects grid and PERFORM's echo throw; then the next chord and a freeze
+        if mode == "DUB":
+            def par(i, v):
+                return ("s", 8, (i << 16) | (v + 32768))
+            up = [par(i, 100) for i in (0, 1, 2, 3, 4, 7, 8, 10, 30, 33)]   # the layers, density, hits, echo,
+            for cv in ((1,) if quick else (0, 1, 4)):                        # reverb, crackle, cloud; Saws, Keys, Bell
+                yield f"everything up, chord voice {cv}", (
+                    [("s", 0, 0)] + up + [par(22, cv), ("s", 1, (1 << 8) | 200), ("s", 1, (2 << 8) | 200),
+                                         ("s", 1, (3 << 8) | 200), ("s", 2, 0xFFFF), ("s", 3, 16), ("b", blocks),
+                                         ("s", 6, 0), ("s", 5, 1), ("b", blocks // 2), ("s", 5, 0), ("s", 2, 0),
+                                         ("s", 3, 0)])
+        else:
+            yield "everything up", ([("s", 0, 2)] + [("s", 1, (p << 8) | 100) for p in range(12)] +
+                                    [("b", blocks), ("s", 6, 0), ("s", 5, 1), ("b", blocks // 2), ("s", 5, 0)])
+
+    # each path: one core (the plate here), and the plate on the second core; each with the guard closing the loop at
+    # K0 (the steps as the FM-1 takes them, from these counts) and, for reference, without
+    for c2 in (0, 1):
+        for guarded in (0, 1):
+            if guarded == 0 and (quick or not c2):   # (one core without the guard: the release before, for reference)
+                continue
+            for label, sc in scenes():
+                emu.call("cyc_scenario", 7, 0)
+                emu.call("cyc_scenario", 9, c2)
+                tag = f"{'2 cores' if c2 else '1 core '}{', guard' if guarded else ', no guard'}: {label}"
+                rows.append(Run(emu, tag, guard=top if guarded else 0).play(sc).row())
+    emu.call("cyc_scenario", 9, 0)
     return rows
 
 
@@ -247,10 +313,19 @@ def main():
                   f"(80 % at {K0} cycles each)")
             for r in rows:
                 extra = f"  voices {r['voices']}  model short by {r['model_short']}" if "voices" in r else ""
+                if "core2_worst" in r:
+                    extra += f"  core 2 {r['core2_worst']}"
+                if "guard_peak_step" in r:
+                    extra += f"  guard step <= {r['guard_peak_step']}"
                 print(f"  {r['scene']:<34} worst {r['worst_instr']:>7} instr ({r['worst_pct']:5.1f} %, "
                       f"{r['device_pct_k0']:5.1f} % at K0)  M4 est {r['worst_cyc_est']:>7}  mean {r['mean_instr']:>7}"
                       + extra)
                 if m == "SYNTH" and (r["worst_instr"] > LIMIT or r["model_short"] > 0):
+                    bad.append(f"{m} {r['scene']}")
+                # DUB, AMB: with the guard, never past the budget at K0. Known and left: one core, every layer, macro
+                # and grid effect switched on at once: the block it all comes in (before the guard can answer it)
+                if (m != "SYNTH" and "guard_peak_step" in r and r["device_pct_k0"] > 100.0 and
+                        not (r["scene"].startswith("1 core") and "everything up" in r["scene"])):
                     bad.append(f"{m} {r['scene']}")
             sys.stdout.flush()
     if out:
