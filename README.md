@@ -120,8 +120,8 @@ Host voice (protocol 1.3): RUN4 mode plays Synth mode's engine with its own sett
 trades the two 186-byte setting sets at a mode switch; the render is held silent meanwhile and the voices and effect
 lines start empty). Its load is Synth mode's: 8 voices and the effects, 0.4-0.6 % of real time on this Mac (scenarios
 `15_host_voice` and `16_tape_view`, `make synth`); the device's share was not measured (no device). With the tape view
-moving, the sum is no more than Synth mode with its scope. The USB audio from the iPad is mixed with it on the FM-1 by
-fm1-base after the USB recording's tap (`base/device/uac_mix.h`): the iPad records the FM-1 alone and hears both.
+moving, the sum is no more than Synth mode with its scope. The FM-1 is a USB audio input only (firmware 0.9.1,
+`usb_audio_out = false`): the iPad records the FM-1 and plays RUN4 on its own speaker or headphones.
 RAM added: the parked settings (186 B); the restore's 32 voices wait in the DX7 import's 4 KiB buffer.
 
 RAM of firmware 0.7 (sizes measured natively, `make amb` prints them; no device link map, no toolchain here): the

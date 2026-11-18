@@ -473,9 +473,9 @@ AMB and DUB mode, see there):
 
 * **SEL + REC** and **SEL + PLAY** are RUN4's REC and PLAY (the screen says RUN4 REC / RUN4 PLAY); REC and PLAY alone
   stay the synth's. So you can arm a RUN4 track and record the synth without touching the app.
-* The FM-1's sound reaches RUN4 over the USB cable: the firmware is a USB audio device (its output, recordable) and
-  plays the computer's audio, as fm1-base's default. Choose the FM-1 as the input in RUN4. What RUN4 receives is the
-  FM-1's own sound only; the iPad's audio is mixed in for the FM-1's headphones and line output.
+* The FM-1's sound reaches RUN4 over the USB cable: the firmware is a USB audio input (its output, recordable). Choose
+  the FM-1 as the input in RUN4. It does not play the computer's audio (firmware 0.9.1 on): the iPad keeps its own
+  speaker or headphones for RUN4, and RUN4 can choose its output as usual.
 * If RUN4 sends its MIDI clock to the FM-1, the sequencer and the arpeggiator follow it (clock AUTO).
 
 ### RUN4 picks the mode and plays the FM-1's controls (firmware 0.8)
@@ -611,7 +611,7 @@ Turn on for the third sub-page, **AUDIO**:
 
 | Tile | What it does |
 | --- | --- |
-| K1 LOCAL OUT | ON (the default), or USB ONLY: while a computer (an iPad, a Mac) is connected over USB, the FM-1's sound goes to USB at full level (MASTER does not change the recording) and its headphone / line output and speaker stay silent, so RUN4 records it without hearing it twice. The computer's own audio through the FM-1 is silent then too: listen on the iPad. Without a computer the FM-1 plays as usual |
+| K1 LOCAL OUT | ON (the default), or USB ONLY: while a computer (an iPad, a Mac) is connected over USB, the FM-1's sound goes to USB at full level (MASTER does not change the recording) and its headphone / line output and speaker stay silent, so RUN4 records it without hearing it twice. Listen on the iPad (the FM-1 does not play the computer's audio). Without a computer the FM-1 plays as usual |
 | K2 USB CH | the USB audio channels of this package: 2 STEREO, or 6 STEMS (the RUN4 CTL STEMS package, see USB stems) |
 | K3 LOAD SHED | NONE, or the overload guard's step (see below) |
 
