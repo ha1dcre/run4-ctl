@@ -34,11 +34,12 @@ the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 | Path | What |
 | --- | --- |
-| `docs/PROTOCOL.md` | the wire protocol v1 (minor 6), MIT |
+| `docs/PROTOCOL.md` | the wire protocol v1 (minor 7), MIT |
 | `src/r4p.[ch]` | the codec: firmware and native tests share it (no libc, no floats), MIT; `tests/r4p_fuzz.c` its fuzz test |
 | `src/lm.c`, `src/synth_lm.c`, `src/amb_lm.c`, `src/dub_lm.c` | protocol 1.4: the local modes for the host (list, switch, description, values, status line), table-driven; Synth mode's, AMB mode's and DUB mode's descriptions |
 | `src/ui.c` | the display: state from host frames, redraw by region |
 | `src/scenes.c` | RUN4 mode's scene page (protocol 1.6: SEL + SEQ, the white keys recall Sets, OCT- / OCT+ the bank) |
+| `src/roll_ui.c` | RUN4 mode's piano roll (protocol 1.7): the host's pattern window, cursor, notes and playhead over compact tiles (the drawing after fmini-1's graph_roll, GPL-3.0, see NOTICE) |
 | `src/tape_ui.c` | RUN4 mode's tape view (protocol 1.3): waveform, loop region, playhead and meters in Synth mode's layout |
 | `src/synth.c`, `src/synth_seq.c`, `src/synth_ui.c`, `src/synth/` | Synth mode: the FM6 engine (Felucca, Apache-2.0, see NOTICE), voices, effects, arpeggiator, DX7 import, scales and chords, mutate, the morph, sample-accurate MIDI in, the overload guard; the step sequencer (16 x 64 steps, after Felucca's) with parameter locks, trig conditions and the song chain; its pages |
 | `src/synth_gen.c`, `src/synth_learn.c` | the SEQ page's generators, phrase tools, copy / paste and undo; MIDI learn and the default CC map |
@@ -139,6 +140,10 @@ CPU (this Mac, -O2): AMB mode 0.43 % of real time at its busiest piece (VOICES, 
 0.30 %); in the simulator 0.4 %. The plate alone 0.10 % against the old reverb's 0.08 % (+0.02 % of real time); Synth
 mode's whole engine with 8 voices and every effect 0.58 % (0.6: 0.63 %, the difference is noise). On the device not
 measured; AMB-1 runs the same engine (with float lines) on the same hardware.
+
+Protocol 1.7, the piano roll (`src/roll_ui.c`, drawn while RUN4 sends a pattern window): RAM about 0.4 KB of .bss (the
+last window, 64 notes of 5 B, and its state; `expect roll_ram` in `37_roll`), no pool; r4p_msg_t, which app_sysex keeps
+on the stack, grew from 312 to 364 B (the window). Not measured on a device.
 
 Protocol 1.6, the scene page (`src/scenes.c`, SEL + SEQ in RUN4 mode with a RUN4 that offers Sets): RAM 1,168 B of .bss (the 128
 short names of 8 characters, 9 B each, and a few bytes of state; `expect scn_ram` in `36_scenes`), no pool, no arena; the

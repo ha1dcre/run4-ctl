@@ -9,6 +9,7 @@
 #include "synth_ui.c"
 #include "tape_ui.c"
 #include "scenes.c"
+#include "roll_ui.c"
 
 #define FW_MAJOR 0
 #define FW_MINOR 9
@@ -1952,7 +1953,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
             syn.bpm10 = m.u.status.bpm10;
         /* fallthrough */
     case R4P_PAGE: case R4P_VALUE: case R4P_TOAST: case R4P_LIST: case R4P_FOCUS:
-    case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS: case R4P_SCENES: case R4P_SCENE_STATE:
+    case R4P_TAPE_WAVE: case R4P_TAPE_POS: case R4P_METERS: case R4P_SCENES: case R4P_SCENE_STATE: case R4P_ROLL:
         if (ui.connected && mode == MODE_RUN4)                              /* (frames before the ack are the previous session's) */
             ui_apply(&m);
         break;
@@ -2530,6 +2531,14 @@ int app_expect(const char *what, int *got)
     else if (!strcmp(what, "syn_level")) *got = (mode == MODE_SYNTH ? &syn : &syn_alt)->level;   /* Synth mode's own */
     else if (!strcmp(what, "render_permille")) *got = ctl.rend_frames ? (int)((uint64_t)ctl.rend_ticks / PLAT_TICKS_PER_US * 44100u / 1000u / ctl.rend_frames) : 0;
     else if (!strcmp(what, "render_reset")) { *got = 0; ctl.rend_ticks = ctl.rend_frames = 0; }
+    else if (!strcmp(what, "roll_on")) *got = rl.on;                        /* the piano roll (1.7) */
+    else if (!strcmp(what, "roll_layout")) *got = rl_layout();
+    else if (!strcmp(what, "roll_n")) *got = rl.r.n;
+    else if (!strcmp(what, "roll_ram")) *got = (int)sizeof rl;              /* the roll's .bss, bytes */
+    else if (!strcmp(what, "roll_frames")) *got = (int)rl.frames;
+    else if (!strcmp(what, "roll_bpf")) *got = rl.frames ? (int)(rl.bytes / rl.frames) : 0;
+    else if (!strcmp(what, "roll_play")) *got = rl.drawn_play;
+    else if (!strcmp(what, "roll_reset")) { *got = 0; rl.frames = rl.bytes = 0; }
     else if (!strcmp(what, "tape_on")) *got = tv.on;
     else if (!strcmp(what, "tape_layout")) *got = tv_layout();
     else if (!strcmp(what, "tape_frames")) *got = (int)tv.frames;

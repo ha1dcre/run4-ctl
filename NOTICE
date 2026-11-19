@@ -39,6 +39,11 @@ Synth mode (src/synth.c, src/synth_ui.c, src/synth/) uses code and data from Fel
             trigger's hysteresis, the slow release of the scale, the strip-wise sending and the other views are new.
   The DX7 voice and bank formats are Yamaha's; no factory ROM data of any instrument is included.
 
+RUN4 mode's piano roll (src/roll_ui.c, protocol 1.7) follows the piano-roll view of fmini-1, the FM-1 firmware by Leo
+Kuroshita (@kurogedelic), Hugelton Instruments (firmware/src/ui_graph.c graph_roll, Copyright (C) 2026 Leo Kuroshita,
+GPL-3.0-only): a key column beside the grid, bars one cell high with their length in columns, a frame on the cursor
+cell, a vertical playhead. No code is copied; the window, the host's frames, the colours and the partial redraw are new.
+
 The RUN4 app's FM-1 installer (tools/ios/FM1Package.swift, FM1Installer.swift, test/FakeFM1.swift) is a Swift port of
 fm1-base's tools/fm1_install.py, fm1_backup.py, fm1ports.py and fm1pkg_make.py and of fm1-base's tests/install_test.py
 simulated FM-1, following felucca-bsp's chip/ota.c. MPL-2.0, file by file (LICENSES/MPL-2.0.txt), headers kept:

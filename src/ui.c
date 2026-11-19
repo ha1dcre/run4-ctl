@@ -55,6 +55,10 @@ static void scn_draw(void);
 static void scn_tick(uint32_t now);
 static void scn_apply(const r4p_msg_t *m);
 static void scn_close(void);
+static void rl_reset(void);                 /* roll_ui.c: the piano roll (protocol 1.7) */
+static int rl_layout(void);
+static void rl_draw(uint32_t now);
+static void rl_apply(const r4p_msg_t *m);
 
 static void ui_reset_page(void)
 {
@@ -80,6 +84,7 @@ static void ui_connect(int on)
     ui.big1 = ui.touch1 = 0;
     memset(&ui.st, 0, sizeof ui.st);
     tv_reset();                                     /* (1.3: the host sends the tape view again after its SYNC_REQ) */
+    rl_reset();                                     /* (1.7: and the roll) */
     ui.dirty = D_ALL;
 }
 
@@ -528,6 +533,8 @@ static void ui_draw(void)
         }
         if (ui.dirty & (D_TILE0 << 2 | D_TILE0 << 3))
             sp_draw_tiles();
+    } else if (rl_layout()) {                                  /* 1.7: the piano roll (roll_ui.c) */
+        rl_draw(now);
     } else if (ui.big1 && host_page() && ui.connected) {      /* 1.2: the big value over the tiles */
         if (ui.dirty & (D_BIG | D_TOAST_UNDER | D_CLEAR)) {
             draw_big();
@@ -589,7 +596,7 @@ static void ui_apply(const r4p_msg_t *m)
                 ui.dirty |= D_BIG;
         }
         /* 1.2: the big value for a slot just turned (its VALUE within 1.5 s) or flagged; a VALUE of the slot shown keeps it */
-        if (ui.v12 && host_page() && !ui.list_open &&
+        if (ui.v12 && host_page() && !ui.list_open && !rl_layout() &&   /* (1.7: the roll keeps its tiles) */
             ((m->u.value.flags & R4P_VF_BIG) || (ui.touch1 == (uint8_t)(i + 1) && now - ui.touch_at <= 1500u) ||
              ui.big1 == (uint8_t)(i + 1))) {
             if (ui.big1 != (uint8_t)(i + 1))
@@ -623,6 +630,9 @@ static void ui_apply(const r4p_msg_t *m)
         break;
     case R4P_SCENES: case R4P_SCENE_STATE:                     /* 1.6 */
         scn_apply(m);
+        break;
+    case R4P_ROLL:                                             /* 1.7 */
+        rl_apply(m);
         break;
     default:
         break;

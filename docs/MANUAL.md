@@ -48,6 +48,13 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
   no notes meanwhile. RUN4 switches the Set exactly as its own Sets menu does; the FM-1 adds no timing. Any page button
   leaves (SEL + SEQ again too); PLAY, REC and SAVE work as ever. Without a RUN4 that offers Sets, SEL + SEQ does what
   it always did (RUN4 sees it).
+* **Piano roll** (with a RUN4 that speaks protocol 1.7). On RUN4's ROLL pages (a Poly track's SEQ, TÓLF's HOME and
+  SEQ) the screen shows a window of the pattern as a piano roll: the keys on the left, the steps across with beat and
+  bar lines, the notes as bars (brighter the louder, grey when muted), the cursor's cell framed white and the playhead
+  (red while recording); the page's four values sit in a row under it. RUN4 does all the editing: K1 moves the cursor
+  along the steps, K2 up and down the pitches, K3 changes the length and K4 the velocity of the note under the cursor, a
+  white key sets or deletes a note on that step; RUN4's Undo undoes it. With an older RUN4 CTL the same page shows its
+  four tiles.
 * **LEDs** show what RUN4 tells them to. Without the app, a held key lights itself.
 * Keys still play without the app. If the app is not there, the screen says NOT CONNECTED and the notes go on.
 

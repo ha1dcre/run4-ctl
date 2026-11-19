@@ -1,0 +1,99 @@
+# Protocol 1.7: the piano roll. A 1.7 host shows a pattern's window (ROLL): the band 232 x 118 with the key column, the
+# pitch rows, the steps' beat and bar lines, the notes as bars, the cursor cell framed, the playhead; the knobs as four
+# compact tiles under it. Only the playhead moving sends its columns; anything else the band whole. The big value view
+# stays away, a toast sits over it, a LIST covers it, a bad ROLL is dropped whole, rows 0 brings the page's own layout back.
+@ACK17@
+wait 100
+expect host_minor 7
+sysex_out
+@ROLL_PAGE@
+@STATUS@
+wait 100
+shot roll_before.png
+@ROLL_A@
+wait 100
+expect roll_on 1
+expect roll_layout 1
+expect roll_n 10
+expect roll_ram <400
+shot roll_a.png
+# the playhead runs: only its columns go to the screen
+expect roll_reset 0
+@ROLL_PLAY0@
+wait 50
+@ROLL_PLAY1@
+wait 50
+@ROLL_PLAY2@
+wait 50
+@ROLL_PLAY3@
+wait 50
+@ROLL_PLAY4@
+wait 50
+@ROLL_PLAY5@
+wait 50
+@ROLL_PLAY6@
+wait 50
+@ROLL_PLAY7@
+wait 50
+expect roll_frames 8
+expect roll_play 7
+expect roll_bpf <12000
+expect roll_bpf >500
+shot roll_play.png
+# the cursor moves (an empty cell): the band whole
+expect roll_reset 0
+@ROLL_CUR@
+wait 100
+expect roll_frames 1
+expect roll_bpf >50000
+shot roll_cursor.png
+# a turned knob frames its tile; its VALUE does not open the big view over the roll
+turn K2 1
+wait 30
+expect touch 2
+@V1_FAIL@
+wait 100
+expect big 0
+shot roll_touch.png
+# the next window of the pattern: a note from before it, the cursor on the bottom row
+@ROLL_NEXT@
+wait 100
+shot roll_next.png
+# 24 rows, 32 steps, the pattern's end inside the window, recording (the playhead red), a muted note, one by chance
+@ROLL_WIDE@
+wait 100
+expect roll_n 4
+shot roll_wide.png
+# a toast over it, then gone: the band again
+@TOAST@
+wait 100
+shot roll_toast.png
+wait 1500
+expect toast 0
+# bad frames are dropped whole
+expect frames_bad 0
+@ROLL_BAD@
+wait 50
+expect frames_bad 1
+expect roll_on 1
+expect roll_n 4
+# a LIST covers it; closed, the roll again
+@LIST@
+wait 100
+expect roll_layout 0
+@LIST_CLOSE@
+wait 100
+expect roll_layout 1
+# rows 0: the page's own four tiles
+@ROLL_END@
+wait 100
+expect roll_on 0
+expect roll_layout 0
+shot roll_end.png
+# a new HELLO_ACK forgets it (the host sends it again after SYNC_REQ)
+@ROLL_A@
+wait 50
+expect roll_on 1
+@ACK17@
+wait 50
+expect roll_on 0
