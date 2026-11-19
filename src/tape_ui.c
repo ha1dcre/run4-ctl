@@ -128,6 +128,10 @@ static void tv_rect(int32_t c0, int32_t c1, int32_t r0, int32_t r1)
     }
     if (c1 <= c0 || r1 <= r0)
         return;
+    /* the last rect's last strip may still be on its way to the panel (lcd_blit only starts the transfer), and this
+     * rect fills strip 0 first: without the wait the old playhead's columns went out as the meters' tiles or the new
+     * head's columns (the grey grid left where the head had been, firmware 0.9; tests/tape_view_test.c) */
+    lcd_sync();
     for (g = c0; g < c1; g += SC_G) {
         int32_t g1 = g + SC_G > c1 ? c1 : g + SC_G;
         uint16_t *d = sc_strip[((g - c0) / SC_G) & 1];

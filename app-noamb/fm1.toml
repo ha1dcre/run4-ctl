@@ -13,7 +13,8 @@ font_full = ["M"]                # lower case in the value font: the host format
 ble = true
 ble_stack = "own"
 usb_audio_in = true              # the FM-1's output recordable over USB (RUN4 records Synth mode); fm1-base's default, stated
-usb_audio_out = true             # a computer plays through the FM-1 (fm1-base's default)
+usb_audio_out = false            # no USB audio output: an iPad keeps its own speaker / headphones for RUN4 (with one, iOS
+                                 # sends all its sound to the FM-1 and greys the app's output choice); firmware 0.9.1
 backup = true                    # a USB backup / restore of everything stored but the panel (app.h APP_BACKUP_*)
 mirror = true                    # the screen and panel mirrored over USB (fm1-base web/mirror, tools/fm1_mirror.py)
 midi_stamp = true                # MIDI in stamped where it lands: notes and clock placed in the block (app.c midi_pump)

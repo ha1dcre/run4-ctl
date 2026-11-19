@@ -344,13 +344,12 @@ HV_VOICE, HV_PARAM) is kept for the host voice and applied on return; the host's
 its MIDI CH (GLOBAL page) is OMNI or the same channel, as any MIDI in does there. Back in RUN4 mode the host voice sounds
 again, unchanged, and after the HELLO_ACK the device says HV_STATE 1.
 
-**Audio.** The host voice comes out of the FM-1's headphone / line output. The FM-1 is a USB audio device in both modes
-(fm1-base's `usb_audio_in` / `usb_audio_out`, `app/fm1.toml`): its output goes to the iPad over the cable (RUN4 can
-record or monitor the track from the FM-1's USB input). **USB audio from the iPad to the FM-1 is mixed with the synth on
-the FM-1** (fm1-base `device/uac_mix.h`): the USB recording takes the FM-1's own render first (so the iPad's input never
-contains the iPad's own playback: no loop), then the iPad's audio is added for the headphones and line out at MASTER's
-level (`plat_usb_play_gain`, which this firmware leaves at full). So with the FM-1 as RUN4's audio interface, the
-player hears RUN4 and the host voice together on the FM-1's output, and RUN4 receives the host voice alone.
+**Audio.** The host voice comes out of the FM-1's headphone / line output. The FM-1 is a USB audio input device in
+both modes (fm1-base's `usb_audio_in`, `app/fm1.toml`): its output goes to the iPad over the cable (RUN4 can record or
+monitor the track from the FM-1's USB input). **Since firmware 0.9.1 the FM-1 has no USB audio output**
+(`usb_audio_out = false`): with one, iOS sent all the iPad's sound to the FM-1 and RUN4 could not choose another output;
+without it the iPad keeps its own speaker or headphones for RUN4, and the FM-1 only records. RUN4 receives the host
+voice alone (the FM-1's own render).
 
 **CPU.** The host voice is Synth mode's engine at the same load (8 voices and the effects); RUN4 mode's screen costs less
 than Synth mode's live band (the tape view below sends ~5.6 KB a frame, the scope ~18.5 KB). Measured in the host
@@ -1123,9 +1122,9 @@ again (new HELLO_ACK) when it sees mode 0. In Synth mode the MIDI in (USB, Bluet
 sound module (note on/off, sustain, pitch bend, all notes off, on the channel set in GLOBAL; omni by default) and DX7
 SysEx dumps are imported (see the manual). MIDI clock (F8) and START / CONTINUE / STOP (FA / FB / FC) in drive its
 sequencer and arpeggiator (clock AUTO, the default; the internal tempo again half a second after the last F8); with
-clock OUT it sends them. **USB audio:** the firmware keeps fm1-base's defaults `usb_audio_in` and `usb_audio_out`
-(stated in `app/fm1.toml`): the FM-1 is a USB audio device in both modes, so the host can record Synth mode's output
-over the same cable.
+clock OUT it sends them. **USB audio:** the firmware keeps fm1-base's default `usb_audio_in` and (since 0.9.1) sets `usb_audio_out = false`
+(stated in `app/fm1.toml`): the FM-1 is a USB audio input device in both modes, so the host can record Synth mode's
+output over the same cable while its own sound stays on its own speaker or headphones.
 
 **Bluetooth MIDI.** The protocol runs unchanged over a Bluetooth MIDI link when no USB computer is connected (with a
 computer on USB, the frames go to both links). The firmware is built with `ble = true` and fm1-base's own Bluetooth
