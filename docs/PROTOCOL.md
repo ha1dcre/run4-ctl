@@ -1149,7 +1149,7 @@ value view), 1.3 (host voice, voice list, tape view, patch backup), 1.4 (local m
 values, status line), 1.5 (the local mode's page: LVIEW, LVIEW_SET; the value pace 40 ms), 1.6 (the scene page: SCENES,
 SCENE_STATE, SCENE_PICK), 1.7 (the piano roll: ROLL); the firmware's HELLO says
 7 (since RUN4 CTL firmware 0.9.2, whose HELLO still says firmware 0.9; 5 in firmware 0.8, 0.9 and 0.9.1: 0.9 adds DUB mode,
-id 3, with no new message). Both sides speak the lower of the two minors.
+id 3, with no new message). Firmware 0.9.3 (synth/dub CPU fixes) keeps minor 7. Both sides speak the lower of the two minors.
 
 ## Implementing RUN4 CTL in your own firmware or device
 

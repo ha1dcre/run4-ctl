@@ -28,7 +28,7 @@ reverb and the help cards; firmware 0.8 protocol 1.4: RUN4 lists and switches th
 modes from their self-description (AMB and Synth mode described), the protocol and codec under MIT; protocol 1.5: the
 FM-1 tells RUN4 the page it shows and RUN4 picks one (LVIEW, LVIEW_SET), values every 40 ms; firmware 0.9 adds DUB mode
 (described to RUN4 as mode 3 with the same 1.4 / 1.5 messages: nothing new on the wire); firmware 0.9.1 drops the USB
-audio output; firmware 0.9.2 protocol 1.6: the scene page (SCENES, SCENE_STATE, SCENE_PICK) and 1.7: the piano roll (ROLL). Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
+audio output; firmware 0.9.2 protocol 1.6: the scene page (SCENES, SCENE_STATE, SCENE_PICK) and 1.7: the piano roll (ROLL); firmware 0.9.3 adds the synth/dub CPU fixes (no protocol change). Bluetooth MIDI is wired in and simulated. **Nothing has been built for or run on the real device**:
 the toolchain is Linux x86-64 and needs Docker. User manual: `docs/MANUAL.md`.
 
 ## Layout
