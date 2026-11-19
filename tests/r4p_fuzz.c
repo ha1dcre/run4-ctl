@@ -25,7 +25,7 @@ static const uint8_t CMDS[] = {
     R4P_HELLO_ACK, R4P_PAGE, R4P_VALUE, R4P_LEDS, R4P_STATUS, R4P_TOAST, R4P_LIST, R4P_FOCUS, R4P_HV_ON, R4P_HV_VOICE,
     R4P_HV_PARAM, R4P_NAMES_REQ, R4P_VOICE_GET, R4P_TAPE_WAVE, R4P_TAPE_POS, R4P_METERS, R4P_BK_ACK, R4P_BK_INFO,
     R4P_BK_DATA, R4P_MODES_REQ, R4P_MODE_SET, R4P_DESC_REQ, R4P_VALS_REQ, R4P_PSET, R4P_LVIEW_SET,
-    R4P_SCENE_PICK, R4P_SCENES, R4P_SCENE_STATE};
+    R4P_SCENE_PICK, R4P_SCENES, R4P_SCENE_STATE, R4P_ROLL};
 #define NCMDS (sizeof CMDS / sizeof CMDS[0])
 
 /* a valid message of each command, to mutate (filled by hand: plain, short strings) */
@@ -76,6 +76,14 @@ static size_t seed_frame(uint8_t cmd, uint8_t *f, size_t cap)
     case R4P_SCENES: m.u.scenes.total = 40; m.u.scenes.first = 16; m.u.scenes.n = 16;
         for (i = 0; i < 16; i++) strcpy(m.u.scenes.name[i], "VERSE"); break;
     case R4P_SCENE_STATE: m.u.scene_state.active = 3; m.u.scene_state.queued = R4P_SCENE_NONE; break;
+    case R4P_ROLL: m.u.roll.flags = R4P_RF_PLAY; m.u.roll.lo = 48; m.u.roll.rows = 13; m.u.roll.steps = 16;
+        m.u.roll.first = 16; m.u.roll.total = 64; m.u.roll.cur_col = 3; m.u.roll.cur_row = 6; m.u.roll.play = 9;
+        m.u.roll.beat = 4; strcpy(m.u.roll.label, "C3-C4"); m.u.roll.n = 20;
+        for (i = 0; i < 20; i++) {
+            m.u.roll.note[i].col = (uint8_t)(i % 16); m.u.roll.note[i].len = 1; m.u.roll.note[i].row = (uint8_t)(i % 13);
+            m.u.roll.note[i].vel = (uint8_t)(60 + i); m.u.roll.note[i].flags = (uint8_t)(i % 32);
+        }
+        break;
     default: break;
     }
     return r4p_encode(f, cap, &m);

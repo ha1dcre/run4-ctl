@@ -23,7 +23,8 @@ CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05, LIST_PICK=0x
            DESC_END=0x13, PVAL=0x14, LSTATE=0x15, LM_ERR=0x16,
            MODES_REQ=0x54, MODE_SET=0x55, DESC_REQ=0x56, VALS_REQ=0x57, PSET=0x58,
            LVIEW=0x17, LVIEW_SET=0x59,                                                                    # 1.5
-           SCENE_PICK=0x1B, SCENES=0x5C, SCENE_STATE=0x5D)                                                # 1.6
+           SCENE_PICK=0x1B, SCENES=0x5C, SCENE_STATE=0x5D,                                                # 1.6
+           ROLL=0x5E)                                                                                     # 1.7
 NONE = 127                             # protocol 1.2: no cursor
 KIND = dict(empty=0, uni=1, bi=2, enum=3, toggle=4)
 LED = dict(off=0, dim=1, on=2, blink=3)
@@ -127,6 +128,28 @@ def scenes(total, first, names):
 def scene_state(active, queued):
     """protocol 1.6 SCENE_STATE: None = no scene (16383)"""
     return frame("SCENE_STATE", v14(16383 if active is None else active) + v14(16383 if queued is None else queued))
+
+
+# protocol 1.7: the piano roll. A note is (col, len, row, vel, flags); flags IN 1, OUT 2, MUTED 4, SEL 8, CHANCE 16
+RN = dict(IN=1, OUT=2, MUTED=4, SEL=8, CHANCE=16)
+
+
+def roll(lo, rows, steps, first, total, notes, cur=None, play=None, beat=4, label="", playing=False, rec=False):
+    """protocol 1.7 ROLL: the window rows x steps from pitch lo / step first of total; cur = (col, row) or None"""
+    assert 1 <= rows <= 24 and 1 <= steps <= 32 and lo + rows - 1 <= 127 and len(notes) <= 64 and 0 <= beat <= 32
+    cc, cr = cur if cur is not None else (NONE, NONE)
+    assert (cc < steps or cc == NONE) and (cr < rows or cr == NONE) and (play is None or play < steps)
+    p = [(1 if playing else 0) | (2 if rec else 0), lo, rows, steps] + v14(first) + v14(total)
+    p += [cc, cr, NONE if play is None else play, beat] + string(label) + [len(notes)]
+    for col, ln, row, vel, fl in notes:
+        assert col < steps and ln >= 1 and col + ln <= steps and row < rows and vel <= 127 and fl <= 31
+        p += [col, ln, row, vel, fl]
+    return frame("ROLL", p)
+
+
+def roll_end():
+    """protocol 1.7 ROLL with no rows: the roll ends"""
+    return frame("ROLL", [0, 0, 0, 0] + v14(0) + v14(0) + [NONE, NONE, NONE, 0, 0, 0])
 
 
 def value(slot_i, v, text, flags=None):
@@ -830,6 +853,31 @@ def v14_table():
     return t
 
 
+def v17_table():
+    """protocol 1.7: a ROLL page (the knobs: step, pitch, length, velocity) and its windows"""
+    melody = [(0, 2, 0, 110, 0), (2, 1, 4, 127, RN["SEL"]), (4, 1, 7, 90, 0), (6, 2, 12, 100, 0), (8, 1, 4, 70, 0),
+              (9, 1, 5, 60, RN["CHANCE"]), (10, 2, 7, 120, 0), (12, 4, 0, 100, RN["OUT"]), (12, 4, 4, 80, RN["OUT"]),
+              (12, 4, 7, 80, RN["OUT"] | RN["MUTED"])]
+    win = dict(lo=60, rows=13, steps=16, first=0, total=32, notes=melody, cur=(2, 4), beat=4, label="POLY 2  C4-C5")
+    t = {"ACK17": frame("HELLO_ACK", [1, 7]),
+         "ROLL_PAGE": page("ROLL", "POLY 2", (110, 60, 127), 4, 4, 0, 1, [
+             slot("STEP", "uni", 1600, "3/32"), slot("NOTE", "uni", 8000, "E4"),
+             slot("LENGTH", "uni", 1000, "1 ST"), slot("VELO", "uni", 16383, "127")], (0, 0, 0, "POLY 2 > SEQ > ROLL")),
+         "ROLL_A": roll(**win),
+         "ROLL_CUR": roll(**dict(win, cur=(5, 9), notes=[(n[0], n[1], n[2], n[3], n[4] & ~RN["SEL"]) for n in melody])),
+         "ROLL_NEXT": roll(**dict(win, first=16, cur=(0, 0), label="POLY 2  C4-C5",
+                                 notes=[(0, 2, 0, 100, RN["IN"]), (3, 1, 2, 64, 0), (5, 3, 9, 127, 0), (15, 1, 12, 40, 0)])),
+         "ROLL_WIDE": roll(lo=48, rows=24, steps=32, first=32, total=40, beat=4, label="T\u00d3LF 3  C3-B4", rec=True, playing=True,
+                           play=5, cur=(4, 11), notes=[(0, 3, 0, 127, RN["IN"]), (2, 1, 23, 30, RN["CHANCE"]),
+                                                                     (4, 2, 11, 100, RN["SEL"]), (6, 1, 12, 80, RN["MUTED"])]),
+         "ROLL_END": roll_end(),
+         "ROLL_BAD": frame("ROLL", [0, 60, 25, 16] + v14(0) + v14(32) + [NONE, NONE, NONE, 4, 0, 0]),   # 25 rows
+         }
+    for i in range(16):
+        t["ROLL_PLAY%d" % i] = roll(**dict(win, play=i, playing=True))
+    return t
+
+
 def expand(name):
     """a scenario with lines '@name@' replaced by 'sysex HEX'"""
     table = {
@@ -853,8 +901,8 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 9, 0, 6]), "SYNC": frame("SYNC_REQ"),
-        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 6]),
+        "HELLO": frame("HELLO", [1, 0, 9, 0, 7]), "SYNC": frame("SYNC_REQ"),
+        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 7]),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -865,6 +913,7 @@ def expand(name):
     table.update(v13_table())
     table.update(v14_table())
     table.update(v15_table())
+    table.update(v17_table())
     for i in range(14):
         table["BTN%d_1" % i] = frame("BTN", [i, 1])
         table["BTN%d_0" % i] = frame("BTN", [i, 0])
@@ -906,7 +955,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 6]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 7]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)

@@ -52,6 +52,28 @@ static void ws14(wr_t *w, int v)                    /* 1.4: a signed value, v + 
     w14(w, (unsigned)(v + 8192));
 }
 static int mode_id_ok(unsigned m) { return m < 127u; }
+/* 1.7: a ROLL window is consistent (the same rules both ways) */
+static int roll_ok(const r4p_roll_t *r)
+{
+    unsigned i;
+    if (r->flags > (R4P_RF_PLAY | R4P_RF_REC) || r->rows > R4P_ROLL_ROWS || r->n > R4P_ROLL_NOTES || r->beat > R4P_ROLL_STEPS)
+        return 0;
+    if (r->rows == 0)
+        return r->steps == 0 && r->n == 0 && r->cur_col == R4P_ROLL_NONE && r->cur_row == R4P_ROLL_NONE &&
+               r->play == R4P_ROLL_NONE;
+    if (r->steps == 0 || r->steps > R4P_ROLL_STEPS || (unsigned)r->lo + r->rows - 1u > 127u)
+        return 0;
+    if ((r->cur_col >= r->steps && r->cur_col != R4P_ROLL_NONE) || (r->cur_row >= r->rows && r->cur_row != R4P_ROLL_NONE) ||
+        (r->play >= r->steps && r->play != R4P_ROLL_NONE))
+        return 0;
+    for (i = 0; i < r->n; i++) {
+        const r4p_rnote_t *t = &r->note[i];
+        if (t->col >= r->steps || !t->len || (unsigned)t->col + t->len > r->steps || t->row >= r->rows || t->vel > 127u ||
+            t->flags > 31u)
+            return 0;
+    }
+    return 1;
+}
 /* 1.4: a parameter's description is consistent (the same rules both ways) */
 static int dparam_ok(const r4p_dparam_t *d)
 {
@@ -435,6 +457,20 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
             (m->u.scene_state.queued >= R4P_SCENE_MAX && m->u.scene_state.queued != R4P_SCENE_NONE))
             w.bad = 1;
         break;
+    case R4P_ROLL: {
+        const r4p_roll_t *o = &m->u.roll;
+        w8(&w, o->flags); w8(&w, o->lo); w8(&w, o->rows); w8(&w, o->steps);
+        w14(&w, o->first); w14(&w, o->total);
+        w8(&w, o->cur_col); w8(&w, o->cur_row); w8(&w, o->play); w8(&w, o->beat);
+        wstr(&w, o->label); w8(&w, o->n);
+        if (!roll_ok(o))
+            w.bad = 1;
+        for (i = 0; i < o->n && i < R4P_ROLL_NOTES; i++) {
+            const r4p_rnote_t *t = &o->note[i];
+            w8(&w, t->col); w8(&w, t->len); w8(&w, t->row); w8(&w, t->vel); w8(&w, t->flags);
+        }
+        break;
+    }
     default:
         return 0;
     }
@@ -911,6 +947,24 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
             (out->u.scene_state.queued >= R4P_SCENE_MAX && out->u.scene_state.queued != R4P_SCENE_NONE))
             r.bad = 1;
         break;
+    case R4P_ROLL: {
+        r4p_roll_t *o = &out->u.roll;
+        o->flags = (uint8_t)r8(&r); o->lo = (uint8_t)r8(&r); o->rows = (uint8_t)r8(&r); o->steps = (uint8_t)r8(&r);
+        o->first = (uint16_t)r14(&r); o->total = (uint16_t)r14(&r);
+        o->cur_col = (uint8_t)r8(&r); o->cur_row = (uint8_t)r8(&r); o->play = (uint8_t)r8(&r); o->beat = (uint8_t)r8(&r);
+        rstr(&r, o->label);
+        o->n = (uint8_t)r8(&r);
+        if (o->n > R4P_ROLL_NOTES)
+            r.bad = 1;
+        for (i = 0; i < o->n && !r.bad; i++) {
+            r4p_rnote_t *t = &o->note[i];
+            t->col = (uint8_t)r8(&r); t->len = (uint8_t)r8(&r); t->row = (uint8_t)r8(&r); t->vel = (uint8_t)r8(&r);
+            t->flags = (uint8_t)r8(&r);
+        }
+        if (!r.bad && !roll_ok(o))
+            r.bad = 1;
+        break;
+    }
     default:
         return -1;
     }

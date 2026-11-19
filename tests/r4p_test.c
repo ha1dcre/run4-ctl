@@ -803,7 +803,7 @@ static void t_v16(void)
     static const uint8_t PICK17[] = {0xF0, 0x7D, 0x52, 0x34, 0x1B, 0x11, 0xF7};
     static const uint8_t STATE[] = {0xF0, 0x7D, 0x52, 0x34, 0x5D, 0x00, 0x03, 0x7F, 0x7F, 0xF7};
     static const uint8_t SCN2[] = {0xF0, 0x7D, 0x52, 0x34, 0x5C, 0x00, 0x03, 0x00, 0x02, 0x04, 'V', 'E', 'R', 'S', 0x00, 0xF7};
-    CHECK(R4P_MINOR == 6 && R4P_SCENE_PICK == 0x1B && R4P_SCENES == 0x5C && R4P_SCENE_STATE == 0x5D);
+    CHECK(R4P_MINOR >= 6 && R4P_SCENE_PICK == 0x1B && R4P_SCENES == 0x5C && R4P_SCENE_STATE == 0x5D);
     /* SCENE_PICK: the index 0..127, exact bytes */
     n = r4p_scene_pick(buf, sizeof buf, 17);
     CHECK(n == sizeof PICK17 && !memcmp(buf, PICK17, n));
@@ -864,6 +864,99 @@ static void t_v16(void)
     m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 6; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 6);
 }
 
+/* protocol 1.7: the piano roll. The vectors are the app's too (scripts/run4ctl_protocol_test/v17_vectors.txt) */
+static void roll_a(r4p_msg_t *m)
+{
+    memset(m, 0, sizeof *m);
+    m->cmd = R4P_ROLL;
+    m->u.roll.flags = R4P_RF_PLAY; m->u.roll.lo = 60; m->u.roll.rows = 12; m->u.roll.steps = 16;
+    m->u.roll.first = 16; m->u.roll.total = 32; m->u.roll.cur_col = 2; m->u.roll.cur_row = 4; m->u.roll.play = 5;
+    m->u.roll.beat = 4; strcpy(m->u.roll.label, "C4-B4"); m->u.roll.n = 3;
+    m->u.roll.note[0] = (r4p_rnote_t){0, 2, 0, 100, R4P_RN_IN};
+    m->u.roll.note[1] = (r4p_rnote_t){2, 1, 4, 127, R4P_RN_SEL};
+    m->u.roll.note[2] = (r4p_rnote_t){14, 2, 11, 64, R4P_RN_OUT | R4P_RN_MUTED};
+}
+static void t_v17(void)
+{
+    r4p_msg_t m, b;
+    size_t n;
+    int i;
+    static const uint8_t ROLL_A[] = {0xF0, 0x7D, 0x52, 0x34, 0x5E, 0x01, 0x3C, 0x0C, 0x10, 0x00, 0x10, 0x00, 0x20, 0x02, 0x04,
+                                     0x05, 0x04, 0x05, 'C', '4', '-', 'B', '4', 0x03, 0x00, 0x02, 0x00, 0x64, 0x01, 0x02,
+                                     0x01, 0x04, 0x7F, 0x08, 0x0E, 0x02, 0x0B, 0x40, 0x06, 0xF7};
+    static const uint8_t ROLL_B[] = {0xF0, 0x7D, 0x52, 0x34, 0x5E, 0x03, 0x67, 0x18, 0x20, 0x02, 0x20, 0x02, 0x2C, 0x7F, 0x7F,
+                                     0x1F, 0x00, 0x04, 'T', 0x7F, 0x53, 'L', 'F', 0x01, 0x1F, 0x01, 0x17, 0x00, 0x10, 0xF7};
+    static const uint8_t ROLL_END[] = {0xF0, 0x7D, 0x52, 0x34, 0x5E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F, 0x7F,
+                                       0x7F, 0x00, 0x00, 0x00, 0xF7};
+    CHECK(R4P_MINOR == 7 && R4P_ROLL == 0x5E);
+    /* A: 12 rows from C4, steps 17..32 of 32, the cursor on a selected note, a note from before and one going on */
+    roll_a(&m);
+    n = enc(&m);
+    CHECK(n == sizeof ROLL_A && !memcmp(buf, ROLL_A, n));
+    CHECK(r4p_parse(ROLL_A, sizeof ROLL_A, &b) == 1 && b.cmd == R4P_ROLL && b.u.roll.lo == 60 && b.u.roll.rows == 12 &&
+          b.u.roll.steps == 16 && b.u.roll.first == 16 && b.u.roll.total == 32 && b.u.roll.cur_col == 2 &&
+          b.u.roll.cur_row == 4 && b.u.roll.play == 5 && b.u.roll.beat == 4 && !strcmp(b.u.roll.label, "C4-B4") &&
+          b.u.roll.n == 3 && b.u.roll.note[2].col == 14 && b.u.roll.note[2].len == 2 && b.u.roll.note[2].row == 11 &&
+          b.u.roll.note[2].vel == 64 && b.u.roll.note[2].flags == (R4P_RN_OUT | R4P_RN_MUTED) &&
+          b.u.roll.note[1].flags == R4P_RN_SEL && b.u.roll.note[0].flags == R4P_RN_IN);
+    /* B: the widest (24 rows up to 126, 32 steps), 14-bit positions, recording, no cursor, a Latin-1 label */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_ROLL; m.u.roll.flags = R4P_RF_PLAY | R4P_RF_REC; m.u.roll.lo = 103; m.u.roll.rows = 24; m.u.roll.steps = 32;
+    m.u.roll.first = 288; m.u.roll.total = 300; m.u.roll.cur_col = R4P_ROLL_NONE; m.u.roll.cur_row = R4P_ROLL_NONE;
+    m.u.roll.play = 31; m.u.roll.beat = 0; strcpy(m.u.roll.label, "T\xD3LF"); m.u.roll.n = 1;
+    m.u.roll.note[0] = (r4p_rnote_t){31, 1, 23, 0, R4P_RN_CHANCE};
+    n = enc(&m);
+    CHECK(n == sizeof ROLL_B && !memcmp(buf, ROLL_B, n));
+    CHECK(r4p_parse(ROLL_B, sizeof ROLL_B, &b) == 1 && b.u.roll.first == 288 && b.u.roll.total == 300 &&
+          !strcmp(b.u.roll.label, "T\xD3LF") && b.u.roll.note[0].row == 23 && b.u.roll.note[0].flags == R4P_RN_CHANCE);
+    /* the end of the view: rows 0, nothing else */
+    memset(&m, 0, sizeof m);
+    m.cmd = R4P_ROLL; m.u.roll.cur_col = m.u.roll.cur_row = m.u.roll.play = R4P_ROLL_NONE;
+    n = enc(&m);
+    CHECK(n == sizeof ROLL_END && !memcmp(buf, ROLL_END, n));
+    CHECK(r4p_parse(ROLL_END, sizeof ROLL_END, &b) == 1 && b.u.roll.rows == 0 && b.u.roll.n == 0);
+    /* the longest: 64 notes, a label of 24 Latin-1 characters, within the device's 640 */
+    roll_a(&m);
+    m.u.roll.rows = 24; m.u.roll.steps = 32; m.u.roll.n = 64;
+    for (i = 0; i < 24; i++) m.u.roll.label[i] = (char)0xC4;
+    m.u.roll.label[24] = 0;
+    for (i = 0; i < 64; i++) m.u.roll.note[i] = (r4p_rnote_t){(uint8_t)(i % 32), 1, (uint8_t)(i % 24), 90, 0};
+    n = enc(&m);
+    CHECK(n == 5 + 12 + 1 + 48 + 1 + 64 * 5 + 1 && n <= R4P_FRAME_MAX && r4p_parse(buf, n, &b) == 1 && b.u.roll.n == 64 &&
+          b.u.roll.note[63].col == 31 && b.u.roll.note[63].row == 15 && (uint8_t)b.u.roll.label[23] == 0xC4);
+    /* refused: each rule once */
+    roll_a(&m); m.u.roll.flags = 4; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.rows = 25; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.steps = 0; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.steps = 33; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.lo = 117; CHECK(enc(&m) == 0);                          /* 117 + 11 = 128 */
+    roll_a(&m); m.u.roll.lo = 116; CHECK(round_trip(&m, &b) == 1);              /* up to 127 */
+    roll_a(&m); m.u.roll.cur_col = 16; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.cur_row = 12; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.play = 16; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.beat = 33; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.n = 65; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.note[0].len = 0; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.note[2].len = 3; CHECK(enc(&m) == 0);                  /* 14 + 3 > 16 */
+    roll_a(&m); m.u.roll.note[0].row = 12; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.note[0].flags = 32; CHECK(enc(&m) == 0);
+    roll_a(&m); m.u.roll.note[0].vel = 128; CHECK(enc(&m) == 0);
+    memset(&m, 0, sizeof m); m.cmd = R4P_ROLL; m.u.roll.cur_col = m.u.roll.cur_row = m.u.roll.play = R4P_ROLL_NONE;
+    m.u.roll.steps = 4; CHECK(enc(&m) == 0);                                     /* an end with steps */
+    m.u.roll.steps = 0; m.u.roll.play = 0; CHECK(enc(&m) == 0);                  /* an end with a playhead */
+    {
+        uint8_t trunc[sizeof ROLL_A - 1], tail[sizeof ROLL_A + 1], badn[sizeof ROLL_A], badc[sizeof ROLL_A];
+        memcpy(trunc, ROLL_A, sizeof ROLL_A - 2); trunc[sizeof trunc - 1] = 0xF7;
+        memcpy(tail, ROLL_A, sizeof ROLL_A - 1); tail[sizeof ROLL_A - 1] = 0x00; tail[sizeof ROLL_A] = 0xF7;
+        memcpy(badn, ROLL_A, sizeof ROLL_A); badn[23] = 0x41;                      /* n 65 */
+        memcpy(badc, ROLL_A, sizeof ROLL_A); badc[34] = 0x10;                      /* a note at column 16 */
+        CHECK(r4p_parse(trunc, sizeof trunc, &b) == -1 && r4p_parse(tail, sizeof tail, &b) == -1 &&
+              r4p_parse(badn, sizeof badn, &b) == -1 && r4p_parse(badc, sizeof badc, &b) == -1);
+    }
+    /* the 1.7 HELLO_ACK carries minor 7 */
+    m.cmd = R4P_HELLO_ACK; m.u.ack.proto = 1; m.u.ack.minor = 7; CHECK(enc(&m) == 8 && round_trip(&m, &b) == 1 && b.u.ack.minor == 7);
+}
+
 int main(void)
 {
     t_simple();
@@ -879,6 +972,7 @@ int main(void)
     t_v14();
     t_v15();
     t_v16();
+    t_v17();
     printf("r4p: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

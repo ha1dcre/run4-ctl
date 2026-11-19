@@ -8,11 +8,11 @@
 #include <stdint.h>
 
 #define R4P_VER 1
-#define R4P_MINOR 6               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
+#define R4P_MINOR 7               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
                                    * trailer (cursor, position, path), FOCUS, VALUE flags; 1.3: the host voice, the
                                    * voice list, the tape view, the patch backup; 1.4: the local modes (list, switch,
                                    * self-description, values, state); 1.5: the local mode's page (LVIEW, LVIEW_SET); 1.6: the
-                                   * scene page (SCENES, SCENE_STATE, SCENE_PICK) */
+                                   * scene page (SCENES, SCENE_STATE, SCENE_PICK); 1.7: the piano roll (ROLL) */
 #define R4P_CURSOR_NONE 127
 #define R4P_VF_BIG 1              /* VALUE flags bit 0: show the big value view */
 #define R4P_LIST_ROWS 7           /* items in one LIST frame (the window) */
@@ -41,8 +41,24 @@ enum {                            /* device -> host */
     R4P_BK_ACK = 0x51, R4P_BK_INFO = 0x52, R4P_BK_DATA = 0x53,                                            /* 1.3 */
     R4P_MODES_REQ = 0x54, R4P_MODE_SET = 0x55, R4P_DESC_REQ = 0x56, R4P_VALS_REQ = 0x57, R4P_PSET = 0x58, /* 1.4 */
     R4P_LVIEW_SET = 0x59,                                                                                 /* 1.5 */
-    R4P_SCENES = 0x5C, R4P_SCENE_STATE = 0x5D                                                             /* 1.6 */
+    R4P_SCENES = 0x5C, R4P_SCENE_STATE = 0x5D,                                                            /* 1.6 */
+    R4P_ROLL = 0x5E                                                                                       /* 1.7 */
 };
+/* protocol 1.7: the piano roll. The host sends the window of a pattern it shows (ROLL): up to 24 pitch rows from `lo`
+ * (row 0 the lowest) and up to 32 steps from the absolute step `first` of `total`, the cursor cell, the playhead
+ * column, the beat grid and the notes inside the window (window-relative). rows 0 ends the view. The device only
+ * draws; every edit stays in the host (the knobs, keys and buttons arrive as always). */
+#define R4P_ROLL_ROWS 24          /* pitch rows in one window */
+#define R4P_ROLL_STEPS 32         /* step columns in one window */
+#define R4P_ROLL_NOTES 64         /* notes in one ROLL frame */
+#define R4P_ROLL_NONE 127         /* ROLL cur_col / cur_row / play: none */
+#define R4P_RF_PLAY 1             /* ROLL flags: the pattern plays */
+#define R4P_RF_REC 2              /*             it records */
+#define R4P_RN_IN 1               /* a note's flags: it began before the window */
+#define R4P_RN_OUT 2              /*                 it goes on after the window */
+#define R4P_RN_MUTED 4            /*                 its step is muted */
+#define R4P_RN_SEL 8              /*                 the note under the cursor */
+#define R4P_RN_CHANCE 16          /*                 it plays by chance (probability < 100 %) */
 /* protocol 1.6: the scene page. RUN4's Sets (scenes): the host sends their count and short names a bank of 16 at a time
  * (SCENES), which is active and which is queued (SCENE_STATE); the device sends the one picked (SCENE_PICK, b1.v) */
 #define R4P_SCENE_MAX 128         /* scenes RUN4 has at most (a SCENE_PICK index is 0..127) */
@@ -171,6 +187,17 @@ typedef struct { uint8_t mode, code; uint16_t id; } r4p_lerr_t;
  * and first + n <= total; SCENE_STATE the active and the queued scene (R4P_SCENE_NONE or < 128) */
 typedef struct { uint16_t total; uint8_t first, n; char name[R4P_SCENE_ROWS][R4P_SCENE_NAME + 1]; } r4p_scenes_t;
 typedef struct { uint16_t active, queued; } r4p_scene_state_t;
+/* protocol 1.7: one note of the window (col + len <= steps, row < rows, vel 0..127, flags R4P_RN_*) and the window
+ * (r4p_roll_t; rows 0: the view ends, then steps 0, n 0, cur_col / cur_row / play R4P_ROLL_NONE) */
+typedef struct { uint8_t col, len, row, vel, flags; } r4p_rnote_t;
+typedef struct {
+    uint8_t flags, lo, rows, steps;
+    uint16_t first, total;
+    uint8_t cur_col, cur_row, play, beat;     /* beat: steps per beat 0..32 (0: no beat lines) */
+    char label[R4P_STR_MAX + 1];
+    uint8_t n;
+    r4p_rnote_t note[R4P_ROLL_NOTES];
+} r4p_roll_t;
 /* protocol 1.5: the page the device shows (LVIEW: page < R4P_LM_PAGES, n 0..4, the ids of K1..Kn, R4P_LVIEW_NONE for a
  * knob without a described parameter) and the host's pick (LVIEW_SET: mode, page 0..127; n and id unused) */
 typedef struct { uint8_t mode, page, n; uint16_t id[R4P_LVIEW_MAX]; } r4p_lview_t;
@@ -216,6 +243,7 @@ typedef struct {
         r4p_lview_t lview;        /* 1.5: LVIEW, LVIEW_SET (mode, page) */
         r4p_scenes_t scenes;      /* 1.6: SCENES (SCENE_PICK: b1.v = the scene, 0..127) */
         r4p_scene_state_t scene_state;
+        r4p_roll_t roll;          /* 1.7: ROLL */
     } u;
 } r4p_msg_t;
 

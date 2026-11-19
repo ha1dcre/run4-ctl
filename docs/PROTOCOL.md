@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!-- Copyright (c) 2026 Eugen Schott -->
 
-# RUN4 CTL protocol v1 (minor 6)
+# RUN4 CTL protocol v1 (minor 7)
 
 This document and the reference codec (`src/r4p.h`, `src/r4p.c`) are under the MIT licence (`LICENSE-MIT`), so any
 firmware or device can implement RUN4 CTL; the rest of RUN4 CTL stays GPL-3.0. See "Implementing RUN4 CTL in your own
@@ -117,6 +117,7 @@ while a key is held leaves no stuck note.
 | 0x59 | LVIEW_SET | `mode, page` - 1.5 |
 | 0x5C | SCENES | `total14, first, n, n x name(str)` (n 0..16, names of at most 8 characters) - 1.6 |
 | 0x5D | SCENE_STATE | `active14, queued14` (a scene 0..127, or 16383 = none) - 1.6 |
+| 0x5E | ROLL | `flags, lo, rows, steps, first14, total14, cur_col, cur_row, play, beat, label(str), n, n x (col, len, row, vel, nflags)` (rows 0: the roll ends) - 1.7, "Protocol 1.7: the piano roll" |
 
 Protocol 1.2 adds optional trailers (see "Protocol 1.2: where you are"): PAGE may end with
 `cursor item_idx14 item_count14 path(str)`, VALUE with `flags`.
@@ -1019,6 +1020,61 @@ host -> FM-1  F0 7D 52 34 5D 00 06 7F 7F F7                                    a
 
 SCENE_PICK is 7 bytes, SCENE_STATE 10, SCENES 10 to 154 (at most 282 with names of accented letters only, far below 640).
 
+## Protocol 1.7: the piano roll
+
+A window of the pattern the host shows (RUN4: a Poly track's pattern, TÓLF's steps) drawn as a piano roll: a key
+column, pitch rows, step columns with beat and bar lines, the notes as bars, the cursor cell and the playhead.
+Backwards compatible: `proto_ver` stays 1, the firmware's HELLO says minor 7, and the host never sends ROLL to a device
+that said a lower minor (it shows the page's four tiles there, as before). A device that does not know ROLL ignores it.
+The device **only draws**: there is no new device frame. The cursor, the window, the notes and every edit are the
+host's; the player moves and edits with the knobs, keys and buttons, which reach the host as BTN / ENC / note messages
+as on every page (RUN4: K1 the cursor's step, K2 its pitch, K3 the length, K4 the velocity of the note under it, a white
+key sets or deletes a note on that step at the cursor's pitch; the app's FM-1 manual has the details).
+
+**ROLL (0x5E)** `flags, lo, rows, steps, first14, total14, cur_col, cur_row, play, beat, label(str), n, n x note`,
+a note being `col, len, row, vel, nflags`
+
+| field | values |
+| --- | --- |
+| `flags` | bit 0 the pattern plays, bit 1 it records (the playhead and the label red); other bits 0 |
+| `lo` | the pitch (MIDI note) of row 0, the lowest row; `lo + rows - 1 <= 127` |
+| `rows` | 1..24 pitch rows, drawn from the bottom up; **0 ends the roll** (then `steps` 0, `n` 0, `cur_col`, `cur_row` and `play` 127; the page's own layout comes back) |
+| `steps` | 1..32 step columns in the window |
+| `first14` | the pattern's step at the window's first column (0-based) |
+| `total14` | the pattern's length in steps; columns at or past it are drawn shaded |
+| `cur_col` | the cursor's column, `< steps`, or 127 (none) |
+| `cur_row` | the cursor's row, `< rows`, or 127 (none: only its column is lit) |
+| `play` | the playhead's column, `< steps`, or 127 (none, or outside the window) |
+| `beat` | steps per beat, 0..32: a beat line every `beat` steps, a bar line every 4 beats (counted from step 0 of the pattern); 0 none |
+| `label` | up to 24 characters over the roll, e.g. `POLY 2  C4-C5` (empty: none) |
+| `n` | 0..64 notes inside the window |
+| note `col`, `len` | the column the bar starts on and its length in columns: `len >= 1`, `col + len <= steps` (the host cuts a note to the window) |
+| note `row` | its row, `< rows` |
+| note `vel` | 0..127, drawn as the bar's brightness |
+| note `nflags` | bit 0 IN (it began before the window), bit 1 OUT (it goes on after it), bit 2 MUTED (grey), bit 3 SEL (the note under the cursor: outlined), bit 4 CHANCE (it plays by chance: a dark line through it); other bits 0 |
+
+A ROLL that breaks any of these rules is dropped whole. Each frame is the whole window: send it when the view starts,
+at every change of the cursor, the window or the notes, and while playing when the playhead's column changes (at most
+15 a second). A frame that differs from the last only in `play` (and bit 0 of `flags`) redraws just the playhead's old
+and new columns (measured in the simulator: ~5 KB to the panel); any other change the whole band (~55 KB). The
+display: the header and footer as on every page, the roll in a band x 4..235, y 34..151 (key column 22 pixels, the grid
+208 pixels wide at most, a row 102 / `rows` pixels high), the page's four slots as compact tiles under it (y 152..199;
+the tile in focus in the accent). The big value view (1.2) is not shown over the roll; a toast and a LIST cover it and
+it comes back. It ends with ROLL `rows = 0`, a new HELLO_ACK, a link change and a switch to Synth mode; a PAGE does
+not end it.
+
+Bytes, an example (12 rows from C4, steps 17..32 of 32, playing, the cursor on the note at step 19, E4):
+
+```
+F0 7D 52 34 5E 01 3C 0C 10 00 10 00 20 02 04 05 04 05 "C4-B4" 03      flags PLAY, lo 60, 12 rows, 16 steps, first 16,
+   00 02 00 64 01   02 01 04 7F 08   0E 02 0B 40 06   F7                total 32, cursor (2, 4), play 5, beat 4, 3 notes
+F0 7D 52 34 5E 00 00 00 00 00 00 00 00 7F 7F 7F 00 00 00 F7            the roll ends
+```
+
+ROLL is 20 bytes (the end) to 388 (64 notes, a label of 24 accented letters), far below 640. **Version note:** an
+unreleased branch of this firmware (`script-page`, for RUN4 2.0) also calls itself protocol 1.6 and uses 0x5A, 0x5B and
+0x18..0x1A; ROLL (0x5E) collides with none of them, but the two branches' minors must be renumbered when they meet.
+
 ## Connection
 
 1. On boot, and every second until HELLO_ACK: the device sends HELLO and shows "NOT CONNECTED". The keys send notes
@@ -1092,8 +1148,8 @@ the USB-only package. **Not verified on a device**: the simulator models the lin
 the device. Minors so far: 1.0 (no minor byte), 1.1 (LIST, LIST_PICK), 1.2 (PAGE trailer, FOCUS, VALUE flags, the big
 value view), 1.3 (host voice, voice list, tape view, patch backup), 1.4 (local modes: list, switch, self-description,
 values, status line), 1.5 (the local mode's page: LVIEW, LVIEW_SET; the value pace 40 ms), 1.6 (the scene page: SCENES,
-SCENE_STATE, SCENE_PICK); the firmware's HELLO says
-6 (5 in RUN4 CTL firmware 0.8 and 0.9: 0.9 adds DUB mode, id 3, with no new message). Both sides speak the lower of the two minors.
+SCENE_STATE, SCENE_PICK), 1.7 (the piano roll: ROLL); the firmware's HELLO says
+7 (5 in RUN4 CTL firmware 0.8 and 0.9: 0.9 adds DUB mode, id 3, with no new message). Both sides speak the lower of the two minors.
 
 ## Implementing RUN4 CTL in your own firmware or device
 
@@ -1143,5 +1199,5 @@ Do not put other data under `7D 52 34`, and check that your other SysEx does not
   (its port's identity) and hash. A kind, flag bit or frame the host does not know: it skips that parameter or frame
   and goes on (it does not drop the device). A malformed frame is dropped.
 * The host voice is used only after an HV_STATE answered HV_ON (no HV_STATE within a second: no host voice).
-* The host never sends 1.6 frames (SCENES, SCENE_STATE) to a device that said a minor below 6, 1.5 frames (LVIEW_SET) to a device that said a minor below 5, 1.4 frames below 4, nor 1.3
+* The host never sends 1.7 frames (ROLL) to a device that said a minor below 7, 1.6 frames (SCENES, SCENE_STATE) to a device that said a minor below 6, 1.5 frames (LVIEW_SET) to a device that said a minor below 5, 1.4 frames below 4, nor 1.3
   frames below 3.
