@@ -18,6 +18,7 @@
 #define APP_SYSEX_BYTE                   /* app_sysex_byte: Synth mode reads DX7 bank dumps that outgrow the SysEx buffer */
 #define APP_SYSEX                        /* the protocol rides on SysEx: app_sysex gets F0 7D 52 34 .. frames */
 #define APP_OVERLOAD                     /* app_overload: a render took over 90 % of its time (the overload guard) */
+#define APP_CPU_KHZ                      /* plat_cpu_khz: the render's measured ticks into cycles (Synth mode's cost model) */
 #define APP_GAIN(m) app_gain(m)          /* MASTER's gain; 0 with LOCAL OUT: USB ONLY (the USB recording at full level) */
 
 /* the store: the platform's panel calibration, our SETUP page (setup_t, app.c), and Synth mode's settings and its two

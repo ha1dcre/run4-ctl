@@ -82,8 +82,11 @@ sounds); on EDIT the **six operators** (the patch's level as a line, what the ne
 carriers underlined, the one you edit in the accent, its ratio under it); on ENV the **envelopes** (the one you edit
 bright, the stage the newest note is in lit); on LFO its **wave** with a dot where it is; on SEQ the step grid.
 
-**Sound.** Eight voices (the oldest, released one is stolen first), Dexed's FM engine (Felucca's port) with the 32 DX7
-algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo
+**Sound.** Up to eight voices (the oldest, released one is stolen first, and fades out in 1.5 ms instead of stopping
+dead). Since firmware 0.9.2 the FM-1 counts what a voice of the sound costs (its operators, the effects that are on)
+and starts a voice only while the whole stays well inside the time it has: a heavy electric piano with every effect on
+plays five or six voices at once, with the reverb alone six or seven, dry eight. Dexed's FM engine (Felucca's port)
+with the 32 DX7 algorithms. 8 factory voices (F1 to F8) and 32 user voices (U01 to U32) in two banks. A chain of drive, chorus, tempo
 delay and reverb: since firmware 0.7 a **plate** (Jon Dattorro's, as AMB-1 has it) with three characters, ROOM (short,
 dark), PLATE (bright; a sound stored with the old SPRING gets it) and HALL (long and dark, 20 ms before it starts).
 REVERB SIZE still goes from short to long (HALL about 0.6 to 2.7 s, ROOM 0.4 to 1.5 s) and REVERB keeps its level; the
@@ -635,6 +638,7 @@ Turn on for the third sub-page, **AUDIO**:
 | K1 LOCAL OUT | ON (the default), or USB ONLY: while a computer (an iPad, a Mac) is connected over USB, the FM-1's sound goes to USB at full level (MASTER does not change the recording) and its headphone / line output and speaker stay silent, so RUN4 records it without hearing it twice. Listen on the iPad (the FM-1 does not play the computer's audio). Without a computer the FM-1 plays as usual |
 | K2 USB CH | the USB audio channels of this package: 2 STEREO, or 6 STEMS (the RUN4 CTL STEMS package, see USB stems) |
 | K3 LOAD SHED | NONE, or the overload guard's step (see below) |
+| K4 2ND CORE | what DUB and AMB mode's reverb runs on: TEST (the FM-1's second core being tested, the first 1.5 s after power-on), ON (it passed: the reverb runs on it), FAILED (it read memory wrong in the test or later: everything on the first core until power-off), OFF (it did not start) |
 
 The fourth sub-page, **MIDI LEARN**: K1 the binding (1 to 16), K2 shows its CC and channel and what it sets, K3
 DEFAULT CCS on / off, K4 CLEAR (turn, then SAVE: that binding goes).
@@ -643,8 +647,17 @@ DEFAULT CCS on / off, K4 CLEAR (turn, then SAVE: that binding goes).
 makes it lighter a step at a time instead of crackling. Synth mode (and RUN4's FM-1 track): 1 the reverb without its
 input diffusion, 2 six voices, 3 no chorus and no delay, 4 four voices. AMB mode: 1 the same for its reverb, 2 three
 pad voices, 3 no hi-hats and no octave doublings of the bells, 4 two pad voices and four bells. DUB mode: 1 the same
-for its reverb, 2 no cloud, 3 four pings instead of six and no crackle, 4 one saw a chord voice. It says CPU HIGH: SOUND
-LIGHTER once; after 3 seconds of easy going a step comes back. On a normal day it never shows.
+for its reverb, 2 no cloud, 3 four pings instead of six and no crackle, 4 one saw a chord voice, 5 the chord on three
+voices (the fourth fades out), 6 with one core only: no reverb (it fades out, and comes back from silence). A step is
+taken quietly when the sound gets close to its time (85 %), more than one at once when it comes in all at once; only
+when it actually ran late does it say CPU HIGH: SOUND LIGHTER, once. After 3 seconds of easy going a step comes back.
+On a normal day it never shows.
+
+**Second core.** Since firmware 0.9.2 DUB and AMB mode run their plate reverb on the FM-1's second core, beside the rest
+of the sound, which gives them about a quarter more room. Some FM-1s read memory wrong now and then on that core, so it
+is tested at every power-on, with the sound playing, before it gets the reverb, and checked again with every piece of
+work it does; one wrong answer and the FM-1 runs on one core until it is switched off (SETUP > AUDIO, 2ND CORE, says
+which). The sound is the same either way; the reverb comes 3 to 6 ms later than before.
 
 Aftertouch is measured with the keys' own sensors. The velocity and pressure curves were set up without a device; if a
 setting feels too soft or too hard, pick another curve.

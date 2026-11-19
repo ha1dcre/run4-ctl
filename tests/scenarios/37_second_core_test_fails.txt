@@ -1,0 +1,22 @@
+# The second core misreads during its test (c2_misread at the start): it never takes the plate (c2_jobs 0), FAILED for
+# the session; DUB mode plays on one core as ever.
+c2_misread
+@ACK@
+wait 100
+press SEL
+wait 40
+tap HOME
+wait 60
+tap HOME
+wait 60
+tap HOME
+release SEL
+wait 100
+expect mode 3
+wait 3000
+expect c2 3
+expect c2_fails 1
+expect c2_jobs 0
+peakreset
+wait 1000
+expect peak_db_min -40

@@ -130,7 +130,8 @@ expect tape_bpf <12000
 expect tape_bpf >500
 expect tape_us <2000
 expect render_permille <300
-expect syn_voices 8
+# (six sound: the cost model's cap for this patch and its effects, src/synth.c SYN_CM_*)
+expect syn_voices 6
 midi USB 8F 30 00
 midi USB 8F 34 00
 midi USB 8F 37 00

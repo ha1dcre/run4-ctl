@@ -25,3 +25,27 @@ void plate_set(const plate_cfg_t *c);    /* the settings (block rate) */
 /* n frames: in (mono, 1.0 = full scale) -> the wet left and right (0.6 x the taps, as AMB-1) */
 void plate_run(const float *in, float *outl, float *outr, uint32_t n);
 uint32_t plate_bytes(void);              /* its lines' RAM */
+
+/* The plate a chunk late, so that the second core can run it beside the rest of the render (RUN4 CTL, firmware
+ * 0.9.2; DUB and AMB mode). A chunk's input goes in (plate_pipe_put) after its render; the next chunk's start hands it
+ * to the second core (plate_pipe_go: the job, plate_run of that input, into a ring) while the first core renders the
+ * voices, and waits for it before the dry mix (plate_pipe_wait). The wet sample for frame p of the render is the
+ * plate's output for frame p - lag (plate_pipe_l / _r, j: the frame in the chunk), lag at least the longest chunk; the
+ * plate's tail 2 x lag back (plate_pipe_tail) is there before the wait, for a feedback into the plate's input. With
+ * no second core (plate_offload unset, its run refusing, or 0 for it) the first core runs the job itself, at the same
+ * place: the same sound either way. */
+#define PLATE_PIPE_N 1024u                       /* the ring: 2 x lag + the longest chunk must fit */
+#define PLATE_PIPE_MAXN 256u                     /* the longest chunk */
+void plate_pipe_reset(uint32_t lag);             /* silence, the lag (frames, PLATE_PIPE_MAXN at most); and plate_clear */
+void plate_pipe_go(void);                        /* a chunk's start: the last input to the plate (another core or here) */
+void plate_pipe_wait(void);                      /* its output in */
+void plate_pipe_put(const float *in, uint32_t n);   /* after the wait: this chunk's plate input (n <= PLATE_PIPE_MAXN) */
+float plate_pipe_l(uint32_t j);                  /* the wet left / right for frame j of the chunk (after the wait) */
+float plate_pipe_r(uint32_t j);
+float plate_pipe_tail(uint32_t j);               /* (l + r) / 2, 2 x lag back (any time in the chunk) */
+/* the second core: run(fn, arg) 1 = it has the job (wait then returns 0 = done, else: the job dropped, do it here) */
+void plate_offload(int (*run)(void (*fn)(uint32_t), uint32_t arg), int (*wait)(void));
+uint32_t plate_pipe_jobs2(void);                 /* the jobs the second core ran (the diagnostics) */
+int plate_pipe_offloaded(void);                  /* a second core is set to take the jobs (plate_offload) */
+void plate_pipe_hold(int on);                    /* on: no plate (the overload guard's last step on one core): the wet
+                                                  * silent; off: back, from silence */

@@ -158,3 +158,102 @@ void plate_run(const float *in, float *outl, float *outr, uint32_t n)
         }
     }
 }
+
+/* --------------------------------------------------------------- the pipe --- */
+/* (plate.h) The ring holds the plate's output by absolute frame (pp_out: frames written), the render's position
+ * pp_pos (frames put in). The job is the only writer of the plate's state and the ring's next frames while it runs;
+ * the first core reads the ring only at frames older than what the job writes (lag and 2 x lag back) */
+static float pp_l[PLATE_PIPE_N] PL_POOL, pp_r[PLATE_PIPE_N] PL_POOL, pp_in[PLATE_PIPE_MAXN] PL_POOL;
+static volatile uint32_t pp_in_n, pp_out, pp_pos, pp_lag = 128u, pp_jobs2;
+static volatile uint8_t pp_out_c2;                /* the job in flight is the second core's */
+static uint8_t pp_held, pp_was_held;              /* plate_pipe_hold: no plate (its frames silent), and was */
+static int (*pp_run)(void (*fn)(uint32_t), uint32_t arg);
+static int (*pp_wait)(void);
+#define PP_M (PLATE_PIPE_N - 1u)
+void plate_offload(int (*run)(void (*fn)(uint32_t), uint32_t arg), int (*wait)(void))
+{
+    pp_run = run;
+    pp_wait = wait;
+}
+uint32_t plate_pipe_jobs2(void) { return pp_jobs2; }
+static void pp_job(uint32_t n)
+{
+    static float wl[PLATE_PIPE_MAXN], wr[PLATE_PIPE_MAXN];   /* (the job's own: the first core never touches them) */
+    uint32_t j, w = pp_out;
+    plate_run(pp_in, wl, wr, n);
+    for (j = 0; j < n; j++) {
+        pp_l[(w + j) & PP_M] = wl[j];
+        pp_r[(w + j) & PP_M] = wr[j];
+    }
+}
+void plate_pipe_reset(uint32_t lag)
+{
+    uint32_t i;
+    for (i = 0; i < PLATE_PIPE_N; i++)
+        pp_l[i] = pp_r[i] = 0.0f;
+    pp_in_n = 0;
+    pp_out = pp_pos = 0;
+    pp_lag = lag > PLATE_PIPE_MAXN ? PLATE_PIPE_MAXN : lag < 1u ? 1u : lag;
+    pp_out_c2 = 0;
+    plate_clear();
+}
+int plate_pipe_offloaded(void) { return pp_run != 0; }
+void plate_pipe_hold(int on) { pp_held = (uint8_t)(on != 0); }
+void plate_pipe_go(void)
+{
+    uint32_t n = pp_in_n, j;
+    pp_out_c2 = 0;
+    if (!n)
+        return;
+    if (pp_held) {                              /* (no plate: its frames silent; the lines cleared when it comes back) */
+        for (j = 0; j < n; j++)
+            pp_l[(pp_out + j) & PP_M] = pp_r[(pp_out + j) & PP_M] = 0.0f;
+        pp_out += n;
+        pp_in_n = 0;
+        pp_was_held = 1;
+        return;
+    }
+    if (pp_was_held) {
+        pp_was_held = 0;
+        plate_clear();
+    }
+    if (pp_run && pp_run(pp_job, n)) {
+        pp_out_c2 = 1;
+        return;
+    }
+    pp_job(n);                                  /* (one core: here, now) */
+    pp_out += n;
+    pp_in_n = 0;
+}
+void plate_pipe_wait(void)
+{
+    if (!pp_out_c2)
+        return;
+    pp_out_c2 = 0;
+    if (!pp_wait || pp_wait() != 0) {           /* (it gave up and dropped the job: do it here; the plate's state may be
+                                                 * half on: it was the job's only) */
+        pp_job(pp_in_n);
+    } else {
+        pp_jobs2++;
+    }
+    pp_out += pp_in_n;
+    pp_in_n = 0;
+}
+void plate_pipe_put(const float *in, uint32_t n)
+{
+    uint32_t j;
+    n = n > PLATE_PIPE_MAXN ? PLATE_PIPE_MAXN : n;
+    for (j = 0; j < n; j++)
+        pp_in[j] = in[j];
+    pp_in_n = n;
+    pp_pos += n;
+}
+/* frame p of the render (pp_pos the chunk's first: plate_pipe_put has not counted it yet) */
+static float pp_at(const float *b, uint32_t j, uint32_t back)
+{
+    uint32_t p = pp_pos + j;
+    return p >= back && p - back < pp_out ? b[(p - back) & PP_M] : 0.0f;
+}
+float plate_pipe_l(uint32_t j) { return pp_at(pp_l, j, pp_lag); }
+float plate_pipe_r(uint32_t j) { return pp_at(pp_r, j, pp_lag); }
+float plate_pipe_tail(uint32_t j) { return 0.5f * (pp_at(pp_l, j, 2u * pp_lag) + pp_at(pp_r, j, 2u * pp_lag)); }

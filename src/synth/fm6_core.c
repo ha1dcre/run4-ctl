@@ -306,12 +306,24 @@ static const uint8_t FM6_ALG[32][6] = {      /* per operator (the sixth first): 
 
 /* bit k: operator k (the sixth first) is a carrier of algorithm a (0..31): it writes the output bus (msfa's
  * isCarrier also counts the modulators that add into bus 1 or 2) */
-static uint32_t fm6_carriers(uint32_t a)
+static uint32_t fm6_carriers_of(uint32_t a)
 {
     uint32_t k, c = 0;
     for (k = 0; k < 6u; k++)
         c |= ((FM6_ALG[a & 31u][k] & 3u) ? 0u : 1u) << k;
     return c;
+}
+/* (looked up: the render asks twice a voice a sub-block; the table is built at the first call) */
+static uint8_t fm6_car_tab[32], fm6_car_ok;
+static uint32_t fm6_carriers(uint32_t a)
+{
+    if (!fm6_car_ok) {
+        uint32_t i;
+        for (i = 0; i < 32u; i++)
+            fm6_car_tab[i] = (uint8_t)fm6_carriers_of(i);
+        fm6_car_ok = 1;
+    }
+    return fm6_car_tab[a & 31u];
 }
 
 /* ------------------------------------------------------- the operators --- */
@@ -372,6 +384,8 @@ static __attribute__((noinline)) void fm6_op_fb(int32_t *out, int32_t phase, int
 #if !FELUCCA_CPU2
 static int32_t fm6_bus[2][FM6_N];
 #endif
+/* the operators rendered since the render's last look (the cost model, synth.c syn_cm_*): plain and with feedback */
+static uint32_t fm6_n_op, fm6_n_fb;
 static int fm6_core_render(int32_t *out, fm6_op_t *op, uint32_t alg, int32_t *fb, int32_t fb_shift)
 {
 #if FELUCCA_CPU2
@@ -390,12 +404,16 @@ static int fm6_core_render(int32_t *out, fm6_op_t *op, uint32_t alg, int32_t *fb
             if (!has[outbus])
                 add = 0;
             if (inbus == 0u || !has[inbus]) {
-                if ((f & 0xc0u) == 0xc0u && fb_shift < 16)
+                if ((f & 0xc0u) == 0xc0u && fb_shift < 16) {
                     fm6_op_fb(o, op[k].phase, op[k].freq, g1, g2, fb, fb_shift, add);
-                else
+                    fm6_n_fb++;
+                } else {
                     fm6_op_run(o, 0, op[k].phase, op[k].freq, g1, g2, add);
+                    fm6_n_op++;
+                }
             } else {
                 fm6_op_run(o, fm6_bus[inbus - 1u], op[k].phase, op[k].freq, g1, g2, add);
+                fm6_n_op++;
             }
             has[outbus] = 1;
         } else if (!add) {

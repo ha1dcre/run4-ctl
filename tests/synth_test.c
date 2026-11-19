@@ -702,6 +702,111 @@ static void jitter_tests(void)
     run(BLK);
 }
 /* MIDI learn's rules; the overload guard's steps */
+/* the render's budget (src/synth.c, the cost model): at the cost model's starting cycles an instruction (SYN_CM_K0),
+ * every block's estimate stays under 80 % of the audio interrupt's 2,089,795 cycles, whatever is played: each factory
+ * patch and the heaviest a DX7 dump can bring (every operator at full level, feedback 7: tests/cycles/cyc_bench.c), with
+ * no effects, the plate, or everything on, 16 notes struck in one block over 8 held. The estimate is checked against an
+ * emulator's instruction count by tools/cycles.py --check (make cycles): never under it. Then: a stolen voice fades
+ * (no step in the output), the note it owes starts within SYN_FADE sub-blocks, and the model learns the FM-1's cost */
+static uint32_t heavy_patch(void)
+{
+    uint32_t k;
+    syn_load_patch(0);
+    for (k = 0; k < 6u; k++) {
+        uint8_t *op = syn.cur + k * FP_OP;
+        op[FP_OL] = 99;
+        op[FP_L1] = op[FP_L1 + 1] = op[FP_L1 + 2] = 99;
+        op[FP_R1 + 3] = 40;
+    }
+    syn.cur[FP_FB] = 7;
+    syn_dirty = 1;
+    return 0;
+}
+static void budget_tests(void)
+{
+    const uint32_t limit = (uint32_t)((uint64_t)SYN_CM_BUDGET * SYN_CM_ADMIT / SYN_CM_K0);   /* 80 % at K0, instructions */
+    uint32_t p, f, i, b, worst = 0, worst_v = 0, caps[3][9];
+    int32_t jump = 0;
+    syn_cm_k = SYN_CM_K0;
+    for (f = 0; f < 3u; f++)
+        for (p = 0; p < 9u; p++) {
+            syn_event(6, 0, 0, 0);
+            run_small(64);
+            if (p < 8u) syn_load_patch(p); else heavy_patch();
+            syn.drive = syn.chorus = syn.dly_mix = syn.rev_mix = 0;
+            if (f >= 1u) syn.rev_mix = 100, syn.rev_type = REV_HALL, syn.rev_size = 100;
+            if (f == 2u) syn.drive = 100, syn.chorus = 100, syn.dly_mix = 100, syn.dly_fb = 100;
+            run_small(64);
+            syn_cm_used = 0;
+            for (i = 0; i < 8u; i++) syn_event(1, (uint8_t)(36 + i * 5), 127, 0);
+            for (b = 0; b < 24u; b++) {
+                if (b == 8u)
+                    for (i = 0; i < 16u; i++) syn_event(1, (uint8_t)(38 + i * 3), 127, 0);
+                syn_render(pcm, BLK, 4096);
+                if (syn_cm_used > worst) worst = syn_cm_used, worst_v = syn_active_voices;
+                CHECK(syn_cm_used <= limit);
+                syn_cm_used = 0;
+            }
+            caps[f][p] = syn_cap();
+            syn_event(3, 0, 0, 0);
+            run_small(256);
+        }
+    printf("  budget: worst block %u of %u instructions (80 %% at K0 %.1f) with %u voices; voices of the heaviest patch "
+           "no fx %u, the plate %u, everything %u; TINE EP %u / %u / %u\n", worst, limit, SYN_CM_K0 / 256.0, worst_v,
+           caps[0][8], caps[1][8], caps[2][8], caps[0][0], caps[1][0], caps[2][0]);
+    CHECK(caps[0][8] == 8u && caps[1][8] >= 6u && caps[2][8] >= 5u);   /* (what the owner may expect at K0) */
+
+    /* a stolen voice: no step in the output, the owed note in within SYN_FADE sub-blocks */
+    syn_event(6, 0, 0, 0);
+    run_small(64);
+    syn_load_patch(0);
+    syn.drive = syn.chorus = syn.dly_mix = syn.rev_mix = 0;
+    for (i = 0; i < SYN_VOICES; i++) syn_event(1, (uint8_t)(40 + i * 4), 127, 0);
+    run_small(4096);
+    {
+        int32_t prev = 0, peak = 0;
+        uint32_t pend = 0, starts = 0;
+        syn_event(1, 90, 127, 0);                       /* a ninth note: all eight voices taken */
+        for (b = 0; b < 8u; b++) {
+            syn_render(pcm, FM6_N, 4096);
+            for (i = 0; i < FM6_N; i++) {
+                int32_t x = pcm[2 * i], d = x - prev;
+                if (d < 0) d = -d;
+                if (d > jump) jump = d;
+                if ((x < 0 ? -x : x) > peak) peak = x < 0 ? -x : x;
+                prev = x;
+            }
+            for (i = 0; i < SYN_VOICES; i++) pend += syn_v[i].pend;
+            if (keyed(90) && !starts) starts = b + 1u;
+        }
+        printf("  steal: the owed note in at sub-block %u (fade %u); largest step %.4f of a peak %.4f\n", starts,
+               SYN_FADE, jump / 8388608.0, peak / 8388608.0);
+        CHECK(starts >= 1u && starts <= SYN_FADE + 1u);
+        CHECK(jump < peak / 2);
+        (void)pend;
+    }
+    /* the model learns: an FM-1 at 2.5 cycles an instruction gives voices back slowly, one at 4 takes them at once */
+    {
+        uint32_t c0, c1, c2;
+        syn_cm_k = SYN_CM_K0;
+        syn.rev_mix = 100;
+        syn_fxv();
+        c0 = syn_cap();
+        for (i = 0; i < 200u; i++) { syn_cm_used = 400000u; syn_cm_seen(400000u * 5u / 2u); }
+        c1 = syn_cap();
+        CHECK(syn_cm_k < SYN_CM_K0 && syn_cm_k >= 640u && c1 >= c0);
+        for (i = 0; i < 8u; i++) { syn_cm_used = 400000u; syn_cm_seen(400000u * 4u); }
+        c2 = syn_cap();
+        CHECK(syn_cm_k > 960u && c2 < c0);
+        syn_cm_used = 1000u; syn_cm_seen(0xFFFFFFFFu);     /* (too little run to tell: kept) */
+        CHECK(syn_cm_k > 960u);
+        printf("  cost model: K %.2f -> %u voices; learned 2.5: %u; 4.0: %u\n", SYN_CM_K0 / 256.0, c0, c1, c2);
+        syn_cm_k = SYN_CM_K0;
+        syn.rev_mix = 20;
+    }
+    syn_event(6, 0, 0, 0);
+    run_small(256);
+}
 static void learn_shed_tests(void)
 {
     uint32_t i, ok = 1;
@@ -733,7 +838,7 @@ static void learn_shed_tests(void)
     CHECK(syn_shed == 4 && syn_vmax() == 4);
     for (i = 0; i < 8; i++) syn_event(1, (uint8_t)(60 + i), 100, 0);
     run_small(256);
-    for (i = 4; i < SYN_VOICES; i++) ok &= !syn_v[i].n.live;
+    ok = syn_sounding() <= 4u;                          /* (the others faded out: any four of the eight voices) */
     CHECK(ok && syn_active_voices <= 4);
     /* calm: busy renders keep it; 3 s under half the time, a step back */
     for (i = 0; i < 1000; i++) syn_shed_calm(256, 700);
@@ -1054,6 +1159,7 @@ int main(int argc, char **argv)
     cond_gen_tests();
     morph_tests();
     learn_shed_tests();
+    budget_tests();
     jitter_tests();
     reverb_ab(argc > 1 ? argv[1] : 0);
 

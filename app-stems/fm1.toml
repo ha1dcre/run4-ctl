@@ -12,6 +12,8 @@ font_full = ["M"]                # lower case in the value font: the host format
 # JieLi's library stack is not documented to. No pairing: macOS and iOS connect without it.
 ble = true
 ble_stack = "own"
+cpu2 = true                      # the second core: DUB's and AMB's plate reverb on it (app.c c2_*, plate.h's pipe), trusted
+cpu2_fallback = true             # only after a test under load; a unit that misreads on it runs one core, never a restart
 usb_audio_in = true              # the FM-1's output recordable over USB (RUN4 records Synth mode); fm1-base's default, stated
 usb_audio_out = false            # no USB audio output: an iPad keeps its own speaker / headphones for RUN4 (with one, iOS
                                  # sends all its sound to the FM-1 and greys the app's output choice); firmware 0.9.1

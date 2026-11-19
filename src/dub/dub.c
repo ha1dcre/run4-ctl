@@ -684,6 +684,7 @@ static int32_t st_midi_left;
 static int shape, root_note = 53;               /* the voicing's shape, the chord's root as voiced (MIDI) */
 static const float STAB_PAN[DU_NPAD] = {-0.5f, -0.15f, 0.2f, 0.55f};
 static float stab_gl[DU_NPAD], stab_gr[DU_NPAD];
+static float pad4_g = 1.0f, wet_g = 1.0f, wet_g0 = 1.0f, wet_dg;   /* (and the plate's wet: step 6) */                     /* (RUN4 CTL) the fourth chord voice's gain: the overload guard's step 5 */
 static int32_t gate_ctr;                        /* samples since the sixteenth began (the grid's Gate) */
 static float fx_gate, gate_g, gate_dec;
 /* the chord's voices: how it sounds (CV_*), how quickly it strikes (the amplitude's smoothing a sample:
@@ -1761,8 +1762,7 @@ static inline void echoes(float in, float *el, float *er, float *xl, float *xr)
 #define cl_buf ((int16_t *)(void *)(r4_arena + R4_DUB_OFF_CL))   /* (RUN4 CTL: in the mode arena) */
 static int cl_w, cl_ph, cl_live;
 static int32_t cl_next;
-static float cl_acc, cl_fb, cl_pl, cl_pr, cl_cl, cl_cr, cl_dens, pl_back;
-static uint32_t pl_back_n;                      /* (RUN4 CTL) the plate's tail of the last chunk in plb: its length */
+static float cl_acc, cl_fb, cl_pl, cl_pr, cl_cl, cl_cr, cl_dens;
 static struct {
     float pos, inc, gl, gr;
     int32_t age, len;
@@ -2089,7 +2089,7 @@ void du_enter(void)
     int i;
     for (i = 0; i <= (int)SN; i++)
         sint[i] = fm_sinf((float)i * (FM_TWO_PI / (float)SN));
-    plate_clear();
+    plate_pipe_reset(R4_DUB_BLK);               /* (RUN4 CTL: the plate a chunk late, the second core's job) */
     for (i = 0; i < TAPE_N; i++)
         tape[i] = 0;
     for (i = 0; i < PLEX_N; i++)
@@ -2100,7 +2100,7 @@ void du_enter(void)
         cl_g[i].len = 0;
     cl_live = 0;
     cl_w = cl_ph = 0;
-    cl_acc = cl_fb = cl_pl = cl_pr = cl_cl = cl_cr = pl_back = 0.0f;
+    cl_acc = cl_fb = cl_pl = cl_pr = cl_cl = cl_cr = 0.0f;
     tape_w = plex_w = tape_ph = 0;
     tape_acc = tape_lp = tape_hp = tape_p1 = tape_p2 = tape_c1 = tape_c2 = 0.0f;
     plex_lp = plex_lp2 = 0.0f;
@@ -2109,7 +2109,6 @@ void du_enter(void)
     head2 = head2_t;
     head2_v = 0.0f;
     echo_len = echo_len_t;
-    pl_back_n = 0;
 }
 
 void du_init(void)
@@ -2303,13 +2302,12 @@ static void drain(void)
 #define DUBUF(k) ((float *)(void *)(r4_arena + R4_DUB_OFF_MIX + (k) * R4_DUB_BLK * 4u))
 #define mixl DUBUF(0)
 #define mixr DUBUF(1)
-#define rsend DUBUF(2)                          /* (then, RUN4 CTL: the plate's input, and its left) */
+#define rsend DUBUF(2)                          /* (then, RUN4 CTL: the plate's input) */
 #define esend DUBUF(3)                          /* (then the duck's gain, sample by sample) */
 #define kickb DUBUF(4)
 #define crl DUBUF(5)
 #define crr DUBUF(6)
-#define wetr DUBUF(7)                           /* (RUN4 CTL: the plate's right) */
-#define plb DUBUF(8)                            /* (RUN4 CTL: the plate's tail, for the cloud in the next chunk) */
+/* (DUBUF(7), DUBUF(8): the plate's right and its tail before firmware 0.9.2; now plate.h's pipe has them) */
 
 static void render_stabs(uint32_t n)
 {
@@ -2330,6 +2328,12 @@ static void render_stabs(uint32_t n)
     const int alg = pt ? fm_alg_of(DP_CALG, pt) : 0;
     const float cfb = pt ? fm_fb(DP_CFB, pt) : 0.0f;
     float s0 = st_s[0], s1 = st_s[1], s2 = st_s[2], s3 = st_s[3], env = st_env, amp = st_amp, thr = st_throw;
+    /* (RUN4 CTL, the overload guard's step 5: the chord on three voices, the fourth faded out over a chunk; npad: the
+     * voices rendered, g4 / dg4: the fourth's gain across this chunk) */
+    const float g4_to = du_shed >= 5u ? 0.0f : 1.0f, dg4 = (g4_to - pad4_g) / (float)(n ? n : 1u);
+    const int npad = pad4_g <= 0.0f && g4_to <= 0.0f ? DU_NPAD - 1 : DU_NPAD;
+    float g4 = pad4_g;
+    pad4_g = g4_to;
     if (st_midi_left > 0 && (st_midi_left -= (int32_t)n) <= 0)
         for (i = 0; i < DU_NPAD; i++)
             midi(0x80, stab[i].midi_note, 0);
@@ -2358,7 +2362,8 @@ static void render_stabs(uint32_t n)
             noise = noise * 1664525u + 1013904223u;
             l = r = (float)(int32_t)noise * (1.0f / 2147483648.0f) * 1.6f * (1.0f - 0.5f * xc);
         }
-        for (i = 0; i < DU_NPAD; i++) {
+        g4 += dg4;
+        for (i = 0; i < npad; i++) {
             stab_t *v = &stab[i];
             float x;
             switch (cv) {
@@ -2389,6 +2394,8 @@ static void render_stabs(uint32_t n)
             v->ph[1] += v->inc[1];
             if (v->ph[1] >= 1.0f)
                 v->ph[1] -= 1.0f;
+            if (i == DU_NPAD - 1)
+                x *= g4;
             l += x * stab_gl[i];
             r += x * stab_gr[i];
         }
@@ -2872,6 +2879,17 @@ static void render_chunk(int32_t *out, uint32_t n, float gain)
         mb_s[0] = mb_s[1] = mb_s[2] = mb_s[3] = 0.0f;
     for (j = 0; j < n; j++)
         mixl[j] = mixr[j] = rsend[j] = esend[j] = kickb[j] = 0.0f;
+    /* (RUN4 CTL, firmware 0.9.2: the plate runs the chunk before's input meanwhile, on the second core when it may:
+     * plate.h's pipe. Its wet comes R4_DUB_BLK frames late, the cloud hears its tail twice that late) */
+    plate_cfg();
+    {   /* (the overload guard's step 6, with the plate on this core: the wet faded out over a chunk, then no plate) */
+        const float to = du_shed >= 6u && !plate_pipe_offloaded() ? 0.0f : 1.0f;
+        wet_g0 = wet_g;
+        wet_dg = (to - wet_g) / (float)(n ? n : 1u);
+        plate_pipe_hold(to <= 0.0f && wet_g <= 0.0f);
+        wet_g = to;
+    }
+    plate_pipe_go();
     render_stabs(n);
     render_bass(n);
     render_bells(n);
@@ -2897,7 +2915,7 @@ static void render_chunk(int32_t *out, uint32_t n, float gain)
                 crash *= 0.99971f;               /* (~80 ms) */
             }
         }
-        pb = pl_back_n ? plb[j < pl_back_n ? j : pl_back_n - 1u] : pl_back;
+        pb = plate_pipe_tail(j);
         cloud(rin * ca * 2.5f * cl_in + pb * cloud_amt * 0.22f, &cl, &cr);   /* the grains, into the plate: they bloom;
                                                  * the plate's tail back into the line: the wash grows on itself */
         rsend[j] = rin * (1.0f - 0.5f * cloud_amt) + (cl + cr) * 0.8f;   /* (the plate's input) */
@@ -2907,11 +2925,9 @@ static void render_chunk(int32_t *out, uint32_t n, float gain)
         mixr[j] = mixr[j] * dry + 1.2f * er + 0.25f * xr + 1.4f * cr;
         esend[j] = dg;
     }
-    plate_cfg();
-    plate_run(rsend, rsend, wetr, n);            /* (the left over its input: plate_run reads each sample first) */
+    plate_pipe_wait();
     for (j = 0; j < n; j++) {
-        float wl = rsend[j], wr = wetr[j], dg = esend[j], l, r;
-        plb[j] = 0.5f * (wl + wr);
+        float wg = wet_g0 + wet_dg * (float)(j + 1u), wl = plate_pipe_l(j) * wg, wr = plate_pipe_r(j) * wg, dg = esend[j], l, r;
         l = (mixl[j] + 1.1f * wl) * dg;
         r = (mixr[j] + 1.1f * wr) * dg;
         if (shut > 0.01f) {
@@ -2952,9 +2968,7 @@ static void render_chunk(int32_t *out, uint32_t n, float gain)
         out[2 * j] = (int32_t)(l * 8300000.0f);
         out[2 * j + 1] = (int32_t)(r * 8300000.0f);
     }
-    pl_back_n = n;
-    if (n)
-        pl_back = fm_flush(plb[n - 1u]);
+    plate_pipe_put(rsend, n);                   /* (after the wet reads: they count from the chunk's start) */
     duck_x = fm_flush(duck_x);
     duck_d = fm_flush(duck_d);
 }

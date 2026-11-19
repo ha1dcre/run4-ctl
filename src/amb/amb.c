@@ -1219,7 +1219,7 @@ void en_enter(void)
     int i;
     for (i = 0; i <= (int)SN; i++)
         sint[i] = fm_sinf((float)i * (FM_TWO_PI / (float)SN));
-    plate_clear();
+    plate_pipe_reset(R4_AMB_BLK);               /* (RUN4 CTL: the plate a chunk late, the second core's job) */
     for (i = 0; i < TAPE_N; i++)
         tape[i] = 0;
     for (i = 0; i < PLEX_N; i++)
@@ -1394,8 +1394,7 @@ static void drain(void)
  * the echo's two heads and the plate. */
 #define padl AMBUF(4)
 #define padr AMBUF(5)
-#define wetl AMBUF(6)                           /* (RUN4 CTL: the plate a chunk at a time) */
-#define wetr AMBUF(7)
+/* (AMBUF(6), AMBUF(7): the plate's output before firmware 0.9.2; now plate.h's pipe has it) */
 static float plp[4];
 
 static void pad_bus(uint32_t n)
@@ -1658,6 +1657,10 @@ static void render_chunk(int32_t *out, uint32_t n, float gain)
     const float rg = rev_send * rev_in_gain * (1.0f - 0.25f * arcm), eg = echo_send;
     for (j = 0; j < n; j++)
         mixl[j] = mixr[j] = rsend[j] = esend[j] = 0.0f;
+    /* (RUN4 CTL, firmware 0.9.2: the plate runs the chunk before's input meanwhile, on the second core when it may:
+     * plate.h's pipe; its wet comes R4_AMB_BLK frames late) */
+    plate_cfg();
+    plate_pipe_go();
     render_pad(n);
     render_bass(n);
     render_bells(n);
@@ -1669,13 +1672,13 @@ static void render_chunk(int32_t *out, uint32_t n, float gain)
         mixl[j] += 0.75f * el + 0.3f * xl;
         mixr[j] += 0.75f * er + 0.3f * xr;
     }
-    plate_cfg();
-    plate_run(rsend, wetl, wetr, n);
+    plate_pipe_wait();
     for (j = 0; j < n; j++) {
-        float l = (mixl[j] + 1.3f * wetl[j]) * 0.36f * gain, r = (mixr[j] + 1.3f * wetr[j]) * 0.36f * gain;
+        float l = (mixl[j] + 1.3f * plate_pipe_l(j)) * 0.36f * gain, r = (mixr[j] + 1.3f * plate_pipe_r(j)) * 0.36f * gain;
         out[2 * j] = (int32_t)(fm_tanhf(l) * 8300000.0f);
         out[2 * j + 1] = (int32_t)(fm_tanhf(r) * 8300000.0f);
     }
+    plate_pipe_put(rsend, n);                   /* (after the wet reads: they count from the chunk's start) */
 }
 
 /* the arc: a slow tide, minutes long, between sparse (-1) and full (+1); Motion sets how far it goes */
