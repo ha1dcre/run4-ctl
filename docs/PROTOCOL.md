@@ -1209,5 +1209,5 @@ Only a host advertising minor ≥8 over USB may acquire it, after it has actuall
 opened the FM-1 audio input. Renew every second. Four seconds without renewal,
 a new handshake, or USB loss releases the claim. It never changes saved LOCAL
 OUT. While claimed, all modes render at unity to USB before MASTER; the direct
-speaker/headphone signal is silent. MASTER still reports POT to RUN4, which
-applies its app master once. Without a claim, the saved standalone routing applies.
+speaker/headphone signal is silent. MASTER still reports POT to RUN4 (also in local modes while the lease is active),
+which applies its app master once. Without a claim, the saved standalone routing applies.

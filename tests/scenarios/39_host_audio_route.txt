@@ -16,6 +16,12 @@ release SEL
 wait 100
 expect mode 1
 expect local_off 1
+master 4096
+wait 50
+expect_sysex F0 7D 52 34 04 7F 7F F7
+master 2048
+wait 50
+expect_sysex F0 7D 52 34 04 40 00 F7
 # Renew before deadline, then let it expire.
 wait 3000
 sysex F0 7D 52 34 5F 01 F7

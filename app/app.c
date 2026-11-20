@@ -401,6 +401,7 @@ static int bk_host(void);
 static void bk_restore_start(void);
 static void setup_learn_turn(int which, int d);
 static void local_out_apply(void);
+static int host_audio_active(void);
 static void setup_turn(int which, int d)               /* K1..K4: one step per detent */
 {
     if (ctl.setup_sub == 2) {                           /* AUDIO: K1 LOCAL OUT (the others say how things are) */
@@ -1889,6 +1890,16 @@ static void input(void)
     if (!ctl.want_sync)
         jobs_send(now);                                /* 1.3: answers owed, the backup (both modes) */
 
+    /* USB-only capture bypasses the hardware MASTER in all local engines.
+     * Keep that pot controlling the app master, once, just as in RUN4 mode. */
+    if (mode != MODE_RUN4 && host_audio_active()) {
+        pot = (int32_t)((plat_master() * (uint32_t)R4P_V14_MAX + 2048u) / 4096u);
+        if (ctl.pot_sent < 0 || (now - ctl.pot_at >= POT_MIN_MS &&
+            (pot - ctl.pot_sent >= POT_STEP || ctl.pot_sent - pot >= POT_STEP ||
+             ((pot == 0 || pot == R4P_V14_MAX) && pot != ctl.pot_sent))))
+            send_pot();
+    }
+
     if (mode == MODE_SYNTH) {
         synth_frame(keys, now);
         return;
@@ -1953,11 +1964,14 @@ static volatile uint8_t local_off;
 static uint8_t host_audio_on;
 static uint32_t host_audio_until, host_audio_session;
 uint32_t app_gain(uint32_t m) { return local_off ? 0u : m * m >> 12; }
+static int host_audio_active(void)
+{
+    return host_audio_on && host_audio_session == ctl.session && ui.connected && ctl.host_minor >= 8
+        && plat_usb_session() != 0 && (int32_t)(host_audio_until - plat_ms()) > 0;
+}
 static void local_out_apply(void)
 {
-    int leased = host_audio_on && host_audio_session == ctl.session && ui.connected && ctl.host_minor >= 8
-        && (int32_t)(host_audio_until - plat_ms()) > 0;
-    uint8_t off = (uint8_t)((setup.local || leased) && plat_usb_session() != 0);
+    uint8_t off = (uint8_t)((setup.local || host_audio_active()) && plat_usb_session() != 0);
     if (off != local_off) {
         local_off = off;
         plat_usb_audio_full(off);
