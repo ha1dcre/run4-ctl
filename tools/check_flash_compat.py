@@ -46,7 +46,8 @@ def main():
         manifest(root / "app/build/firmware-usb.json")
         return
 
-    manifest(root / "firmware.json")
+    # Manifests are build outputs and absent in a fresh checkout.
+    # --artifacts checks every generated package manifest after the build.
     for name in VARIANTS:
         config = tomllib.loads((root / name / "fm1.toml").read_text())
         require(config.get("usb_audio_in") is True and config.get("usb_audio_out") is False,
