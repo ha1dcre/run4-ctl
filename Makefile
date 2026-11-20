@@ -2,7 +2,7 @@
 PY ?= .venv/bin/python
 B  := build
 
-test: unit fuzz synth amb dub tape usblevel sim tools
+test: unit fuzz synth amb dub tape usblevel sim tools flashcompat
 
 unit: $(B)/r4p_test
 	$(B)/r4p_test
@@ -67,6 +67,10 @@ tools:
 	python3 tools/fake_fm1.py --selftest
 	python3 tools/r4ctl_backup.py --selftest
 
+# Both original Puya and newer UC25HQ80 units, using the pinned platform code.
+flashcompat:
+	python3 tools/check_flash_compat.py
+
 host:
 	$(PY) base/tools/build.py app --host
 
@@ -80,4 +84,4 @@ cycles:
 	$(CYC_PY) tools/cycles.py synth --check
 	$(CYC_PY) tools/cycles.py dub amb --quick --check
 
-.PHONY: test unit fuzz synth amb dub tape usblevel sim tools host audio cycles
+.PHONY: test unit fuzz synth amb dub tape usblevel sim tools host audio cycles flashcompat

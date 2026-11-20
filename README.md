@@ -228,6 +228,29 @@ round trip in one process. python-rtmidi does not build here (RtMidi lacks `sem_
 `tools/coremidi.py` binds CoreMIDI through ctypes. The interactive mode was run only through a pseudo-terminal, and the bridge
 was not tried against a real Network MIDI session; neither was run against RUN4.
 
+## FM-1 hardware compatibility
+
+The same RUN4 CTL package supports both factory flash chips:
+
+| Flash chip | JEDEC ID | Support |
+|---|---|---|
+| Puya P25Q80 (original units) | `856014` | Included |
+| UCUN UC25HQ80 (newer units) | `B36014` | Included |
+
+Both are 1 MiB SPI NOR parts. This support is already in v0.9.3's pinned
+fm1-base revision `c8e05997ce970875038156d2bbd69e712eac1543`; no separate
+new-chip package is needed. V15 and V16 are M-VAVE firmware versions and do
+not identify the flash chip. RUN4's installer shows the chip when the running
+firmware reports its JEDEC ID.
+
+`make flashcompat` checks the production storage allowlist, persistence,
+app/loader handshakes for both IDs, and simulated USB recovery with both
+V15 and V16 boot headers. Unknown flash IDs stay refused. CI runs these and
+the update-loader protocol tests before building, then verifies the hardware
+metadata of all four packages (full, USB-only, no-AMB and STEMS).
+These are host-side tests: physical testing so far is on a V15 unit; newer-chip
+hardware operation and persistence after a cold power cycle still need a device test.
+
 ## Device build (Apple silicon Mac with Docker) — not tried yet
 
 The JieLi toolchain is Linux x86-64 only; on macOS fm1-base's `tools/build.py` runs each tool in a

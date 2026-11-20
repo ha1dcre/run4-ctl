@@ -15,6 +15,11 @@ jobs:
           submodules: recursive
       - name: Python packages
         run: python3 -m pip install --user pillow
+      - name: Both FM-1 flash revisions and update paths
+        run: |
+          python3 tools/check_flash_compat.py
+          python3 base/tests/install_test.py
+          FM1_INSTALL_TOOLS="$PWD/base/tools" python3 base/bsp/tests/install_fast_test.py
       # restore and save apart: the cache is kept once the download worked, even when the build then fails
       - name: Restore the JieLi toolchain and SDK
         id: jieli
@@ -65,6 +70,8 @@ jobs:
           build no-amb app-noamb
           build stems app-stems
           exit $status
+      - name: Verify built hardware metadata
+        run: python3 tools/check_flash_compat.py --artifacts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
