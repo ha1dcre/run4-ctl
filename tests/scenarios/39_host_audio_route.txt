@@ -1,0 +1,46 @@
+# Host lease is independent of saved LOCAL OUT and MASTER, in all modes.
+sysex F0 7D 52 34 41 01 08 F7
+wait 60
+expect set_local 0
+expect local_off 0
+sysex F0 7D 52 34 5F 01 F7
+wait 60
+expect local_off 1
+expect usb_audio_full 1
+expect set_local 0
+# Survives a local Synth-mode switch.
+press SEL
+wait 40
+tap HOME
+release SEL
+wait 100
+expect mode 1
+expect local_off 1
+# Renew before deadline, then let it expire.
+wait 3000
+sysex F0 7D 52 34 5F 01 F7
+wait 2000
+expect local_off 1
+wait 2200
+expect local_off 0
+expect usb_audio_full 0
+# Explicit release and cable loss restore the user's saved preference.
+sysex F0 7D 52 34 5F 01 F7
+wait 60
+expect local_off 1
+sysex F0 7D 52 34 5F 00 F7
+wait 60
+expect local_off 0
+sysex F0 7D 52 34 5F 01 F7
+wait 60
+usb unplug
+wait 60
+expect local_off 0
+usb plug
+wait 60
+expect local_off 0
+# An old host cannot acquire this lease.
+sysex F0 7D 52 34 41 01 07 F7
+sysex F0 7D 52 34 5F 01 F7
+wait 60
+expect local_off 0

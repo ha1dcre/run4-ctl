@@ -11,7 +11,7 @@
 #define R4_DUB 1                         /* DUB mode in the build (app-noamb/app.h: 0); it shares AMB's arena */
 #endif
 #define APP_NAME "RUN4 CTL"
-#define APP_VERSION "0.5.3"                 /* firmware 0.9.3: 0.9.2 + synth/dub CPU fixes; protocol 1.7; HELLO stays 0.9 */
+#define APP_VERSION "0.9.4"                 /* protocol 1.8: app-controlled USB-only monitor lease; HELLO stays 0.9 */
 #define APP_SPLASH_RGB RGB(255, 140, 40)
 #define APP_BLOCK 256u
 #define APP_TOUCH                        /* key velocity and pressure (lib/touch.h); the SETUP page sets how they are used */

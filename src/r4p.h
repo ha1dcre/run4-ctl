@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #define R4P_VER 1
-#define R4P_MINOR 7               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
+#define R4P_MINOR 8               /* 1.1: LIST / LIST_PICK, the optional minor byte in HELLO / HELLO_ACK; 1.2: the PAGE
                                    * trailer (cursor, position, path), FOCUS, VALUE flags; 1.3: the host voice, the
                                    * voice list, the tape view, the patch backup; 1.4: the local modes (list, switch,
                                    * self-description, values, state); 1.5: the local mode's page (LVIEW, LVIEW_SET); 1.6: the
@@ -42,6 +42,7 @@ enum {                            /* device -> host */
     R4P_MODES_REQ = 0x54, R4P_MODE_SET = 0x55, R4P_DESC_REQ = 0x56, R4P_VALS_REQ = 0x57, R4P_PSET = 0x58, /* 1.4 */
     R4P_LVIEW_SET = 0x59,                                                                                 /* 1.5 */
     R4P_SCENES = 0x5C, R4P_SCENE_STATE = 0x5D,                                                            /* 1.6 */
+    R4P_AUDIO_ROUTE = 0x5F,                     /* 1.8: renewable USB-only output lease, one boolean */
     R4P_ROLL = 0x5E                                                                                       /* 1.7 */
 };
 /* protocol 1.7: the piano roll. The host sends the window of a pattern it shows (ROLL): up to 24 pitch rows from `lo`

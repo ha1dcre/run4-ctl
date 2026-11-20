@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!-- Copyright (c) 2026 Eugen Schott -->
 
-# RUN4 CTL protocol v1 (minor 7)
+# RUN4 CTL protocol v1 (minor 8)
 
 This document and the reference codec (`src/r4p.h`, `src/r4p.c`) are under the MIT licence (`LICENSE-MIT`), so any
 firmware or device can implement RUN4 CTL; the rest of RUN4 CTL stays GPL-3.0. See "Implementing RUN4 CTL in your own
@@ -1201,3 +1201,13 @@ Do not put other data under `7D 52 34`, and check that your other SysEx does not
 * The host voice is used only after an HV_STATE answered HV_ON (no HV_STATE within a second: no host voice).
 * The host never sends 1.7 frames (ROLL) to a device that said a minor below 7, 1.6 frames (SCENES, SCENE_STATE) to a device that said a minor below 6, 1.5 frames (LVIEW_SET) to a device that said a minor below 5, 1.4 frames below 4, nor 1.3
   frames below 3.
+
+## Protocol 1.8: AUDIO_ROUTE (0x5F)
+
+Host → device: one byte, 0 releases, 1 acquires/renews USB-only monitoring.
+Only a host advertising minor ≥8 over USB may acquire it, after it has actually
+opened the FM-1 audio input. Renew every second. Four seconds without renewal,
+a new handshake, or USB loss releases the claim. It never changes saved LOCAL
+OUT. While claimed, all modes render at unity to USB before MASTER; the direct
+speaker/headphone signal is silent. MASTER still reports POT to RUN4, which
+applies its app master once. Without a claim, the saved standalone routing applies.

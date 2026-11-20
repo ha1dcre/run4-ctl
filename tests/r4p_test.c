@@ -394,6 +394,14 @@ static void t_v13(void)
     /* CRC-32: the IEEE check value, chained as zlib does */
     CHECK(r4p_crc32(0, (const uint8_t *)"123456789", 9) == 0xCBF43926u);
     CHECK(r4p_crc32(r4p_crc32(0, (const uint8_t *)"1234", 4), (const uint8_t *)"56789", 5) == 0xCBF43926u);
+    /* Protocol 1.8 audio lease: strict boolean, no extra payload. */
+    memset(&m, 0, sizeof m); m.cmd = R4P_AUDIO_ROUTE; m.u.b1.v = 1;
+    n = enc(&m);
+    CHECK(n == 7 && buf[4] == 0x5F && buf[5] == 1);
+    CHECK(r4p_parse(buf, n, &b) == 1 && b.u.b1.v == 1);
+    m.u.b1.v = 2; CHECK(enc(&m) == 0);
+    buf[5] = 2; CHECK(r4p_parse(buf, n, &b) == -1);
+
     /* HV_ON */
     memset(&m, 0, sizeof m);
     m.cmd = R4P_HV_ON; m.u.hvon.on = 1; m.u.hvon.chan = 15;
@@ -888,7 +896,7 @@ static void t_v17(void)
                                      0x1F, 0x00, 0x04, 'T', 0x7F, 0x53, 'L', 'F', 0x01, 0x1F, 0x01, 0x17, 0x00, 0x10, 0xF7};
     static const uint8_t ROLL_END[] = {0xF0, 0x7D, 0x52, 0x34, 0x5E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F, 0x7F,
                                        0x7F, 0x00, 0x00, 0x00, 0xF7};
-    CHECK(R4P_MINOR == 7 && R4P_ROLL == 0x5E);
+    CHECK(R4P_MINOR >= 7 && R4P_ROLL == 0x5E);
     /* A: 12 rows from C4, steps 17..32 of 32, the cursor on a selected note, a note from before and one going on */
     roll_a(&m);
     n = enc(&m);

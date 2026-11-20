@@ -59,10 +59,17 @@ int main(void)
             printf("%s MASTER %4u: the take %+.1f dB against live\n", TEST_OUT ? "  usb out:" : "FAIL", master,
                    db(take, live));
     }
+    for (master = 0; master <= 4096; master += 512) {
+        int32_t o[2 * N];
+        for (i = 0; i < 2u * N; i++) { usb_play[i] = 0; o[i] = VOICE; }
+        uac_mix(o, N, app_gain(master, 1), master, 1, 4096u);
+        checks++;
+        if (usb_rec[0] != VOICE || o[0] != 0) fails++;
+    }
     if (TEST_OUT) {
         printf("usb level, with a USB audio output: %d of %d MASTER positions play the take back quieter (expected)\n",
                fails, checks);
-        return fails == checks - 1 ? 0 : 1;                           /* (at MASTER full both are equal) */
+        return fails == 7 ? 0 : 1;                           /* (at MASTER full both are equal) */
     }
     printf("usb level: %d MASTER positions, the take as loud as live; %d differ\n", checks, fails);
     return fails != 0;

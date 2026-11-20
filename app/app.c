@@ -1948,10 +1948,16 @@ static void input(void)
  * (APP_GAIN 0 after the recording's tap), so RUN4 records the FM-1 without it being heard twice. fm1-base mixes the
  * computer's own audio in before that gain, so it is muted on the FM-1 too: listen on the iPad. */
 static volatile uint8_t local_off;
+/* A live app capture, not a saved SETUP preference. Renew each second; after
+ * four seconds without the host, standalone monitoring automatically returns. */
+static uint8_t host_audio_on;
+static uint32_t host_audio_until, host_audio_session;
 uint32_t app_gain(uint32_t m) { return local_off ? 0u : m * m >> 12; }
 static void local_out_apply(void)
 {
-    uint8_t off = (uint8_t)(setup.local && plat_usb_session() != 0);
+    int leased = host_audio_on && host_audio_session == ctl.session && ui.connected && ctl.host_minor >= 8
+        && (int32_t)(host_audio_until - plat_ms()) > 0;
+    uint8_t off = (uint8_t)((setup.local || leased) && plat_usb_session() != 0);
     if (off != local_off) {
         local_off = off;
         plat_usb_audio_full(off);
@@ -2060,6 +2066,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
     ctl.frames_in++;
     switch (m.cmd) {
     case R4P_HELLO_ACK:
+        host_audio_on = 0;                         /* new handshake: require a fresh capture claim */
         ctl.want_hvstate = hv.on;                      /* 1.3: where its voice stands (sent to a 1.3 host only) */
         lm_reset(m.u.ack.minor >= 4);                  /* 1.4: the mode (MODE), nothing subscribed */
         if (mode != MODE_RUN4) {                       /* the host knows we are a local mode: nothing to draw or sync */
@@ -2088,6 +2095,14 @@ int app_sysex(const uint8_t *p, uint32_t n)
             ui_apply(&m);
         break;
     /* 1.3: the host voice, the voice list and the backup, in both modes (in Synth mode the host voice's settings wait) */
+    case R4P_AUDIO_ROUTE:
+        if (ui.connected && ctl.host_minor >= 8 && plat_usb_session() != 0) {
+            host_audio_on = m.u.b1.v;
+            host_audio_until = plat_ms() + 4000u;
+            host_audio_session = ctl.session;
+            local_out_apply();
+        }
+        break;
     case R4P_HV_ON:
         if (!ui.connected)
             break;

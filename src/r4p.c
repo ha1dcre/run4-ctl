@@ -261,6 +261,10 @@ size_t r4p_encode(uint8_t *buf, size_t cap, const r4p_msg_t *m)
         if (m->u.b1.v >= R4P_BK_VOICES && m->u.b1.v != R4P_BK_SUMMARY)
             w.bad = 1;
         break;
+    case R4P_AUDIO_ROUTE:
+        w8(&w, m->u.b1.v);
+        if (m->u.b1.v > 1) w.bad = 1;
+        break;
     case R4P_HV_ON:
         w8(&w, m->u.hvon.on); w8(&w, m->u.hvon.chan);
         if (m->u.hvon.on > 1 || m->u.hvon.chan > 15)
@@ -714,6 +718,10 @@ int r4p_parse_body(const uint8_t *p, size_t n, r4p_msg_t *out)
         out->u.b1.v = (uint8_t)r8(&r);
         if (out->u.b1.v >= R4P_BK_VOICES && out->u.b1.v != R4P_BK_SUMMARY)
             r.bad = 1;
+        break;
+    case R4P_AUDIO_ROUTE:
+        out->u.b1.v = (uint8_t)r8(&r);
+        if (out->u.b1.v > 1) r.bad = 1;
         break;
     case R4P_HV_ON:
         out->u.hvon.on = (uint8_t)r8(&r); out->u.hvon.chan = (uint8_t)r8(&r);

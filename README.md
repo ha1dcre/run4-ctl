@@ -290,3 +290,14 @@ DUB-1 is (Santiago Begueria, https://github.com/sbegueria/fm1-dub, release v1.2.
 fuzz test `tests/r4p_fuzz.c`), so other firmwares and devices can implement RUN4 CTL (`docs/PROTOCOL.md`, "Implementing
 RUN4 CTL in your own firmware or device"). They are original work of this project; nothing in them comes from
 fm1-base, felucca-bsp, Felucca, AMB-1, DUB-1 or Mutable Dreams. The rest of the firmware stays GPL-3.0.
+
+### Firmware 0.9.4 / protocol 1.8
+
+RUN4 can now acquire a temporary USB-only monitoring lease after it has opened
+the FM-1 input. VOICE, Synth, AMB and DUB reach the app at unity before the FM-1
+MASTER control, while its direct speaker/headphone output is muted. MASTER still
+controls RUN4's app master once. Local monitoring returns after four seconds
+without renewal, USB loss or explicit release; saved LOCAL OUT is preserved.
+Older app/firmware combinations retain the manual SETUP > AUDIO > LOCAL OUT
+USB ONLY setting. Both supported flash chips and all four package variants remain
+covered by the compatibility checks. Physical device verification is pending.
