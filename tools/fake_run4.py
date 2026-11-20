@@ -24,7 +24,7 @@ CMD = dict(HELLO=0x01, BTN=0x02, ENC=0x03, POT=0x04, SYNC_REQ=0x05, LIST_PICK=0x
            MODES_REQ=0x54, MODE_SET=0x55, DESC_REQ=0x56, VALS_REQ=0x57, PSET=0x58,
            LVIEW=0x17, LVIEW_SET=0x59,                                                                    # 1.5
            SCENE_PICK=0x1B, SCENES=0x5C, SCENE_STATE=0x5D,                                                # 1.6
-           ROLL=0x5E)                                                                                     # 1.7
+           ROLL=0x5E, AUDIO_ROUTE=0x5F)                                                                                     # 1.7
 NONE = 127                             # protocol 1.2: no cursor
 KIND = dict(empty=0, uni=1, bi=2, enum=3, toggle=4)
 LED = dict(off=0, dim=1, on=2, blink=3)
@@ -901,8 +901,8 @@ def expand(name):
         "TOAST": toast("SAVED", 12),
         "BAD_PAGE": HDR + [CMD["PAGE"], 1, 0x41, 0xF7],                    # truncated
         "SR_FRAME": [0xF0, 0x7D, 0x53, 0x52, 0x01, 0xF7],                  # fm1-reader's: not ours
-        "HELLO": frame("HELLO", [1, 0, 9, 0, 7]), "SYNC": frame("SYNC_REQ"),
-        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 7]),
+        "HELLO": frame("HELLO", [1, 0, 9, 0, 8]), "SYNC": frame("SYNC_REQ"),
+        "HELLO_LOCAL": frame("HELLO", [1, 0, 9, 1, 8]),
         "ACK12": frame("HELLO_ACK", [1, 2]), "WEAR": wear(), "WEAR_NOCUR": wear(NONE, 0),
         "FOCUS2": focus(2, 5, 12), "FOCUS_NONE": focus(NONE, 0, 0), "FOCUS_BAD": frame("FOCUS", [5, 0, 0, 0, 0]),
         "V1_FAIL": value(1, 5200, "32%"), "V1_FAIL2": value(1, 6200, "38%"), "V2_BIG": value(2, 12000, "0.73", 1),
@@ -955,7 +955,7 @@ def main(a):
         f = {"btn": lambda: frame("BTN", [int(a[3]), int(a[4])]),
              "enc": lambda: frame("ENC", [int(a[3]), 0x40 + int(a[4])]),
              "pot": lambda: frame("POT", v14(int(a[3]))),
-             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 7]), "sync": lambda: frame("SYNC_REQ")}[k]()
+             "hello": lambda: frame("HELLO", [1, 0, 9, 0, 8]), "sync": lambda: frame("SYNC_REQ")}[k]()
         print(hx(f))
     else:
         print(__doc__)
