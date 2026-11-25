@@ -2,7 +2,7 @@
 
 **Turn an M-VAVE FM-1 into a hands-on controller for RUN4 on iPad and iPhone. Build your own controller with the free, MIT-licensed SDK.**
 
-[Download the SDK](https://github.com/ha1dcre/run4-ctl/releases/tag/sdk-v0.1.0) · [Firmware for RUN4 1.9](https://github.com/ha1dcre/run4-ctl/releases/tag/v0.9.4) · [FM-1 manual](https://github.com/ha1dcre/run4-ctl/blob/v0.9.4/docs/MANUAL.md)
+[Download the SDK](https://github.com/ha1dcre/run4-ctl/releases/tag/sdk-v0.1.0) · [Firmware for RUN4 1.9](https://github.com/ha1dcre/run4-ctl/releases/tag/v0.9.4) · [FM-1 manual](docs/MANUAL.md)
 
 ## Build a controller for RUN4
 
@@ -25,11 +25,11 @@ The example runs a controller and a small host in the same process. Watch them e
 
 [Integration guide](https://github.com/ha1dcre/run4-ctl/blob/sdk-v0.1.0/sdk/INTEGRATION.md) · [Minimal example](https://github.com/ha1dcre/run4-ctl/blob/sdk-v0.1.0/sdk/examples/minimal.c) · [Public C API](https://github.com/ha1dcre/run4-ctl/blob/sdk-v0.1.0/sdk/include/run4ctl.h)
 
-The session helper advertises **controller profile 1.2**. The bundled codec covers protocol **1.8**. Advanced features such as Tape and piano-roll views require additional device integration. [Protocol specification](https://github.com/ha1dcre/run4-ctl/blob/sdk-v0.1.0/docs/PROTOCOL.md)
+The session helper advertises **controller profile 1.2**. The bundled codec covers protocol **1.8**. Advanced features such as Tape and piano-roll views require additional device integration. The download includes the full protocol specification. [Controller protocol basics](docs/PROTOCOL.md)
 
 ## Use the FM-1 with RUN4
 
-**RUN4 1.9 uses the USB firmware package from [RUN4 CTL 0.9.4](https://github.com/ha1dcre/run4-ctl/releases/tag/v0.9.4).** Connect an M-VAVE FM-1 over USB and open **Settings → MIDI → FM-1 Firmware** in RUN4. Back up your device before changing its firmware. [FM-1 manual](https://github.com/ha1dcre/run4-ctl/blob/v0.9.4/docs/MANUAL.md)
+**RUN4 1.9 uses the USB firmware package from [RUN4 CTL 0.9.4](https://github.com/ha1dcre/run4-ctl/releases/tag/v0.9.4).** Connect an M-VAVE FM-1 over USB and open **Settings → MIDI → FM-1 Firmware** in RUN4. Back up your device before changing its firmware. [FM-1 manual](docs/MANUAL.md)
 
 RUN4 mode gives you the app's parameters, transport and Tape waveform on the hardware. The firmware also has standalone **Synth**, **AMB** and **DUB** modes. On the FM-1, **SEL + HOME** cycles through them.
 

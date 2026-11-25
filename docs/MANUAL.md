@@ -35,7 +35,7 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
 * **Buttons, encoders and MASTER** are sent to RUN4, which decides what they do on the current page.
 * **Screen**: a header in the colour of the current RUN4 track, four tiles (name, value, bar), and a footer with the
   page dots, tempo, bar and beat, transport and octave. With a RUN4 that speaks protocol 1.2 the header shows where you
-  are (e.g. TAPE > WEAR), the parameter in focus has a frame and its position (5/12) is in the footer; turning K1 to K4
+  are, the parameter in focus has a frame and its position (5/12) is in the footer; turning K1 to K4
   shows that parameter large for a moment (also when you change it in the app), then the four tiles come back.
 * **Tape view.** On RUN4's Tape pages (with a RUN4 that speaks protocol 1.3) the screen shows the focused loop: its
   waveform with the loop region lit, the playhead (red while recording) and five level meters (T1 to T4 and the master,
@@ -49,7 +49,7 @@ RUN4 CTL is an independent project. It is not made or supported by M-VAVE.
 A RUN4 track can use the **FM-1 engine**: the track's notes (its sequencer, chords, arpeggiator, what you play) are
 played by the FM-1's own FM synth while the FM-1 is in RUN4 mode, and come out of the FM-1's headphone / line output
 and over the USB cable into RUN4. RUN4 chooses the voice (one of the FM-1's 8 factory or 32 user voices, or one of its
-own) and a few live settings (algorithm, feedback, brightness, envelope speed, volume, vibrato, effects). Key pressure
+own) and sends the track's settings. Key pressure
 makes the sound brighter. MASTER is the FM-1's volume for it, as for the iPad's audio playing through the FM-1.
 
 The FM-1's keys keep going to RUN4 as before; RUN4 sends the track's notes back, so what you hear is what the track
@@ -522,25 +522,11 @@ Plug the FM-1 into the iPad or iPhone (or connect over Bluetooth, or use a Mac s
 sends HELLO every second until RUN4 answers; then the screen switches to the RUN4 page. Unplug and replug: it starts
 over.
 
-## Button map
+## Controller controls
 
-The FM-1's controls keep the same meaning on every page. The **fixed layer**:
-
-| Control | Use |
-| --- | --- |
-| ALGORITHM encoder (track) | choose the track |
-| PRESETS encoder | choose the sub-page |
-| SELECT encoder | choose the bank |
-| K1 to K4 | the four values on screen |
-| MASTER | RUN4's master level |
-| PLAY, REC | transport |
-| SAVE | Undo |
-| OCT-, OCT+ | shift the keys by an octave (local); also sent to RUN4 |
-| SEL | SHIFT: hold it for the second function of the other buttons |
-
-The **page buttons** open the page of the same name: HOME, ENV, LFO, FX, EDIT, GLO, ARP, SEQ. What each page shows is decided
-by RUN4 and by the track you are on. Press HOME twice quickly for RUN4's mode list (Tape, Poly, Disc, Perform, TOLF): SELECT
-or PRESETS move, HOME or PLAY pick, any other page button or SAVE cancels.
+Use the labels and values on the FM-1 display to see what the current page controls. K1 to K4 adjust its four fields.
+Hold SEL for alternate actions. OCT− and OCT+ shift the keyboard by octaves. Press HOME twice to open the mode
+list. Turn SELECT or PRESETS to move, press HOME or PLAY to confirm, or SAVE to cancel.
 
 ## SETUP page
 

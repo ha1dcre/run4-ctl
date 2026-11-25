@@ -122,6 +122,8 @@ Protocol 1.2 adds optional trailers (see "Protocol 1.2: where you are"): PAGE ma
   `value14` by kind: unipolar 0..16383 from the left; bipolar 8192 = centre; **enum: `(segment_count << 7) | index`**
   (the segment count is needed to draw the bar; 2..16 are drawn); toggle: 0 off, non-zero on. `text` is the finished
   value including its unit.
+* The host supplies the slot names, values, and page layout. Draw the received frames and send input events;
+  no application-specific table is needed. For example, an unipolar `Cutoff` slot can carry value 8192 and text `1 kHz`.
 * VALUE replaces one slot's value and text; the device redraws that tile only.
 * LEDS: entries 0..13 are the buttons (BTN order), 14..40 the keys (key 0..26). 0 off, 1 dim, 2 on, 3 blink (2 Hz).
   Entry 41, the padding in the last byte, is ignored.
@@ -135,8 +137,8 @@ firmware speaks) and of HELLO_ACK (what the host speaks). A firmware only needs 
 sent no minor is 1.0 and must not be sent a LIST); a 1.0 host that sees the extra HELLO byte ignores it if it reads
 by the layout, and the 1.0 frames of the host are still parsed here (`tests/r4p_test.c`, "t_v11").
 
-LIST shows a scrollable single-choice list on the whole screen (used for the HOME double-tap mode list: Tape, Poly,
-Disc, Perform, TOLF; later kit and preset browsing). `title` is drawn in the header in the colour `r g b` (0..127, x2).
+LIST shows a scrollable, single-choice menu. The host supplies its contents. The device draws `title`
+in the header in the colour `r g b` (0..127, x2).
 `total` is the number of items (0..127; **0 closes the list**), `sel` the selected index, and the frame carries the
 window: the items `first .. first+n-1` (`n` at most 7, the rows the screen has). A frame is refused when `n > 7`,
 `first + n > total` or `sel >= total` (total > 0); the longest is 405 bytes.
@@ -154,7 +156,7 @@ While a list is open the firmware keeps the buttons and encoders local (nothing 
 
 ## Protocol 1.2: where you are
 
-Version 1.2 lets the host show the player where a parameter lives (e.g. Tape > Wear > Failure), which one is in
+Version 1.2 lets the host show the player where a parameter lives (e.g. Sound > Filter > Cutoff), which one is in
 focus, and the value being set, large. It is backwards compatible: `proto_ver` stays 1, the firmware's HELLO says minor
 2, and a host that speaks 1.2 answers **HELLO_ACK `01 02`**. A host that answered 1.0 or 1.1 is never sent anything new
 and sees no change in behaviour (the firmware's big value view below is off for it too). The firmware parses the 1.2
@@ -167,7 +169,7 @@ frames from any host.
 | `cursor` | 1 | the slot in focus, 0..3 (its tile gets a frame in the page colour); 127 = none |
 | `item_idx14` | 2 | the focused parameter's position in the host's list of the page's parameters, 0-based |
 | `item_count14` | 2 | that list's length; 0 = no position shown (then `item_idx14` must be 0) |
-| `path` | str | where you are, e.g. `TAPE > WEAR` (up to 24 characters); empty = the title is shown |
+| `path` | str | where you are, e.g. `SOUND > FILTER` (up to 24 characters); empty = the title is shown |
 
 Without the trailer (1.1) the page has no cursor, no position and no path. A PAGE is refused when the trailer is
 partial, `cursor` is neither 0..3 nor 127, or `item_idx14 >= item_count14` with a count above 0. The device shows the
@@ -475,11 +477,11 @@ as for SEL + HOME); before the HELLO_ACK they are ignored.
 | id | name | flags | what it is |
 | --- | --- | --- | --- |
 | 0 | RUN4 | AVAIL, CTRL | the controller: the host draws its pages (1.0 .. 1.3). No description |
-| 1 | SYNTH | AVAIL, DESC | Synth mode, described (below) |
-| 2 | AMB | AVAIL, DESC; in the package without AMB (`app-noamb`): **0** (listed, not available) | AMB mode, described (below) |
-| 3 | DUB | AVAIL, DESC (firmware 0.9); in `app-noamb`: **0** (listed, not available) | DUB mode, described (below) |
+| 1 | SYNTH | AVAIL, DESC | Synth mode, described via DESC_REQ |
+| 2 | AMB | AVAIL, DESC; in the package without AMB (`app-noamb`): **0** (listed, not available) | AMB mode, described via DESC_REQ |
+| 3 | DUB | AVAIL, DESC (firmware 0.9); in `app-noamb`: **0** (listed, not available) | DUB mode, described via DESC_REQ |
 
-Mode ids are stable; a later mode takes the next free id (3, 4, ...), up to 126. **Flags** (MODES, MODE): bit 0
+Mode ids are stable; a new mode takes an unused id, up to 126. **Flags** (MODES, MODE): bit 0
 **AVAIL** = this firmware has the mode, bit 1 **DESC** = it is described (DESC_REQ works), bit 2 **CTRL** = the
 controller mode (the host draws: PAGE, LEDS, STATUS ...). Other bits 0. HELLO's `mode` byte stays as in 1.0: 0 in the
 CTRL mode, 1 in any local mode.
@@ -619,212 +621,10 @@ not in bursts (one frame at a time, see "Bluetooth MIDI").
   lost track (a replug, its own restart) sends HELLO_ACK `01 04` -> MODE, then DESC_REQ / VALS_REQ.
 * **A new link** (cable, Bluetooth): HELLO again; nothing is subscribed, a MODE_SET not yet carried out is forgotten.
 
-Sizes: AMB's description is 57 frames, 1,707 bytes (the longest frame 78 bytes); DUB's 199 frames, 6,155 bytes (the
-longest 76; `tests/scenarios/34_dub_modes.txt`); Synth mode's 187 frames, 5,751 bytes
-(measured in the simulator, `tests/scenarios/31_modes.txt`). The device sends up to four 1.4 frames per pass of its
-main loop as the link has room, behind the button events and the 1.3 answers (HV_STATE, then MODE / MODES / LM_ERR,
-then VOICE_DATA, VOICE_NAMES, the backup, then the description, PVAL, LSTATE, and to a 1.5 host LVIEW). Over USB a description takes a few
-frames of the main loop; over Bluetooth it is paced by the 64-packet queue (not measured on a device).
-
-### AMB's description (mode 2)
-
-8 pages: 0 PLAY, 1 GARDEN, 2 PAD, 3 BELLS, 4 BASS, 5 PULSE, 6 SPACE, 7 KEY (pages 1..7 are the device's pages, their
-four knobs in knob order). 35 parameters; ids 0..27 are AMB's engine parameters (`src/amb/amb.h` P_*), 32..38 the
-PLAY page's. State texts: PIECE (`GARDEN`), CHORD (`Em7`), SCALE (`D DORIAN`, `D CUSTOM`), STATE (`GROWING`,
-`RESTING`, `FROZEN`, `EXT CLOCK`, `WAKING`). The pieces keep every value per piece (a piece change sends all of them).
-
-| id | page | name | kind | range (def) | notes |
-| --- | --- | --- | --- | --- | --- |
-| 32 | PLAY | PIECE | ENUM | 0..7 (0) GARDEN DEPARTURES VOICES AFTERNOON NIGHT BUS SHORELINE GLASS TIDES | as PRESETS: the piece as it was left |
-| 33 | PLAY | NOTES | MASK | 12 bits, bit k = pitch class k (C, C#, D, Eb ... B) (0xAB5) | the scale as the keys toggle it. REFUSED without the root or with fewer than 3 notes. Text `7 NOTES` |
-| 34 | PLAY | GROW | TOGGLE, AUTO | RESTING / GROWING (1) | PLAY: grows / rests (the tails ring on). CLOCK while a MIDI clock runs (below). Text `WAKING` while it is about to grow |
-| 35 | PLAY | FREEZE | TOGGLE | OFF / ON (0) | REC: the chord held, the plate rings on |
-| 36 | PLAY | NEXT CHORD | ACTION | | EDIT: the next chord, on the next bar while growing |
-| 37 | PLAY | SAVE | ACTION | | SAVE: the pieces into the store |
-| 38 | PLAY | RESET PIECE | ACTION | | SAVE held: the piece back to its recipe (not saved until SAVE) |
-| 18 | GARDEN | TEMPO | NUMBER | 30..120 (72) BPM | (a running MIDI clock's tempo leads) |
-| 5 | GARDEN | EVOLVE | NUMBER | 0..100 (35) | |
-| 15 | GARDEN | MOTION | NUMBER | 0..100 (50) | |
-| 6 | GARDEN | DRIFT | NUMBER | 0..100 (25) | text 20S .. 5:00 |
-| 0 | PAD | LEVEL | NUMBER | 0..100 (60) | |
-| 13 | PAD | SWELL | NUMBER | 0..100 (60) | |
-| 12 | PAD | BRIGHT | NUMBER | 0..100 (40) | |
-| 22 | PAD | COLOUR | ENUM | RHODES VOICES (0) | |
-| 1 | BELLS | LEVEL | NUMBER | 0..100 (65) | |
-| 4 | BELLS | DENSITY | NUMBER | 0..100 (40) | |
-| 14 | BELLS | TONE | NUMBER | 0..100 (50) | |
-| 21 | BELLS | OCTAVE | NUMBER, BIPOLAR | -2..2 (0) oct | OCT- / OCT+ |
-| 2 | BASS | LEVEL | NUMBER | 0..100 (45) | |
-| 23 | BASS | OCTAVE | NUMBER, BIPOLAR | -1..1 (0) oct | |
-| 24 | BASS | GLIDE | NUMBER | 0..100 (20) | |
-| 25 | BASS | FIFTH | NUMBER | 0..100 (35) | |
-| 3 | PULSE | LEVEL | NUMBER | 0..100 (40) | |
-| 7 | PULSE | HITS | NUMBER | 0..100 (35) | |
-| 26 | PULSE | SWING | NUMBER | 0..100 (0) | text 50% .. 75% |
-| 27 | PULSE | HATS | NUMBER | 0..100 (50) | |
-| 8 | SPACE | ECHO | NUMBER | 0..100 (45) | |
-| 9 | SPACE | ECHO TIME | ENUM | 1/4. 1/2 1/2. 1 BAR 2 BARS 4 BARS (3) | |
-| 10 | SPACE | REVERB | NUMBER | 0..100 (65) | |
-| 11 | SPACE | SIZE | NUMBER | 0..100 (80) | |
-| 19 | KEY | ROOT | ENUM | C C# D Eb E F F# G Ab A Bb B (2) | the scale moves with it |
-| 16 | KEY | TUNE | NUMBER, BIPOLAR | -50..50 (0) ct | the player's, not the piece's |
-| 17 | KEY | MIDI OUT | ENUM | OFF CLOCK NOTES (0) | the player's, not the piece's |
-| 20 | KEY | SCALE | ENUM | IONIAN DORIAN PHRYGIAN LYDIAN MIXOLYD. AEOLIAN PENT MAJ PENT MIN CUSTOM (1) | 8 = CUSTOM: notes taken out or put in; setting 8 keeps the notes as they are |
-
-Every value the host sets goes into the piece playing (or the player's TUNE / MIDI OUT) and is saved as the device's
-own edits are (a few seconds later while resting; SAVE at once). The device redraws its page and shows the same
-toast as for its own buttons (GROWING, NEXT CHORD, SAVED ...).
-
-### DUB's description (mode 3)
-
-20 pages: 0 PLAY, then the device's pages in the order SELECT and the page buttons reach them: 1 DUB, 2 KEY, 3 CHORD, 4
-CHORD SOUND, 5 CHORD FM, 6 TEXTURE, 7 PING SOUND, 8 PING FM, 9 BASS, 10 BASS SOUND, 11 BASS FM, 12 DRUMS, 13 DRUM SOUND,
-14 PATTERN, 15 SPACE, 16 GLOBAL, 17 CHORDS, 18 PERFORM, 19 MIX. 135 parameters. Ids 0..105 are DUB's engine
-parameters (`src/dub/dub.h` DP_*); 128..137 the PLAY page's and PERFORM's mutes and solos; 140 SLOT, 143 LANE, 145..148
-the master actions FILTER, DUB, ENERGY, SPACE (what the device keeps beside the pieces); 160..179 the drum pattern's
-steps and accents; id + 256 is a second place of
-the same value on another page (KEY's SWING, PERFORM's FILTER, the MIX page's four levels): a PVAL tells both when it
-changes. Besides its four knobs a page may hold values the device sets otherwise: the layer's VOICE (ALGORITHM), the
-pings' OCTAVE (OCT- / OCT+), the drums' KIT; the CHORDS page all eight slots (its K1 SLOT picks which two are on K2,
-K3), the PATTERN page all five chances (K1 LANE picks) and every lane's steps and accents (its keys edit the lane K1
-picks). Each lane's sixteen steps are two MASKs of eight, `<LANE> 1-8` and `<LANE> 9-16` (labels `1`..`8`,
-`9`..`16`), its accents two more, `<LANE> ACC 1-8` and `<LANE> ACC 9-16`: id 160 + 4 lane + 0..3, the lanes KICK
-SHAKER OPEN RIM CLAP. While PLAY is AUTO they tell the steps Auto plays (its shaker changes now and then: a PVAL); the
-first write takes Auto's pattern over and turns PLAY to PATTERN, as the device's first key does. An accent written
-leaves its step as it is (the device's black key + white key turns the step on too). Text: the eight steps, `X` set,
-`-` not (`X---X---`). State texts: PIECE (`BASIC`), CHORD (`Fm7`), SCALE (`F DORIAN`, `F CUSTOM`), STATE (`FULL 3/8`, `BREAK 1/8`
-.. the section and its bar while it plays, `EXT FULL 3/8` with a MIDI clock, `RESTING`, `DUB HOLD`, `WAKING`); flags
-PLAYING, FROZEN (dub hold), EXT CLOCK, WAKING. The pieces keep every value per piece (a piece change sends all of
-them); the master actions, SLOT, LANE, KICK, HATS and SOLO are the device's, kept across pieces, not saved.
-
-| id | page | name | kind | notes |
-| --- | --- | --- | --- | --- |
-| 128 | PLAY | PIECE | ENUM | as PRESETS: the piece as it was left (its ping loops too) |
-| 129 | PLAY | NOTES | MASK | the scale as the keys toggle it. REFUSED without the root or with fewer than 3 notes. Text `7 NOTES` |
-| 130 | PLAY | PLAY | TOGGLE | PLAY: plays / rests. AUTO. CLOCK while a MIDI clock runs. Text `WAKING` while it is about to play |
-| 131 | PLAY | DUB HOLD | TOGGLE | REC tapped: the echo and the cloud hold, the chord holds |
-| 132 | PLAY | NEXT CHORD | ACTION | EDIT held: the next chord, on the next bar while playing |
-| 133 | PLAY | SAVE | ACTION | SAVE: the pieces into the store |
-| 134 | PLAY | RESET PIECE | ACTION | SAVE held: the piece back to its recipe (not saved until SAVE) |
-| 145 | DUB | FILTER | NUMBER | the master filter: -50..-1 SHUT 100..2, 0 OFF, 1..50 OPEN 2..100. For playing: never saved |
-| 5 | DUB | EVOLVE | NUMBER |  |
-| 15 | DUB | MOTION | NUMBER |  |
-| 6 | DUB | DRIFT | ENUM | 2 BARS .. 64 BARS, HOLD |
-| 18 | KEY | TEMPO | NUMBER | (a running MIDI clock's tempo leads) |
-| 19 | KEY | ROOT | ENUM |  |
-| 20 | KEY | MODE | ENUM | 8 = CUSTOM: notes taken out or put in; setting 8 keeps the notes |
-| 282 | KEY | SWING | NUMBER | the same value as DRUMS' SWING (26) |
-| 0 | CHORD | LEVEL | NUMBER |  |
-| 28 | CHORD | STABS | NUMBER |  |
-| 13 | CHORD | DECAY | NUMBER |  |
-| 12 | CHORD | CUTOFF | NUMBER |  |
-| 22 | CHORD | VOICE | ENUM | ALGORITHM on CHORD's pages: SAWS KEYS ORGAN PAD BELL TONEWHEEL NOISE |
-| 36 | CHORD SOUND | ATTACK | NUMBER |  |
-| 37 | CHORD SOUND | COLOUR | NUMBER |  |
-| 38 | CHORD SOUND | RESO | NUMBER |  |
-| 39 | CHORD SOUND | ENV | NUMBER |  |
-| 52 | CHORD FM | ALGO | ENUM | VOICE (the voice's own), 1..8, 2-OP; the FM pages act on FM voices only (the chord's KEYS, BELL; every ping; the bass's PUNCH .. GROWL) |
-| 53 | CHORD FM | RATIO | NUMBER |  |
-| 54 | CHORD FM | FEEDBACK | NUMBER |  |
-| 55 | CHORD FM | MOD DEC | NUMBER |  |
-| 1 | TEXTURE | PINGS | NUMBER |  |
-| 4 | TEXTURE | DENSITY | NUMBER |  |
-| 32 | TEXTURE | CLOUD | NUMBER |  |
-| 29 | TEXTURE | CRACKLE | NUMBER |  |
-| 33 | TEXTURE | VOICE | ENUM | ALGORITHM on TEXTURE's pages: BLIP MARIMBA GLASS WOOD DROP |
-| 21 | TEXTURE | OCTAVE | NUMBER | OCT- / OCT+ |
-| 40 | PING SOUND | TONE | NUMBER |  |
-| 41 | PING SOUND | RATIO | NUMBER |  |
-| 42 | PING SOUND | LENGTH | NUMBER |  |
-| 43 | PING SOUND | BEND | NUMBER |  |
-| 56 | PING FM | ALGO | ENUM |  |
-| 57 | PING FM | RATIO | NUMBER |  |
-| 58 | PING FM | FEEDBACK | NUMBER |  |
-| 59 | PING FM | MOD DEC | NUMBER |  |
-| 2 | BASS | LEVEL | NUMBER |  |
-| 23 | BASS | OCTAVE | NUMBER |  |
-| 24 | BASS | GROOVE | ENUM |  |
-| 25 | BASS | FIFTH | NUMBER |  |
-| 34 | BASS | VOICE | ENUM | ALGORITHM on BASS's pages: SUB PUNCH RUBBER PLUCK GROWL |
-| 44 | BASS SOUND | BITE | NUMBER |  |
-| 45 | BASS SOUND | SHAPE | NUMBER |  |
-| 46 | BASS SOUND | LENGTH | NUMBER |  |
-| 47 | BASS SOUND | SLIDE | NUMBER |  |
-| 60 | BASS FM | ALGO | ENUM |  |
-| 61 | BASS FM | RATIO | NUMBER |  |
-| 62 | BASS FM | FEEDBACK | NUMBER |  |
-| 63 | BASS FM | MOD DEC | NUMBER |  |
-| 3 | DRUMS | LEVEL | NUMBER |  |
-| 7 | DRUMS | HITS | NUMBER |  |
-| 26 | DRUMS | SWING | NUMBER | text 50% .. 70% |
-| 30 | DRUMS | DUCK | NUMBER |  |
-| 35 | DRUMS | KIT | ENUM | ALGORITHM on DRUMS' pages: TIGHT DEEP PUNCH SOFT DUSTY |
-| 48 | DRUM SOUND | KICK TUNE | NUMBER |  |
-| 49 | DRUM SOUND | KICK LEN | NUMBER |  |
-| 50 | DRUM SOUND | PUNCH | NUMBER |  |
-| 51 | DRUM SOUND | HATS | NUMBER |  |
-| 143 | PATTERN | LANE | ENUM | which lane the device's PATTERN page edits (its CHANCE on K3) |
-| 104 | PATTERN | ACCENT | NUMBER |  |
-| 99 | PATTERN | KICK CHANCE | NUMBER |  |
-| 100 | PATTERN | SHAKER CHANCE | NUMBER |  |
-| 101 | PATTERN | OPEN CHANCE | NUMBER |  |
-| 102 | PATTERN | RIM CHANCE | NUMBER |  |
-| 103 | PATTERN | CLAP CHANCE | NUMBER |  |
-| 105 | PATTERN | PLAY | ENUM | AUTO / PATTERN (the steps: 160..179) |
-| 160, 161 | PATTERN | KICK 1-8, KICK 9-16 | MASK | 8 bits: bit k = step k + 1 (+ 9); as the white keys with lane KICK. Text `X---X---` |
-| 162, 163 | PATTERN | KICK ACC 1-8, KICK ACC 9-16 | MASK | 8 bits: the steps accented (a black key held + the white key) |
-| 164..167 | PATTERN | SHAKER 1-8, SHAKER 9-16, SHAKER ACC 1-8, SHAKER ACC 9-16 | MASK | as the kick's |
-| 168..171 | PATTERN | OPEN 1-8, OPEN 9-16, OPEN ACC 1-8, OPEN ACC 9-16 | MASK | as the kick's |
-| 172..175 | PATTERN | RIM 1-8, RIM 9-16, RIM ACC 1-8, RIM ACC 9-16 | MASK | as the kick's |
-| 176..179 | PATTERN | CLAP 1-8, CLAP 9-16, CLAP ACC 1-8, CLAP ACC 9-16 | MASK | as the kick's |
-| 8 | SPACE | ECHO | NUMBER |  |
-| 9 | SPACE | ECHO TIME | ENUM |  |
-| 11 | SPACE | FEEDBACK | NUMBER | text 45% .. 112% (the loop's gain) |
-| 10 | SPACE | REVERB | NUMBER |  |
-| 16 | GLOBAL | TUNE | NUMBER | the player's, not the piece's |
-| 17 | GLOBAL | MIDI OUT | ENUM | the player's, not the piece's: OFF CLOCK NOTES |
-| 140 | CHORDS | SLOT | ENUM | which slot the device's CHORDS page edits (its CHORD and TYPE on K2, K3) |
-| 88 | CHORDS | PLAY | ENUM | RANDOM / PROG (the slots in turn) |
-| 401 | PERFORM | FILTER | NUMBER | the same value as DUB's FILTER (145) |
-| 146 | PERFORM | DUB | NUMBER | -50..50: the echo's send and feedback. For playing |
-| 147 | PERFORM | ENERGY | NUMBER | -50..50: density, hits, stabs, the phrases. For playing |
-| 148 | PERFORM | SPACE | NUMBER | -50..50: reverb, cloud, the plate's size. For playing |
-| 135 | PERFORM | KICK | TOGGLE | OFF / ON (1): muted (PERFORM's white 4) |
-| 136 | PERFORM | HATS | TOGGLE | OFF / ON (1): muted (white 5) |
-| 137 | PERFORM | SOLO | MASK | 5 bits: CHORD PINGS BASS KICK HATS soloed (black 1-5); text `NONE`, a name, `2 SOLO` |
-| 256 | MIX | CHORD | NUMBER | the same value as CHORD's LEVEL (0); the MIX page: PERFORM, white 6 held |
-| 257 | MIX | PINGS | NUMBER | the same as TEXTURE's PINGS (1) |
-| 258 | MIX | BASS | NUMBER | the same as BASS' LEVEL (2) |
-| 259 | MIX | DRUMS | NUMBER | the same as DRUMS' LEVEL (3) |
-| 64..71, 72..79, 80..87 | CHORDS | ROOT 1..8, CHORD 1..8, TYPE 1..8 | ENUM | in the order ROOT 1, CHORD 1, TYPE 1, ROOT 2 ..; ROOT C .. B, CHORD EMPTY MAJOR MINOR SUS2 SUS4 DIM AUG (a chord written: PLAY becomes PROG), TYPE TRIAD 6 7 MAJ7 9 11 ADD9 |
-
-Ranges, labels and defaults are in the description (`tools/fake_run4.py` DUB_PARAMS has the list as the device sends
-it, checked in `tests/run_sim.sh`). Every value the host sets goes into the piece playing (or the player's TUNE / MIDI
-OUT, or the device's own) and is saved as the device's own edits are; the device redraws its page and shows the toast
-its buttons would.
-
-### Synth mode's description (mode 1)
-
-Built from Synth mode's own page table (`src/synth_ui.c` SP[]), so it is exactly what its pages edit. 14 pages:
-0 VOICE, 1 SYNTH, 2 MORPH, 3..8 OP1..OP6, 9 LFO, 10 EFFECTS, 11 GLOBAL, 12 ARP, 13 SEQ; 143 parameters. State texts:
-VOICE (`F4 BRASS SECT`), PATTERN (`PATTERN 1`), STATE (`PLAYING`, `STOPPED`, `EXT CLOCK`); flags PLAYING, RECORDING,
-EXT CLOCK.
-
-| ids | page | parameters |
-| --- | --- | --- |
-| 150, 151, 152 | VOICE | VOICE (1..40: F1..F8, U1..U32; text `F4 BRASS SECT`; an empty user slot is REFUSED), ALGORITHM (1..32), SAVE VOICE (ACTION: into this user slot or the first free one) |
-| 0..3 | SYNTH | BRIGHT (-64..63), FEEDBACK (0..7), ENV SPEED (-64..63), LEVEL (0..100 %) |
-| 4..7 | MORPH | MORPH (0..100 %, AUTO: a drift moves it), MODE (ENUM OFF KNOB 10 S .. 5 MIN), SET A, SET B (ACTIONs: the snapshot now) |
-| 16 + 16 x op + j | OP1..OP6 | j 0..7 the OPERATOR page (RATIO, FINE, LEVEL, DETUNE, MODE, VEL SENS, RATE SCALE, AMP MOD), j 8..15 the ENVELOPE page (RATE 1..4, LEVEL 1..4); op 0..5 = OP1..OP6 |
-| 112..119 | LFO | SPEED, DELAY, PITCH MOD, AMP MOD, WAVE, PITCH SENS, LFO SYNC, OSC SYNC |
-| 120..127 | EFFECTS | DRIVE, CHORUS, DELAY, REVERB, DELAY TIME, DELAY FDBK, REVERB TYPE, REVERB SIZE |
-| 128..133, 136..139 | GLOBAL | TRANSPOSE, TUNE, MIDI CH (0 = OMNI), BEND RANGE, VELOCITY, MUTATE; SCALE, ROOT, KEY MODE, MIDI IN |
-| 140..147 | ARP | ARP, MODE, RATE, OCTAVES, GATE, CHORD, INVERSION, SPREAD |
-| 153, 154 | SEQ | PLAY (TOGGLE STOPPED / PLAYING, AUTO; CLOCK while a MIDI clock leads), TEMPO (400..2400 = 40.0..240.0 BPM, unit `BPM/10`) |
-
-Ranges, kinds and labels are in the description (the sequencer's steps, locks and patterns are not described).
-Synth mode's `def` is the range's low end or 0: its values come with the voice and the settings, it has no default of
-its own per parameter.
+Parameter descriptions vary by device and firmware build. Discover their names, ranges, labels and values via
+DESC_REQ / VALS_REQ. The device sends up to four frames per pass of its main loop as the link has room.
+Button events and other pending replies take priority; the description is followed by PVAL, LSTATE and, for
+hosts using minor 5 or later, LVIEW. Over Bluetooth the 64-packet queue also paces the description.
 
 ### Transport: RUN4's clock and the remote GROW / PLAY
 
@@ -837,13 +637,8 @@ while stopped), or after a STOP: GROW from the host works, and a garden grown th
 player's PLAY button on the FM-1 always works (the player has the last word); the next START / STOP from the clock wins
 again. Synth mode's PLAY (153) follows the same rule (refused while its sequencer follows a MIDI clock, clock AUTO).
 
-**Recording AMB into a RUN4 Tape** (the intended use): RUN4 picks AMB (MODE_SET 2), sends its MIDI clock to the FM-1
-over the same USB-C cable, and records the FM-1's USB audio input on the Tape track. RUN4's transport START starts
-the recording and AMB grows from the top in time with it; STOP rests AMB (its tails ring out) - so a take starts on
-the grid. Without a clock from RUN4 the host may grow and rest AMB with GROW. MIDI OUT on AMB's KEY page should stay
-OFF while RUN4 sends a clock (MIDI OUT CLOCK sends AMB's own clock only while no clock comes in; NOTES sends its notes
-on channels 1, 2, 3 and 10 to RUN4, which a host may route or ignore). SETUP > AUDIO > LOCAL OUT USB ONLY keeps the
-FM-1's speaker silent while RUN4 records it.
+MIDI clock and the device's USB audio can travel over the same link. Configure the host's audio input and avoid
+routing the device's MIDI clock back to itself.
 
 ## Protocol 1.5: the local mode's page
 
@@ -873,7 +668,7 @@ Sent to a subscribed 1.5 host (DESC_REQ / VALS_REQ, "Values and the status line"
 
 Nothing while not subscribed; a mode change, a HELLO_ACK and a new link end it as the rest of 1.4's subscription (the
 next DESC_REQ / VALS_REQ starts it again). An LVIEW goes out in 1.4's order behind LM_ERR, MODE and MODES and after
-the description stream, PVAL and LSTATE ("Sizes" above).
+the description stream, PVAL and LSTATE.
 
 **LVIEW_SET (0x59)** `mode, page` - host to device: show that description page, page 0..127. Checked as PSET: `mode`
 not the one playing: `LM_ERR WRONGMODE` (id 0) and a MODE; a mode without a description (RUN4): NODESC; `page` >=
@@ -890,78 +685,15 @@ in the same pass wins (an LVIEW_SET for the mode left is forgotten).
 | 3 NODESC | the mode playing has no description (RUN4) |
 | 5 RANGE | `page` >= the description's npages |
 
-**AMB's pages** (mode 2): the device's page v (GARDEN .. KEY, its page buttons HOME ENV ARP LFO SEQ FX GLO, SELECT
-steps through them) is description page v + 1, its four knobs the four parameters the description puts on it, KEY's
-SCALE as id 20 (P_MODE). Page 0 PLAY is never the device's page. LVIEW_SET p (1..7) shows page p - 1 as its button.
-
-| page | K1..K4 ids |
-| --- | --- |
-| 1 GARDEN | 18 5 15 6 |
-| 2 PAD | 0 13 12 22 |
-| 3 BELLS | 1 4 14 21 |
-| 4 BASS | 2 23 24 25 |
-| 5 PULSE | 3 7 26 27 |
-| 6 SPACE | 8 9 10 11 |
-| 7 KEY | 19 16 17 20 |
-
-**DUB's pages** (mode 3): the device's page is the description page of the same name (the order of DUB's description above), its
-knobs these ids. Page 0 PLAY is never the device's page. LVIEW_SET p shows page p as the device's buttons get there:
-DUB .. GLOBAL as their buttons, KEY, the SOUND, FM and PATTERN pages as their button pressed again; CHORDS as EDIT
-tapped (EDIT again goes back to where it came from); PERFORM as SEL tapped (PERFORM on); MIX only while the player holds
-white 6 in PERFORM: not now (the device sends the LVIEW of the page it shows, the host's tab goes back).
-
-| page | K1..K4 ids |
-| --- | --- |
-| 1 DUB | 145 5 15 6 |
-| 2 KEY | 18 19 20 282 |
-| 3 CHORD | 0 28 13 12 |
-| 4 CHORD SOUND | 36 37 38 39 |
-| 5 CHORD FM | 52 53 54 55 |
-| 6 TEXTURE | 1 4 32 29 |
-| 7 PING SOUND | 40 41 42 43 |
-| 8 PING FM | 56 57 58 59 |
-| 9 BASS | 2 23 24 25 |
-| 10 BASS SOUND | 44 45 46 47 |
-| 11 BASS FM | 60 61 62 63 |
-| 12 DRUMS | 3 7 26 30 |
-| 13 DRUM SOUND | 48 49 50 51 |
-| 14 PATTERN, lane l | 143 104 99+l 105 |
-| 15 SPACE | 8 9 11 10 |
-| 16 GLOBAL | 16 17 (n = 2) |
-| 17 CHORDS, slot s | 140 72+s 80+s 88 |
-| 18 PERFORM | 401 146 147 148 |
-| 19 MIX | 256 257 258 259 |
-
-**Synth mode's pages** (mode 1), from the same table as its description (`src/synth_lm.c` sl_ref). Page 0 VOICE is
-never the device's page.
-
-| the device shows | page | K1..K4 ids |
-| --- | --- | --- |
-| HOME, sub-page 1 (SYNTH) | 1 SYNTH | 0 1 2 3 |
-| HOME, sub-page 2 (MORPH) | 2 MORPH | 4 5 6 7 |
-| EDIT (OPERATOR) op o, sub-page s | 3 + o (OP1..OP6) | 16 + 16o + 4s + k |
-| ENV (ENVELOPE) op o, sub-page s | 3 + o | 16 + 16o + 8 + 4s + k |
-| LFO, sub-page s | 9 LFO | 112 + 4s + k |
-| FX (EFFECTS), sub-page s | 10 EFFECTS | 120 + 4s + k |
-| GLO (GLOBAL), sub-page 1, 2, 3 | 11 GLOBAL | 128 129 130 131; 132 133 (n = 2: K3, K4 empty); 136 137 138 139 |
-| ARP, sub-page s | 12 ARP | 140 + 4s + k |
-| SEQ (any of its sub-pages) | 13 SEQ | none (n = 0: its knobs edit steps, not described) |
-
-(k = 0..3 the knob, s = 0, 1 the sub-page, o = 0..5 the operator, the one SELECT picks.) LVIEW_SET: 1 HOME's first
-sub-page, 2 HOME's second; 3..8 operator p - 3 on EDIT's first sub-page, or, when the device shows EDIT or ENV already,
-on that page and sub-page (only the operator changes); 9 LFO, 10 EFFECTS, 11 GLOBAL, 12 ARP, 13 SEQ, each on its first
-sub-page, or on the sub-page it shows when the device is on that page already.
+Use DESC_PAGE for page names, DESC_PARAM for parameter definitions and LVIEW for the current knob assignments.
 
 ### Sequences (1.5)
 
 * **Connect (1.5 host).** Device HELLO (minor 5) -> host HELLO_ACK `01 05` -> MODE; DESC_REQ (or VALS_REQ) ->
   description -> LSTATE -> LVIEW; then PVAL / LSTATE / LVIEW as things change.
-* **The player turns SELECT in AMB** (GARDEN -> PAD): LVIEW `02 02 04 00 00 00 0D 00 0C 00 16`.
-* **The host's tab BELLS**: LVIEW_SET `02 03` -> the device shows BELLS -> LVIEW `02 03 04 00 01 00 04 00 0E 00 15`.
-  LVIEW_SET `02 03` again: nothing. LVIEW_SET `02 00`: nothing. LVIEW_SET `02 08`: LM_ERR `02 05 00 00`.
-* **Synth mode, OP3 picked on the EDIT page**: LVIEW `01 05 04 00 30 00 31 00 32 00 33`.
-* **DUB, EDIT tapped with slot 4 picked**: LVIEW `03 11 04 01 0C 00 4B 00 53 00 58`; the host's PERFORM tab: LVIEW_SET
-  `03 12` -> PERFORM on -> LVIEW `03 12 04 03 11 01 12 01 13 01 14`.
+* **Page change.** LVIEW_SET `02 03` requests page 3 of mode 2. If accepted, the device responds with LVIEW for
+  that page and its current parameter IDs. For example, `02 03 02 00 01 00 04` describes two knobs with IDs 1 and 4.
+  Repeating the request for the displayed page has no reply. An out-of-range page returns LM_ERR.
 
 Sizes: LVIEW is 9 to 17 bytes (F0 and F7 included), LVIEW_SET 8.
 
