@@ -1070,9 +1070,7 @@ F0 7D 52 34 5E 01 3C 0C 10 00 10 00 20 02 04 05 04 05 "C4-B4" 03      flags PLAY
 F0 7D 52 34 5E 00 00 00 00 00 00 00 00 7F 7F 7F 00 00 00 F7            the roll ends
 ```
 
-ROLL is 20 bytes (the end) to 388 (64 notes, a label of 24 accented letters), far below 640. **Version note:** an
-unreleased branch of this firmware (`script-page`, for RUN4 2.0) also calls itself protocol 1.6 and uses 0x5A, 0x5B and
-0x18..0x1A; ROLL (0x5E) collides with none of them, but the two branches' minors must be renumbered when they meet.
+ROLL is 20 bytes (the end) to 388 (64 notes, a label of 24 accented letters), far below 640.
 
 ## Connection
 
