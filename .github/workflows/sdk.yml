@@ -1,0 +1,38 @@
+name: Controller SDK
+on:
+  push:
+    paths:
+      - 'sdk/**'
+      - 'src/r4p.c'
+      - 'src/r4p.h'
+      - 'docs/PROTOCOL.md'
+      - 'LICENSE-MIT'
+      - '.github/workflows/sdk.yml'
+  pull_request:
+    paths:
+      - 'sdk/**'
+      - 'src/r4p.c'
+      - 'src/r4p.h'
+      - 'docs/PROTOCOL.md'
+      - 'LICENSE-MIT'
+      - '.github/workflows/sdk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Intentionally no submodules: the SDK must stand on its own.
+      - name: C99, C++ and malformed-stream tests; runnable example
+        run: make -C sdk SANITIZE=1 test example
+      - name: Reproducible MIT-only archive, extracted standalone build
+        run: make -C sdk SANITIZE=1 package-check archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: run4ctl-sdk-${{ github.sha }}
+          path: |
+            sdk/build/sanitized/*.zip
+            sdk/build/sanitized/*.sha256
+          if-no-files-found: error
