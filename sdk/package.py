@@ -12,8 +12,9 @@ SDK = Path(__file__).resolve().parent
 ROOT = SDK.parent
 VERSION = re.search(r'#define R4CTL_SDK_VERSION "([0-9.]+)"', (SDK / 'include/run4ctl.h').read_text()).group(1)
 SDK_FILES = (
-    'README.md', 'INTEGRATION.md', 'Makefile', 'package.py',
-    'include/run4ctl.h', 'src/run4ctl.c', 'examples/minimal.c',
+    'README.md', 'INTEGRATION.md', 'MIDI-STACKS.md', 'Makefile', 'package.py',
+    'include/run4ctl.h', 'include/run4ctl_transport.h',
+    'src/run4ctl.c', 'src/run4ctl_transport.c', 'examples/minimal.c',
     'tests/test.c', 'tests/cpp_smoke.cpp', 'tests/package_test.py',
 )
 SHARED_FILES = ('LICENSE-MIT', 'docs/PROTOCOL.md', 'src/r4p.c', 'src/r4p.h')

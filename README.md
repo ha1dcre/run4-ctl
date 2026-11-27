@@ -8,6 +8,7 @@ pages, values, transport state and display feedback.
 
 - [SDK overview](sdk/README.md)
 - [Integration guide](sdk/INTEGRATION.md)
+- [MIDI stack adapters](sdk/MIDI-STACKS.md)
 - [Runnable example](sdk/examples/minimal.c)
 - [Wire protocol](docs/PROTOCOL.md)
 - [MIT license](LICENSE-MIT)

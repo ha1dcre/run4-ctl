@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define R4CTL_SDK_VERSION "0.2.0"
+#define R4CTL_SDK_VERSION "0.2.1"
 #define R4CTL_CONTROLLER_MINOR 2 /* default controller profile; the full codec covers 1.8 */
 #define R4CTL_HELLO_MS 1000u
 
@@ -86,6 +86,11 @@ uint8_t r4ctl_host_minor(const r4ctl_t *device); /* negotiated min(host, adverti
  * feed ordinary MIDI to your native parser too. No callback for native MIDI. */
 int r4ctl_receive_frame(r4ctl_t *device, const uint8_t *frame, size_t length);
 int r4ctl_receive_byte(r4ctl_t *device, uint8_t byte);
+/* Feed any MIDI 1.0 byte chunk. Returns the count of recognized RUN4 frames.
+ * For a complete SysEx callback without F0/F7, use receive_sysex_payload(),
+ * which returns the same result as receive_frame(). */
+size_t r4ctl_receive_bytes(r4ctl_t *device, const uint8_t *bytes, size_t length);
+int r4ctl_receive_sysex_payload(r4ctl_t *device, const uint8_t *body, size_t length);
 
 /* 1 accepted, 0 not accepted: keep the physical edge/delta and retry after poll.
  * Buttons/encoders go only to a paired controller host. LIST interactions are
@@ -104,6 +109,11 @@ int r4ctl_master(r4ctl_t *device, uint16_t value);
 int r4ctl_note_on(r4ctl_t *device, uint8_t channel, uint8_t note, uint8_t velocity);
 int r4ctl_note_off(r4ctl_t *device, uint8_t channel, uint8_t note);
 int r4ctl_realtime(r4ctl_t *device, uint8_t status);
+/* One complete MIDI 1.0 channel or system message with explicit status.
+ * Covers CC, Program Change, bend, pressure, clock and notes. SysEx uses the
+ * session's own methods. Returns 0 for invalid messages, offline or backpressure. */
+size_t r4ctl_midi_message_size(uint8_t status);
+int r4ctl_send_midi_message(r4ctl_t *device, const uint8_t *message, size_t length);
 #ifdef __cplusplus
 }
 #endif

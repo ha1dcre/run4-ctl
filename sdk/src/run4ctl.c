@@ -155,6 +155,7 @@ int r4ctl_receive_frame(r4ctl_t *d, const uint8_t *f, size_t n)
 int r4ctl_receive_byte(r4ctl_t *d, uint8_t b)
 {
     int result;
+    if (!d->link) return 0;
     if (b >= 0xF8) return 0; /* MIDI realtime can appear inside SysEx */
     if (b == 0xF0) {
         d->rx_n = 1; d->rx[0] = b;
@@ -175,6 +176,26 @@ int r4ctl_receive_byte(r4ctl_t *d, uint8_t b)
     if (d->rx_n < sizeof d->rx) d->rx[d->rx_n++] = b;
     else d->rx_overflow = 1;
     return 0;
+}
+size_t r4ctl_receive_bytes(r4ctl_t *d, const uint8_t *bytes, size_t n)
+{
+    size_t frames = 0;
+    if (bytes)
+        for (size_t i = 0; i < n; ++i)
+            if (r4ctl_receive_byte(d, bytes[i]) == 1)
+                ++frames;
+    return frames;
+}
+int r4ctl_receive_sysex_payload(r4ctl_t *d, const uint8_t *body, size_t n)
+{
+    if (!d->link || !body || n < 3 || body[0] != 0x7D || body[1] != 0x52 || body[2] != 0x34)
+        return 0;
+    if (n > R4P_FRAME_MAX - 2u) return -1;
+    for (size_t i = 0; i < n; ++i)
+        if (body[i] & 0x80u) return -1;
+    r4ctl_receive_byte(d, 0xF0);
+    r4ctl_receive_bytes(d, body, n);
+    return r4ctl_receive_byte(d, 0xF7);
 }
 static int controls_ready(const r4ctl_t *d)
 {
@@ -240,27 +261,44 @@ int r4ctl_master(r4ctl_t *d, uint16_t value)
     d->master = value; d->have_master = 1;
     return 1;
 }
-static int midi(r4ctl_t *d, const uint8_t *message, size_t n)
+size_t r4ctl_midi_message_size(uint8_t status)
 {
-    return d->link && d->callbacks.send_midi && d->callbacks.send_midi(d->callbacks.user, message, n) == 1;
+    if (status >= 0x80 && status < 0xF0)
+        return (status & 0xE0u) == 0xC0 ? 2 : 3;
+    switch (status) {
+    case 0xF2: return 3;
+    case 0xF1: case 0xF3: return 2;
+    case 0xF6: case 0xF8: case 0xFA: case 0xFB: case 0xFC: case 0xFE: case 0xFF:
+        return 1;
+    default: return 0;
+    }
+}
+int r4ctl_send_midi_message(r4ctl_t *d, const uint8_t *message, size_t n)
+{
+    if (!d->link || !d->callbacks.send_midi || !message || !n ||
+        r4ctl_midi_message_size(message[0]) != n)
+        return 0;
+    for (size_t i = 1; i < n; ++i)
+        if (message[i] & 0x80u) return 0;
+    return d->callbacks.send_midi(d->callbacks.user, message, n) == 1;
 }
 int r4ctl_note_on(r4ctl_t *d, uint8_t ch, uint8_t note, uint8_t velocity)
 {
     uint8_t bytes[3];
     if (ch > 15 || note > 127 || !velocity || velocity > 127) return 0;
     bytes[0] = (uint8_t)(0x90u | ch); bytes[1] = note; bytes[2] = velocity;
-    return midi(d, bytes, sizeof bytes);
+    return r4ctl_send_midi_message(d, bytes, sizeof bytes);
 }
 int r4ctl_note_off(r4ctl_t *d, uint8_t ch, uint8_t note)
 {
     uint8_t bytes[3];
     if (ch > 15 || note > 127) return 0;
     bytes[0] = (uint8_t)(0x80u | ch); bytes[1] = note; bytes[2] = 0;
-    return midi(d, bytes, sizeof bytes);
+    return r4ctl_send_midi_message(d, bytes, sizeof bytes);
 }
 int r4ctl_realtime(r4ctl_t *d, uint8_t status)
 {
     if (status != 0xF8 && status != 0xFA && status != 0xFB && status != 0xFC && status != 0xFE && status != 0xFF)
         return 0;
-    return midi(d, &status, 1);
+    return r4ctl_send_midi_message(d, &status, 1);
 }

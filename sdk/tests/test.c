@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Eugen Schott */
 #include "run4ctl.h"
+#include "run4ctl_transport.h"
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
@@ -164,6 +165,99 @@ static int test_display_profiles(void)
     CHECK(r4ctl_set_display_profile(&f.device, R4CTL_DISPLAY_TILES));
     return 0;
 }
+static int test_transports(void)
+{
+    uint8_t frame[R4P_FRAME_MAX], packets[(R4P_FRAME_MAX + 2) / 3][4];
+    uint32_t words[R4P_FRAME_MAX];
+    size_t count, length;
+    const uint8_t raw_ack[] = {0xF0, 0x7D, 0x52, 0x34, R4P_HELLO_ACK, 1, 8, 0xF7};
+    const uint8_t clock[] = {0xF8}, program[] = {0xC5, 9}, cc[] = {0xB5, 14, 78};
+    const uint8_t bend[] = {0xE5, 0, 64}, pressure[] = {0xD5, 100}, bad[] = {0xB5, 0xF7, 4};
+    const uint8_t tune[] = {0xF6};
+
+    init(&f);
+    CHECK(r4ctl_receive_bytes(&f.device, raw_ack, sizeof raw_ack) == 0);
+    CHECK(!r4ctl_send_midi_message(&f.device, cc, sizeof cc));
+    CHECK(r4ctl_set_display_profile(&f.device, R4CTL_DISPLAY_ROLL));
+    r4ctl_set_link(&f.device, 1);
+    r4ctl_poll(&f.device, 0);
+    CHECK(sent(&f, 0).cmd == R4P_HELLO);
+    CHECK(r4ctl_receive_bytes(&f.device, raw_ack, 4) == 0);
+    CHECK(r4ctl_receive_bytes(&f.device, clock, 1) == 0);
+    CHECK(r4ctl_receive_bytes(&f.device, raw_ack + 4, 4) == 1);
+    CHECK(r4ctl_host_minor(&f.device) == 7);
+    r4ctl_poll(&f.device, 1);
+    CHECK(sent(&f, 1).cmd == R4P_SYNC_REQ);
+    CHECK(r4ctl_receive_sysex_payload(&f.device, raw_ack + 1, sizeof raw_ack - 2) == 1);
+    CHECK(r4ctl_receive_sysex_payload(&f.device, (uint8_t[]){0x7D,0x52,0x34,0xFF}, 4) == -1);
+    CHECK(r4ctl_receive_sysex_payload(&f.device, raw_ack, sizeof raw_ack) == 0);
+    f.blocked = 1;
+    CHECK(!r4ctl_send_midi_message(&f.device, cc, sizeof cc));
+    f.blocked = 0;
+    CHECK(r4ctl_send_midi_message(&f.device, cc, sizeof cc));
+    CHECK(r4ctl_send_midi_message(&f.device, bend, sizeof bend));
+    CHECK(r4ctl_send_midi_message(&f.device, program, sizeof program));
+    CHECK(r4ctl_send_midi_message(&f.device, pressure, sizeof pressure));
+    CHECK(f.midi_n == 4 && f.midi_len[2] == 2 && !memcmp(f.midi[0], cc, sizeof cc));
+    CHECK(!r4ctl_send_midi_message(&f.device, bad, sizeof bad));
+    CHECK(!r4ctl_send_midi_message(&f.device, program, 1));
+    CHECK(!r4ctl_send_midi_message(&f.device, raw_ack, sizeof raw_ack));
+
+    CHECK(r4ctl_pack_usb_midi1(3, raw_ack, sizeof raw_ack, packets, 3) == 3);
+    CHECK(!memcmp(packets, (uint8_t[]){0x34,0xF0,0x7D,0x52,0x34,0x34,0x41,1,0x36,8,0xF7,0}, 12));
+    CHECK(r4ctl_pack_usb_midi1(3, raw_ack, sizeof raw_ack, packets, 2) == 0 && packets[0][0] == 0x34);
+    CHECK(r4ctl_pack_ump(9, raw_ack, sizeof raw_ack, words, 2) == 2);
+    CHECK(words[0] == 0x39067D52u && words[1] == 0x34410108u);
+    CHECK(r4ctl_pack_ump(9, raw_ack, sizeof raw_ack, words, 1) == 0 && words[0] == 0x39067D52u);
+    r4ctl_set_link(&f.device, 0);
+    r4ctl_set_link(&f.device, 1);
+    CHECK(r4ctl_receive_usb_midi1(&f.device, 3, packets[0]) == 0);
+    CHECK(r4ctl_receive_usb_midi1(&f.device, 3, (uint8_t[]){0x30,0,0,0}) == 0);
+    CHECK(r4ctl_receive_usb_midi1(&f.device, 2, packets[1]) == 0);
+    CHECK(r4ctl_receive_usb_midi1(&f.device, 3, (uint8_t[]){0x3F,0xF8,0,0}) == 0);
+    CHECK(r4ctl_receive_usb_midi1(&f.device, 3, packets[1]) == 0);
+    CHECK(r4ctl_receive_usb_midi1(&f.device, 3, packets[2]) == 1 && r4ctl_connected(&f.device));
+    CHECK(r4ctl_receive_ump(&f.device, 8, words, 2) == 0);
+    CHECK(r4ctl_receive_ump(&f.device, 9, words, 1) == -1);
+    CHECK(r4ctl_receive_ump(&f.device, 9, words, 2) == 1);
+
+    r4p_msg_t roll = {0};
+    roll.cmd = R4P_ROLL;
+    roll.u.roll.lo = 36;
+    roll.u.roll.rows = 12;
+    roll.u.roll.steps = 16;
+    roll.u.roll.total = 16;
+    roll.u.roll.n = R4P_ROLL_NOTES;
+    for (unsigned i = 0; i < roll.u.roll.n; ++i)
+        roll.u.roll.note[i] = (r4p_rnote_t){i % 16, 1, i % 12, 112, 0};
+    length = r4p_encode(frame, sizeof frame, &roll);
+    CHECK(length > 300);
+    count = r4ctl_pack_usb_midi1(3, frame, length, packets, sizeof packets / sizeof packets[0]);
+    CHECK(count > 100);
+    for (size_t i = 0; i < count; ++i)
+        CHECK(r4ctl_receive_usb_midi1(&f.device, 3, packets[i]) == (i + 1 == count));
+    CHECK(f.last.cmd == R4P_ROLL && f.last.u.roll.n == R4P_ROLL_NOTES);
+    count = r4ctl_pack_ump(9, frame, length, words, sizeof words / sizeof words[0]);
+    CHECK(count > 100 && (words[0] >> 20 & 0xFu) == 1 && (words[2] >> 20 & 0xFu) == 2);
+    CHECK((words[count - 2] >> 20 & 0xFu) == 3);
+    CHECK(r4ctl_receive_ump(&f.device, 9, words, 2) == 0);
+    CHECK(r4ctl_receive_ump(&f.device, 9, (uint32_t[]){0x39278000u, 0}, 2) == -1);
+    CHECK(r4ctl_receive_ump(&f.device, 9, words + count - 2, 2) == 0);
+    for (size_t i = 0; i < count; i += 2)
+        CHECK(r4ctl_receive_ump(&f.device, 9, words + i, 2) == (i + 2 == count));
+    CHECK(f.last.cmd == R4P_ROLL && f.last.u.roll.note[R4P_ROLL_NOTES - 1].vel == 112);
+
+    CHECK(r4ctl_pack_usb_midi1(0, cc, sizeof cc, packets, 1) == 1);
+    CHECK(!memcmp(packets[0], (uint8_t[]){0x0B,0xB5,14,78}, 4));
+    CHECK(r4ctl_pack_usb_midi1(0, program, sizeof program, packets, 1) == 1 && packets[0][0] == 0x0C);
+    CHECK(r4ctl_pack_usb_midi1(0, tune, sizeof tune, packets, 1) == 1 && packets[0][0] == 0x05);
+    CHECK(r4ctl_pack_usb_midi1(0, clock, sizeof clock, packets, 1) == 1 && packets[0][0] == 0x0F);
+    CHECK(!r4ctl_pack_usb_midi1(0, bad, sizeof bad, packets, 1));
+    CHECK(r4ctl_pack_ump(2, cc, sizeof cc, words, 1) == 1 && words[0] == 0x22B50E4Eu);
+    CHECK(r4ctl_pack_ump(2, clock, sizeof clock, words, 1) == 1 && words[0] == 0x12F80000u);
+    CHECK(!r4ctl_pack_ump(16, cc, sizeof cc, words, 1));
+    return 0;
+}
 int main(void)
 {
     r4p_msg_t m = {0}, decoded;
@@ -172,6 +266,7 @@ int main(void)
     unsigned before;
     uint32_t random = 1;
     r4ctl_callbacks_t cb = {0};
+    CHECK(!test_transports());
     CHECK(!r4ctl_init(NULL, &cb, 0, 0));
     CHECK(!r4ctl_init(&f.device, NULL, 0, 0));
     CHECK(!r4ctl_init(&f.device, &cb, 0, 0));

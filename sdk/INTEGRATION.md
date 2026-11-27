@@ -2,8 +2,7 @@
 <!-- Copyright (c) 2026 Eugen Schott -->
 # Integrating the RUN4 CTL SDK
 
-This guide adds a controller screen to an existing firmware. Your synth, native
-UI, presets, flash layout and audio driver stay owned by that firmware. Start
+This guide adds a RUN4 controller to a MIDI device or host app. Start
 with [the runnable example](examples/minimal.c); the complete contract is
 [docs/PROTOCOL.md](../docs/PROTOCOL.md).
 
@@ -11,7 +10,7 @@ with [the runnable example](examples/minimal.c); the complete contract is
 
 Compile `sdk/src/run4ctl.c` and `src/r4p.c` as C99, with include paths `sdk/include`
 and `src`. Include `run4ctl.h` from C or C++; C++ users link those C object files.
-Use the MIT files only if you want the SDK without the complete firmware.
+Add `sdk/src/run4ctl_transport.c` for the optional USB-MIDI packet and UMP helpers.
 
 Allocate one `r4ctl_t` statically per MIDI peer/transport, and install callbacks:
 
@@ -42,14 +41,13 @@ interrupt/USB/Bluetooth input for the owner loop.
 `send_sysex` receives one complete `F0 ... F7` frame. `send_midi` receives a complete
 ordinary MIDI message, such as `90 3C 64` or `FA`. They receive **raw MIDI bytes**:
 
-- USB: your driver adds/removes USB-MIDI cable/CIN event headers. Use cable 0 for
-  a normal single-cable endpoint. SysEx CIN 4 continues; CIN 5/6/7 ends with 1/2/3
-  bytes. Notes use CIN 9/8 and realtime CIN 15.
-- Bluetooth: your BLE-MIDI stack adds/removes packet timestamps and handles SysEx
-  spanning packets. Do not pass BLE headers to the SDK.
-- A driver that already reassembles SysEx calls `r4ctl_receive_frame()` with F0
-  and F7 included. For a body-only callback, feed F0, the body, then F7 through
-  `r4ctl_receive_byte()`.
+- If the stack provides MIDI byte chunks, call `r4ctl_receive_bytes()`. For a
+  complete SysEx callback, use `r4ctl_receive_frame()` when F0/F7 are included,
+  or `r4ctl_receive_sysex_payload()` for a complete body without them.
+- USB-MIDI and UMP packet streams can use the optional pack and receive helpers.
+  BLE-MIDI and RTP-MIDI stacks supply decoded bytes or complete frames after
+  stripping their transport headers and reassembling transport segments.
+- See [MIDI stack adapters](MIDI-STACKS.md) for APIs, buffers and examples.
 
 Both transmit callbacks return **exactly 1** only after copying/queuing the entire
 message; 0 (or an error) must send no bytes. Check room for the whole frame. Never
@@ -206,9 +204,9 @@ ACK and in native mode too. They do not need RUN4 1.9. Channels are zero-based:
 Map each physical key once. Keep the note **and channel captured at note-on**
 until its matching note-off; do not recompute them after an octave/channel change.
 Retry a rejected note-off. Keep an explicit held-note table and perform cleanup
-when changing routes/modes or disabling your keyboard. Do not have both your old
-MIDI-output path and the SDK send the same physical key. Aftertouch and pitch
-bend can continue using your existing ordinary MIDI path.
+when changing routes/modes or disabling your keyboard. Give each physical key
+one MIDI-output path. Use `r4ctl_send_midi_message()` for CC, pitch bend,
+program changes, aftertouch and other complete MIDI 1.0 messages.
 
 `r4ctl_realtime()` sends an explicitly requested clock/start/continue/stop message.
 The helper never generates a second Start automatically. If your engine already

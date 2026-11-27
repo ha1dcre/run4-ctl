@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!-- Copyright (c) 2026 Eugen Schott -->
-# RUN4 CTL SDK 0.1.0
+# RUN4 CTL SDK 0.2.1
 
-Add a RUN4 controller page to another FM-1 firmware or MIDI device while keeping
-its native instrument, UI and storage. This SDK contains newly written MIT code
+Build a RUN4 control surface in a MIDI controller, firmware or host app.
+This SDK contains MIT-licensed C99 code
 and the same MIT wire codec used by the RUN4 CTL firmware. It has no dependency on
 our FM synth, AMB, DUB, fm1-base, JieLi SDK, iOS app or a particular display library.
 
@@ -11,6 +11,10 @@ The RUN4 app with controller support (RUN4 1.9) supplies parameter names, format
 values, pages, lists and LED states. Your firmware supplies MIDI transport,
 physical controls and drawing. RUN4 1.8.5 and other MIDI hosts can still receive
 ordinary keyboard notes without completing the controller handshake.
+
+Use the [MIDI stack adapters](MIDI-STACKS.md) for raw MIDI bytes, USB-MIDI 1.0
+event packets, and UMP with MIDI 1.0/SysEx7. The same byte and frame APIs
+work with decoded BLE-MIDI, CoreMIDI, ALSA, RtMidi and network MIDI.
 
 ## Try it in one minute
 
@@ -35,6 +39,7 @@ The last line says `minimal example: OK`. For an MCU, compile these three files:
 
 ```text
 sdk/src/run4ctl.c
+sdk/src/run4ctl_transport.c  # optional USB-MIDI 1.0 and UMP helpers
 src/r4p.c
 YOUR_PLATFORM_ADAPTER.c
 ```
@@ -48,6 +53,7 @@ Use include paths `sdk/include` and `src`. See the complete runnable
 | Component | Scope |
 | --- | --- |
 | `sdk/include/run4ctl.h`, `sdk/src/run4ctl.c` | Static C99 controller session, bounded SysEx assembly, non-blocking input helpers, LIST navigation, keyboard MIDI |
+| `sdk/include/run4ctl_transport.h`, `sdk/src/run4ctl_transport.c` | Packet codecs for USB-MIDI 1.0 and MIDI 1.0 in UMP, with cable/group filtering |
 | `src/r4p.h`, `src/r4p.c` | Canonical codec for the complete protocol through 1.8; C++ linkage supported |
 | `sdk/examples/minimal.c` | Buildable end-to-end example with an in-process host |
 | `sdk/tests/` | Session, input, malformed-stream, backpressure, version, C++ and standalone-package checks |
@@ -81,7 +87,7 @@ wire messages outside the session helper's controller profiles.
 
 ```sh
 make -C sdk archive package-check
-# sdk/build/run4ctl-sdk-0.2.0.zip and .zip.sha256
+# sdk/build/run4ctl-sdk-0.2.1.zip and .zip.sha256
 ```
 
 The repeatable ZIP contains only the SDK, canonical MIT codec, full protocol and

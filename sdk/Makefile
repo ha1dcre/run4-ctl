@@ -15,12 +15,14 @@ CFLAGS += -fsanitize=address,undefined -fno-sanitize-recover=all
 CXXFLAGS += -fsanitize=address,undefined -fno-sanitize-recover=all
 LDFLAGS += -fsanitize=address,undefined
 endif
-OBJ = $(BUILD)/run4ctl.o $(BUILD)/r4p.o
+OBJ = $(BUILD)/run4ctl.o $(BUILD)/run4ctl_transport.o $(BUILD)/r4p.o
 .PHONY: all test example archive package-check clean
 all: test example
 $(BUILD):
 	mkdir -p $@
 $(BUILD)/run4ctl.o: src/run4ctl.c include/run4ctl.h $(CODEC_DIR)/r4p.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+$(BUILD)/run4ctl_transport.o: src/run4ctl_transport.c include/run4ctl_transport.h include/run4ctl.h $(CODEC_DIR)/r4p.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 $(BUILD)/r4p.o: $(CODEC_DIR)/r4p.c $(CODEC_DIR)/r4p.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@

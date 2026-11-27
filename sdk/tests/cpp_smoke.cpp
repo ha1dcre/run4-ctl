@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Eugen Schott
 #include "r4p.h" /* include order must not change C linkage */
 #include "run4ctl.h"
+#include "run4ctl_transport.h"
 #include <cassert>
 static int transmit(void *, const uint8_t *, size_t) { return 1; }
 int main()
@@ -15,4 +16,6 @@ int main()
     r4ctl_poll(&device, 0);
     uint8_t bytes[16];
     assert(r4p_sync_req(bytes, sizeof bytes) == 6);
+    uint32_t words[2];
+    assert(r4ctl_pack_ump(0, bytes, 6, words, 2) == 2);
 }
